@@ -7,6 +7,10 @@
   (override with `DAFTARCHE_HOME`); the old `Finance` folder is moved there on first start.
 - Backups: `daftarche-last.db` at every start, plus a monthly snapshot
   `daftarche-YYYY-MM.db` that is never overwritten; the last 12 are kept.
+- `daftarche update [--check] [-y]`, a quiet update check at start-up and
+  Help → Check for Updates… (needs the package on PyPI).
+- MIT licence, tests (database, QFX parsing, backups, command line) and GitHub
+  Actions: tests on every push, a GitHub Release from CHANGELOG.md on every `v*` tag.
 
 ## 0.1.0 — 2026-10-17
 

@@ -11,6 +11,7 @@ categories, tags and transfer matching.
 pip install -e .
 daftarche               # run
 daftarche install-app   # add to Applications / Dock
+daftarche update        # update from PyPI (asks first)
 ```
 
 ## Data
@@ -42,6 +43,7 @@ src/daftarche/
     chart_utils.py  QChart helpers
     tabs/           dashboard, transactions, charts, accounts, import, manage
 tools/make_icon.py  draws data/icons/app_icon.png and splash.png
+tests/              pytest suite (synthetic data only)
 ```
 
 ## Development
@@ -49,5 +51,15 @@ tools/make_icon.py  draws data/icons/app_icon.png and splash.png
 ```zsh
 pip install -e ".[dev]"
 pytest
-ruff check src
 ```
+
+## Release
+
+1. Bump `version` in `pyproject.toml` and add a `## X.Y.Z — date` section to `CHANGELOG.md`.
+2. Commit, then `git tag vX.Y.Z && git push --tags` — the release workflow publishes
+   the GitHub Release with that changelog section.
+3. `python -m build && twine upload dist/*` — PyPI.
+
+## License
+
+MIT

@@ -317,7 +317,7 @@ class AccountEditDialog(QDialog):
         self.f_accttype = QLineEdit(accttype)
         self.f_bankid = QLineEdit(bankid)
 
-        self.f_name.setPlaceholderText("e.g. Vahid-CIBC-Checking")
+        self.f_name.setPlaceholderText("e.g. Person-Bank-Checking")
         self.f_acctid.setPlaceholderText("e.g. 1234567")
         self.f_accttype.setPlaceholderText("e.g. CHECKING")
         self.f_bankid.setPlaceholderText("e.g. 010")

@@ -14,6 +14,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("view", help="open the app (default)")
 
+    update = sub.add_parser("update", help="update daftarche from PyPI (asks first)")
+    update.add_argument("--check", action="store_true", help="only tell whether a newer version exists")
+    update.add_argument("--yes", "-y", action="store_true", help="update without asking")
+
     install = sub.add_parser("install-app", help="add the app to Applications / the Start menu / the app menu")
     install.add_argument("--remove", action="store_true", help="remove the launcher again")
     return parser
@@ -27,6 +31,12 @@ def run_install_app(args: argparse.Namespace) -> int:
     return install_app_command(APP, remove=args.remove)
 
 
+def after_start(updates) -> None:
+    """A few seconds after start-up: a quiet update check and refreshing an old app launcher."""
+    updates.check(manual=False)
+    refresh_launcher()
+
+
 def refresh_launcher() -> None:
     """Rebuild an app launcher of this installation made by an older version (never raises)."""
     from sciwidgets.app.launcher import refresh_if_outdated
@@ -34,6 +44,17 @@ def refresh_launcher() -> None:
     from daftarche.app_info import APP
 
     refresh_if_outdated(APP)
+
+
+def add_update_menu(window):
+    """Help → Check for Updates… (in the macOS menu bar); returns the update checker."""
+    from sciwidgets.app.update_ui import AppUpdates
+
+    from daftarche.app_info import APP
+
+    updates = AppUpdates(window, APP)
+    window.menuBar().addMenu("Help").addAction("Check for Updates…", lambda: updates.check(manual=True))
+    return updates
 
 
 SPLASH_SECONDS = 4.5  # the splash stays at least this long, so it can be seen
@@ -79,6 +100,7 @@ def run_view() -> int:
     if splash:
         splash.show_message("Opening the database...")
     window = MainWindow()
+    updates = add_update_menu(window)
 
     def show_window() -> None:
         window.show()
@@ -90,7 +112,7 @@ def run_view() -> int:
         QTimer.singleShot(round(1000 * remaining), show_window)
     else:
         show_window()
-    QTimer.singleShot(round(1000 * max(remaining, 0)) + 2000, refresh_launcher)
+    QTimer.singleShot(round(1000 * max(remaining, 0)) + 2000, lambda: after_start(updates))
     return app.exec()
 
 
@@ -100,6 +122,12 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.command == "install-app":
         return run_install_app(args)
+    if args.command == "update":
+        from sciwidgets.app.update import run_update
+
+        from daftarche.app_info import APP
+
+        return run_update(APP, args)
     return run_view()
 
 

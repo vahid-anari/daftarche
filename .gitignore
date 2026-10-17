@@ -12,6 +12,9 @@ excel/
 qfx/
 backups/
 
+# synthetic test statements only (invented values)
+!tests/data/*.qfx
+
 # python
 __pycache__/
 *.py[cod]

@@ -7,6 +7,8 @@ name = "daftarche"
 version = "0.2.0"
 description = "Daftarche: personal bookkeeping for bank transactions imported from QFX and Excel statements"
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [{ name = "Vahid Anari", email = "vahid.anari8@gmail.com" }]
 requires-python = ">=3.10"
 keywords = ["personal finance", "bookkeeping", "budget", "QFX", "OFX", "CIBC", "PySide6"]
@@ -34,7 +36,9 @@ icon = ["Pillow", "numpy"]
 daftarche = "daftarche.main:main"
 
 [project.urls]
+Homepage = "https://github.com/vahid-anari/daftarche"
 Source = "https://github.com/vahid-anari/daftarche"
+Issues = "https://github.com/vahid-anari/daftarche/issues"
 Changelog = "https://github.com/vahid-anari/daftarche/blob/main/CHANGELOG.md"
 
 [tool.setuptools.packages.find]
