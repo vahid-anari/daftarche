@@ -543,6 +543,12 @@ QMenu {{ background: {surf}; border: 1px solid {bdr}; color: {txt}; padding: 4px
 QMenu::item      {{ padding: 6px 24px; border-radius: 4px; }}
 QMenu::item:selected {{ background: {ac_item}; }}
 QMenu::separator {{ background: {bdr}; height: 1px; margin: 4px 0; }}
+
+/* ── QMenuBar ─────────────────────────────────────── */
+
+QMenuBar {{ background: {surf}; color: {txt}; border-bottom: 1px solid {bdr}; padding: 2px 4px; }}
+QMenuBar::item          {{ background: transparent; padding: 4px 10px; border-radius: 4px; }}
+QMenuBar::item:selected {{ background: {ac_item}; }}
 """
 
 

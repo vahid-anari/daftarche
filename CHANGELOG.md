@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.0 — 2026-10-17
+
+- Menu bar inside the window (File, Edit, Help), in the app's colours, instead of
+  the macOS menu bar; it replaces the row of buttons above the tabs.
+- File: Back Up Database…, Restore Backup…, Show Data Folder, Quit (⌘Q).
+  Edit: Manage… (⌘M), Settings… (⌘,). Help: Check for Updates…, Show Data Folder, About.
+
 ## 0.3.0 — 2026-10-17
 
 - Settings → Extra backup folder: the monthly snapshots are also copied to a folder

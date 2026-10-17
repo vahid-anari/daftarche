@@ -5,14 +5,16 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QTabWidget, QWidget, QVBoxLayout,
     QHBoxLayout, QDialog, QFormLayout, QLabel,
     QDialogButtonBox, QPushButton, QColorDialog, QFrame, QGridLayout,
-    QMessageBox, QFileDialog, QSizePolicy
+    QMessageBox, QFileDialog
 )
-from PySide6.QtGui import QFont, QColor, QPalette
+from PySide6.QtCore import QUrl
+from PySide6.QtGui import QAction, QColor, QDesktopServices, QFont, QKeySequence, QPalette
+from sciwidgets.dialogs import show_about_dialog
 
 from daftarche.db import Database
-from daftarche.app_info import APP_NAME
+from daftarche.app_info import APP, APP_NAME
 from daftarche.backup import copy_db, mirror_snapshots, startup_backup
-from daftarche.paths import BACKUP_DIR, DB_PATH
+from daftarche.paths import BACKUP_DIR, DATA_DIR, DB_PATH
 from daftarche.style import build_stylesheet, get_settings, DEFAULTS
 from daftarche.widgets import StepSpinBox, SingleSelectCombo
 
@@ -42,38 +44,52 @@ class MainWindow(QMainWindow):
         self.main_layout = QVBoxLayout(central)
         self.main_layout.setContentsMargins(0, 0, 0, 0)
         self.main_layout.setSpacing(0)
-        self.main_layout.addLayout(self._build_top_bar())
         self.main_layout.addWidget(self._build_tabs(), 1)
         self.setCentralWidget(central)
+        self._build_menus()
 
         self._refresh_all()
 
     # ── UI construction ───────────────────────────────────────────────────────
-    def _build_top_bar(self):
-        btn_backup = QPushButton("💾  Backup")
-        btn_restore = QPushButton("↩️  Restore")
-        btn_settings = QPushButton("⚙️  Settings")
-        btn_manage = QPushButton("🗂  Manage")
+    def _build_menus(self):
+        bar = self.menuBar()
+        bar.setNativeMenuBar(False)
 
-        btn_restore.setProperty("class", "secondary")
-        btn_settings.setProperty("class", "secondary")
-        btn_manage.setProperty("class", "secondary")
+        def add(menu, text, slot, shortcut=None):
+            action = menu.addAction(text, slot)
+            action.setMenuRole(QAction.MenuRole.NoRole)
+            if shortcut is not None:
+                action.setShortcut(shortcut)
+            return action
 
-        # Connections
-        btn_backup.clicked.connect(self._save_backup)
-        btn_restore.clicked.connect(self._restore_backup)
-        btn_settings.clicked.connect(self.open_settings)
-        btn_manage.clicked.connect(self._open_manage)
+        file_menu = bar.addMenu("File")
+        add(file_menu, "Back Up Database…", self._save_backup)
+        add(file_menu, "Restore Backup…", self._restore_backup)
+        file_menu.addSeparator()
+        add(file_menu, "Show Data Folder", self._show_data_folder)
+        file_menu.addSeparator()
+        add(file_menu, "Quit", QApplication.instance().quit, QKeySequence("Ctrl+Q"))
 
-        # Layout
-        top_bar = QHBoxLayout()
-        top_bar.setContentsMargins(8, 4, 8, 4)
-        top_bar.setSpacing(4)
-        top_bar.addStretch(1)
-        for btn in [btn_backup, btn_restore, btn_settings, btn_manage]:
-            btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-            top_bar.addWidget(btn)
-        return top_bar
+        edit_menu = bar.addMenu("Edit")
+        add(edit_menu, "Manage…", self._open_manage, QKeySequence("Ctrl+M"))
+        add(edit_menu, "Settings…", self.open_settings, QKeySequence("Ctrl+,"))
+
+        self.help_menu = bar.addMenu("Help")
+        add(self.help_menu, "Show Data Folder", self._show_data_folder)
+        self.help_menu.addSeparator()
+        add(self.help_menu, f"About {APP_NAME}", self._show_about)
+
+    def _show_data_folder(self):
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(DATA_DIR)))
+
+    def _show_about(self):
+        show_about_dialog(
+            f"About {APP_NAME}",
+            f"<b>Version {APP.version}</b><br><br>"
+            "Personal bookkeeping: bank statements (QFX/OFX), categories, transfers and charts.<br><br>"
+            f'<a href="https://github.com/{APP.github_repo}">github.com/{APP.github_repo}</a><br>'
+            "MIT License · Vahid Anari",
+            parent=self, heading=APP_NAME)
 
     def _build_tabs(self):
         self.tabs = QTabWidget()

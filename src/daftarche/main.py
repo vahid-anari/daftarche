@@ -46,30 +46,18 @@ def refresh_launcher() -> None:
     refresh_if_outdated(APP)
 
 
-def add_help_menu(window):
-    """Help menu: Check for Updates…, Show Data Folder, About (macOS: in the app menu); returns the update checker."""
-    from PySide6.QtCore import QUrl
-    from PySide6.QtGui import QAction, QDesktopServices
+def add_update_action(window):
+    """Help → Check for Updates… at the top of the window's Help menu; returns the update checker."""
+    from PySide6.QtGui import QAction
     from sciwidgets.app.update_ui import AppUpdates
-    from sciwidgets.dialogs import show_about_dialog
 
     from daftarche.app_info import APP
-    from daftarche.paths import DATA_DIR
 
     updates = AppUpdates(window, APP)
-    menu = window.menuBar().addMenu("Help")
-    menu.addAction("Check for Updates…", lambda: updates.check(manual=True))
-    menu.addAction("Show Data Folder", lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(DATA_DIR))))
-    about = QAction(f"About {APP.name}", window)
-    about.setMenuRole(QAction.MenuRole.AboutRole)
-    about.triggered.connect(lambda: show_about_dialog(
-        f"About {APP.name}",
-        f"<b>Version {APP.version}</b><br><br>"
-        "Personal bookkeeping: bank statements (QFX/OFX), categories, transfers and charts.<br><br>"
-        f'<a href="https://github.com/{APP.github_repo}">github.com/{APP.github_repo}</a><br>'
-        "MIT License · Vahid Anari",
-        parent=window, heading=APP.name))
-    menu.addAction(about)
+    action = QAction("Check for Updates…", window)
+    action.setMenuRole(QAction.MenuRole.NoRole)
+    action.triggered.connect(lambda: updates.check(manual=True))
+    window.help_menu.insertAction(window.help_menu.actions()[0], action)
     return updates
 
 
@@ -116,7 +104,7 @@ def run_view() -> int:
     if splash:
         splash.show_message("Opening the database...")
     window = MainWindow()
-    updates = add_help_menu(window)
+    updates = add_update_action(window)
 
     def show_window() -> None:
         window.show()

@@ -58,8 +58,8 @@ Import → Select QFX File… reads a statement downloaded from your bank's webs
 the account is recognised from the file, transactions already imported are
 skipped, and saved mappings fill in the categories. Edit what is left in the
 preview, then Import New. Transactions → Match Transfers pairs the two sides of
-a transfer between your accounts. Manage edits the types, accounts, categories
-and tags; Settings changes the font and colours.
+a transfer between your accounts. Edit → Manage… edits the types, accounts,
+categories and tags; Edit → Settings… (⌘,) changes the font and colours.
 
 ## Your data
 
@@ -76,7 +76,7 @@ keeps its files in one folder:
 
 On Windows the folder is `%APPDATA%\Daftarche`, on Linux `~/.local/share/daftarche`.
 Set `DAFTARCHE_HOME` to use another folder, for example a test copy.
-Backup and Restore in the top bar save and load a copy of the database by hand.
+File → Back Up Database… and Restore Backup… save and load a copy of the database by hand.
 The monthly snapshots sit on the same disk as the database; Settings → Extra
 backup folder also copies them to a folder of your choice (iCloud Drive, an
 external disk), and Time Machine covers the data folder too. Help → Show Data
