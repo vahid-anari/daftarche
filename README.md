@@ -1,65 +1,107 @@
 # Daftarche
 
-*Daftarche* (دفترچه, "little account book") is a personal bookkeeping desktop app —
-PySide6 + SQLite. It imports CIBC QFX/OFX statements (and historical Excel files),
-tracks income, expenses and transfers across accounts, with dashboards, charts,
-categories, tags and transfer matching.
+[![tests](https://github.com/vahid-anari/daftarche/actions/workflows/tests.yml/badge.svg)](https://github.com/vahid-anari/daftarche/actions/workflows/tests.yml)
+[![PyPI](https://img.shields.io/pypi/v/daftarche)](https://pypi.org/project/daftarche/)
+[![Python](https://img.shields.io/pypi/pyversions/daftarche)](https://pypi.org/project/daftarche/)
+![License](https://img.shields.io/badge/license-MIT-green)
 
-## Install
+**Daftarche** (دفترچه, "little account book") is a desktop app for personal
+bookkeeping. It imports bank statements in QFX/OFX format, sorts every
+transaction into income, expense or transfer with categories, sub-categories
+and tags, matches transfers between your own accounts, and shows where the money
+went: a dashboard, monthly charts, account balances over time and a searchable
+transaction table that exports to Excel.
 
-```zsh
-pip install -e .
-daftarche               # run
-daftarche install-app   # add to Applications / Dock
-daftarche update        # update from PyPI (asks first)
+Everything stays on your computer, in one SQLite file. Statements have been
+tested with CIBC's QFX downloads; other banks' QFX/OFX files use the same format.
+
+## Installation
+
+Python 3.10 or newer. With [pipx](https://pipx.pypa.io/) (its own environment, recommended):
+
+```
+pipx install daftarche
 ```
 
-## Data
-
-Nothing personal lives in this repository. The app keeps its files in
+or with pip, in an environment of your choice:
 
 ```
-~/Library/Application Support/Daftarche/
-    daftarche.db                     the database
+pip install daftarche
+```
+
+To start it with a double-click, run once:
+
+```
+daftarche install-app
+```
+
+This adds Daftarche to your Applications folder (macOS), the Start menu
+(Windows) or the applications menu (Linux), with its own icon. It starts the
+daftarche of the Python you ran the command with, and keeps working after updates.
+
+To update, use Help → Check for Updates… in the app (it also checks quietly at
+start-up) or `daftarche update` in a terminal.
+
+For development, install from a clone: `git clone https://github.com/vahid-anari/daftarche.git`,
+then `pip install -e ".[dev]"` in the folder; such a copy is updated with `git pull`.
+
+## Use
+
+```
+daftarche                     open the app
+daftarche update              update from PyPI (asks first; --check only looks)
+daftarche install-app         add the app to Applications / Start menu (--remove to undo)
+daftarche --version
+```
+
+Import → Select QFX File… reads a statement downloaded from your bank's website;
+the account is recognised from the file, transactions already imported are
+skipped, and saved mappings fill in the categories. Edit what is left in the
+preview, then Import New. Transactions → Match Transfers pairs the two sides of
+a transfer between your accounts. Manage edits the types, accounts, categories
+and tags; Settings changes the font and colours.
+
+## Your data
+
+Nothing personal is stored in the program folder or in this repository. The app
+keeps its files in one folder:
+
+```
+~/Library/Application Support/Daftarche/      (macOS)
+    daftarche.db                     all transactions, accounts, categories
     config.json                      theme and view settings
     backups/daftarche-last.db        written at every start
     backups/daftarche-YYYY-MM.db     first start of each month; the last 12 are kept
 ```
 
-Set `DAFTARCHE_HOME=/some/folder` to use another location (e.g. a test copy).
-Backup / Restore in the app's top bar save and load a copy of the database.
-
-## Layout
-
-```
-src/daftarche/
-    main.py         command-line entry point
-    window.py       main window, Settings dialog
-    paths.py        data locations
-    backup.py       automatic backups
-    db.py           SQLite layer (all queries live here)
-    style.py        stylesheet + settings
-    widgets.py      shared widgets
-    chart_utils.py  QChart helpers
-    tabs/           dashboard, transactions, charts, accounts, import, manage
-tools/make_icon.py  draws data/icons/app_icon.png and splash.png
-tests/              pytest suite (synthetic data only)
-```
+On Windows the folder is `%APPDATA%\Daftarche`, on Linux `~/.local/share/daftarche`.
+Set `DAFTARCHE_HOME` to use another folder, for example a test copy.
+Backup and Restore in the top bar save and load a copy of the database by hand.
+The monthly snapshots sit on the same disk as the database, so keep the folder
+in your regular backups (Time Machine covers it).
 
 ## Development
 
-```zsh
+```
 pip install -e ".[dev]"
 pytest
 ```
 
-## Release
-
-1. Bump `version` in `pyproject.toml` and add a `## X.Y.Z — date` section to `CHANGELOG.md`.
-2. Commit, then `git tag vX.Y.Z && git push --tags` — the release workflow publishes
-   the GitHub Release with that changelog section.
-3. `python -m build && twine upload dist/*` — PyPI.
+The tests use only invented data (`tests/data/sample.qfx`) and a temporary data
+folder. `python tools/make_icon.py` redraws the icon and the splash image.
+Pushing a tag `vX.Y.Z` publishes a GitHub Release with that version's section of
+[`CHANGELOG.md`](CHANGELOG.md); `python -m build && twine upload dist/*` puts it on PyPI.
 
 ## License
 
-MIT
+MIT License. See [LICENSE](LICENSE).
+
+## Author
+
+Vahid Anari ·
+[GitHub](https://github.com/vahid-anari) ·
+[LinkedIn](https://www.linkedin.com/in/vahid-anari/)
+
+Related projects: [linecat](https://github.com/vahid-anari/linecat) ·
+[sciwidgets](https://github.com/vahid-anari/sciwidgets) ·
+[Maxwell Bloch Studio](https://github.com/vahid-anari/maxwell-bloch-studio)
