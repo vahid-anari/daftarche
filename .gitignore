@@ -1,0 +1,29 @@
+# personal data — never commit
+*.db
+*.db-journal
+*.sqlite
+config.json
+*.qfx
+*.ofx
+*.xlsx
+*.xls
+*.csv
+excel/
+qfx/
+backups/
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+
+# editors / os
+.idea/
+.vscode/
+.DS_Store

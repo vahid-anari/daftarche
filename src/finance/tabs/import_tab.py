@@ -1,0 +1,1069 @@
+import re
+import os
+import html
+from datetime import date
+
+from PySide6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
+    QAbstractItemView, QHeaderView,
+    QMessageBox, QCheckBox, QFileDialog, QDialog, QDialogButtonBox,
+    QApplication, QFrame, QScrollArea, QStyledItemDelegate,
+    QMenu, QFormLayout
+)
+from PySide6.QtCore import Qt, QAbstractTableModel, QModelIndex
+from PySide6.QtGui import QColor, QBrush, QKeySequence, QShortcut, QAction
+
+from finance.style import get_settings
+from finance.widgets import EditableTableView, ReadOnlyCopyDelegate, SingleSelectCombo
+from finance.db import (
+    MONTHS_ORDER,
+    TRANSFER_UNMATCHED,
+    UNCATEGORIZED_CAT,
+    UNCATEGORIZED_SUB,
+)
+
+
+# OFX / QFX Parser
+def parse_ofx(content, account_name=""):
+    results = []
+    content = content.replace('\r\n', '\n').replace('\r', '\n')
+
+    ofx_start = re.search(r'<OFX>', content, re.IGNORECASE)
+    if ofx_start:
+        content = content[ofx_start.start():]
+
+    blocks = re.split(r'<STMTTRN>', content, flags=re.IGNORECASE)[1:]
+
+    def _get_field(block, tag):
+        m = re.search(rf'<{tag}>\s*([^<\n]+)', block, re.IGNORECASE)
+        return m.group(1).strip() if m else ""
+
+    is_credit = "credit" in account_name.lower()
+    accttype = re.search(r'<ACCTTYPE>([^<\n]+)', content, re.IGNORECASE)
+    if accttype:
+        is_credit = is_credit or "CREDIT" in accttype.group(1).upper()
+
+    for block in blocks:
+        block = re.split(r'</STMTTRN>|<LEDGERBAL>|</BANKTRANLIST>', block,
+                         flags=re.IGNORECASE)[0]
+        try:
+            trntype = _get_field(block, "TRNTYPE").upper()
+            dtposted = _get_field(block, "DTPOSTED")
+            trnamt = _get_field(block, "TRNAMT")
+            fitid = _get_field(block, "FITID") or None
+            name = html.unescape(_get_field(block, "NAME"))
+            memo = html.unescape(_get_field(block, "MEMO"))
+
+            desc = name if name else memo.strip()
+
+            dtposted = re.sub(r'[\.\[].*', '', dtposted)
+            if len(dtposted) >= 8:
+                year = int(dtposted[0:4])
+                month_num = int(dtposted[4:6])
+                day = int(dtposted[6:8])
+                date_str = f"{year:04d}-{month_num:02d}-{day:02d}"
+            else:
+                continue
+
+            try:
+                amt = float(trnamt.replace(",", ""))
+            except ValueError:
+                continue
+
+            is_payment = "PAYMENT" in desc.upper() or "PAIEMENT" in desc.upper()
+            memo_upper = memo.upper()
+            is_internal = (
+                    trntype in ("XFER", "TRANSFER") or
+                    "INTERNET TRANSFER" in memo_upper
+            )
+            is_etransfer = (
+                    "E-TRANSFER" in memo_upper or
+                    "ETRANSFER" in memo_upper
+            )
+
+            if is_internal or (is_payment and is_credit):
+                type_ = "Transfer"
+                direction = "debit" if (
+                        trntype in ("DEBIT", "SRVCHG", "ATM", "CHECK", "FEE") or amt < 0
+                ) else "credit"
+            elif amt < 0 or trntype in ("DEBIT", "SRVCHG", "ATM", "CHECK", "FEE"):
+                type_ = "Expense"
+                direction = "debit"
+            else:
+                type_ = "Income"
+                direction = "credit"
+
+            results.append({
+                "date": date_str,
+                "type": type_, "amount": abs(amt),
+                "description": desc, "memo": memo,
+                "name": name or "",
+                "memorandum": memo.strip() if memo else "",
+                "fitid": fitid,
+                "raw": block.strip(),
+                "direction": direction,
+                "is_etransfer": is_etransfer,
+                "source": "ofx",
+            })
+
+        except Exception:
+            continue
+
+    results.sort(key=lambda r: r["date"])
+    return results
+
+
+def parse_qfx_header(content):
+    """Extract account identification info from QFX/OFX header."""
+
+    def _get(tag):
+        m = re.search(rf'<{tag}>\s*([^<\n]+)', content, re.IGNORECASE)
+        return m.group(1).strip() if m else ""
+
+    dtstart = _get("DTSTART")
+    dtend = _get("DTEND")
+    dtasof = _get("DTASOF")
+    balamt = _get("BALAMT")
+    try:
+        balamt_f = float(balamt) if balamt else None
+    except ValueError:
+        balamt_f = None
+    return {
+        "acctid": _get("ACCTID"),
+        "accttype": _get("ACCTTYPE"),
+        "bankid": _get("BANKID"),
+        "dtstart": dtstart[:8] if dtstart else "",
+        "dtend": dtend[:8] if dtend else "",
+        "curdef": _get("CURDEF"),
+        "balamt": balamt_f,
+        "dtasof": dtasof[:8] if dtasof else "",
+    }
+
+
+# Column definitions
+PREVIEW_COLS = [
+    "Status", "Date", "Type", "Amount",
+    "Category", "Sub-Category", "Tags",
+    "Name", "Memo", "FITID",
+]
+COL_STATUS = 0
+COL_DATE = 1
+COL_TYPE = 2
+COL_AMT = 3
+COL_CAT = 4
+COL_SUB = 5
+COL_TAGS = 6
+COL_NAME = 7
+COL_MEMO = 8
+COL_FITID = 9
+
+
+# PreviewModel
+class PreviewModel(QAbstractTableModel):
+    def __init__(self, rows=None):
+        super().__init__()
+        self._rows = rows or []
+
+    def rowCount(self, parent=QModelIndex()):
+        return len(self._rows)
+
+    def columnCount(self, parent=QModelIndex()):
+        return len(PREVIEW_COLS)
+
+    def headerData(self, section, orientation, role=Qt.DisplayRole):
+        if role == Qt.DisplayRole and orientation == Qt.Horizontal:
+            return PREVIEW_COLS[section]
+        return None
+
+    def data(self, index, role=Qt.DisplayRole):
+        if not index.isValid():
+            return None
+        row = self._rows[index.row()]
+        col = index.column()
+        s = get_settings()
+
+        if role == Qt.DisplayRole:
+            if col == COL_STATUS: return row.get("_status", "")
+            if col == COL_DATE:   return row.get("date", "")
+            if col == COL_TYPE:   return row.get("type", "")
+            if col == COL_AMT:
+                amt = row.get("amount")
+                return f"${amt:,.2f}" if amt is not None else ""
+            if col == COL_CAT:
+                cat = row.get("category")
+                return cat["name"] if cat else UNCATEGORIZED_CAT
+            if col == COL_SUB:
+                sub = row.get("subcategory")
+                return sub["name"] if sub else UNCATEGORIZED_SUB
+            if col == COL_TAGS:
+                tags = row.get("_tags", [])
+                return ", ".join(t["name"] for t in tags) if tags else ""
+            if col == COL_NAME:  return row.get("name", "")
+            if col == COL_MEMO:
+                memo = row.get("memorandum") or row.get("memo") or ""
+                return memo.strip()
+            if col == COL_FITID: return row.get("fitid", "") or ""
+            return ""
+
+        if role == Qt.ForegroundRole:
+            status = row.get("_status", "")
+            if col == COL_STATUS:
+                if "Duplicate" in status: return QBrush(QColor(s.get("text_dim")))
+                if "New" in status: return QBrush(QColor(s.get("income")))
+            if col in (COL_TYPE, COL_AMT):
+                t = row.get("type", "")
+                if "Income" in t: return QBrush(QColor(s.get("income")))
+                if "Expense" in t: return QBrush(QColor(s.get("expense")))
+                if "Transfer" in t: return QBrush(QColor(s.get("transfer")))
+
+        if role == Qt.TextAlignmentRole:
+            if col in (COL_DATE, COL_AMT):
+                return Qt.AlignRight | Qt.AlignVCenter
+
+        return None
+
+    def set_rows(self, rows):
+        self.beginResetModel()
+        self._rows = rows
+        self.endResetModel()
+
+    def get_row(self, idx):
+        return self._rows[idx]
+
+    def flags(self, index):
+        return Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsEditable
+
+
+# NullDelegate
+class NullDelegate(QStyledItemDelegate):
+    def createEditor(self, parent, option, index):
+        return None
+
+
+# ImportBulkCatDialog
+class ImportBulkCatDialog(QDialog):
+    def __init__(self, db, row_type, parent=None, preset_cat=None, preset_sub=None):
+        super().__init__(parent)
+        self.db = db
+        self.row_type = row_type
+        self.cat_name = ""
+        self.sub_name = ""
+        self._preset_cat = preset_cat
+        self._preset_sub = preset_sub
+        self.setWindowTitle("Edit Category / Sub-Category")
+        self.setMinimumWidth(360)
+        self._build()
+
+    def _build(self):
+        layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+        form = QFormLayout()
+        form.setSpacing(10)
+
+        self.f_category = SingleSelectCombo()
+        self.f_category.setEditable(True)
+        type_filter = (
+            "Income" if "Income" in self.row_type else
+            "Expense" if "Expense" in self.row_type else None
+        )
+        for c in self.db.get_categories():
+            if type_filter is None or (c["type_name"] and type_filter in c["type_name"]):
+                self.f_category.addItem(c["name"])
+        if self._preset_cat:
+            idx = self.f_category.findText(self._preset_cat)
+            if idx >= 0:
+                self.f_category.setCurrentIndex(idx)
+        self.f_category.currentTextChanged.connect(self._refresh_subcats)
+        self.f_category.setMaxVisibleItems(15)
+        form.addRow("Category:", self.f_category)
+
+        self.f_subcat = SingleSelectCombo()
+        self.f_subcat.setEditable(True)
+        self._refresh_subcats(self.f_category.currentText())
+        if self._preset_sub:
+            idx = self.f_subcat.findText(self._preset_sub)
+            if idx >= 0:
+                self.f_subcat.setCurrentIndex(idx)
+        self.f_subcat.setMaxVisibleItems(15)
+        form.addRow("Sub-Category:", self.f_subcat)
+        layout.addLayout(form)
+
+        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        btns.accepted.connect(self._accept)
+        btns.rejected.connect(self.reject)
+        layout.addWidget(btns)
+
+    def _refresh_subcats(self, cat_name=None):
+        cat_name = cat_name or self.f_category.currentText()
+        self.f_subcat.clear()
+        cat = self.db.get_category_by_name(cat_name)
+        if cat:
+            for sub in self.db.get_subcategories(cat["id"]):
+                self.f_subcat.addItem(sub["name"])
+
+    def _accept(self):
+        self.cat_name = self.f_category.currentText().strip()
+        self.sub_name = self.f_subcat.currentText().strip()
+        self.accept()
+
+
+# ImportTagPickerDialog
+class ImportTagPickerDialog(QDialog):
+    def __init__(self, db, current_tags=None, parent=None):
+        super().__init__(parent)
+        self.db = db
+        self.setWindowTitle("Edit Tags")
+        self.setMinimumWidth(300)
+        self._checks = {}
+        self._current_ids = {t["id"] for t in (current_tags or [])}
+        self._build()
+
+    def _build(self):
+        layout = QVBoxLayout(self)
+        layout.setSpacing(10)
+        layout.setContentsMargins(16, 16, 16, 16)
+
+        btn_row = QHBoxLayout()
+        btn_all = QPushButton("✓ All")
+        btn_none = QPushButton("✕ None")
+        btn_all.setProperty("class", "secondary")
+        btn_none.setProperty("class", "secondary")
+        btn_all.setFixedHeight(28)
+        btn_none.setFixedHeight(28)
+        btn_all.clicked.connect(lambda: self._set_all(True))
+        btn_none.clicked.connect(lambda: self._set_all(False))
+        btn_row.addWidget(btn_all)
+        btn_row.addWidget(btn_none)
+        btn_row.addStretch()
+        layout.addLayout(btn_row)
+
+        all_tags = self.db.get_tags()
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+
+        container = QWidget()
+        container_layout = QVBoxLayout(container)
+        container_layout.setSpacing(4)
+        container_layout.setContentsMargins(4, 4, 4, 4)
+
+        for tag in all_tags:
+            cb = QCheckBox(tag["name"])
+            cb.setChecked(tag["id"] in self._current_ids)
+            self._checks[tag["id"]] = cb
+            container_layout.addWidget(cb)
+
+        container_layout.addStretch()
+        scroll.setWidget(container)
+        scroll.setMinimumHeight(min(len(all_tags) * 28 + 16, 240))
+        layout.addWidget(scroll, 1)
+
+        btns = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
+        btns.accepted.connect(self.accept)
+        btns.rejected.connect(self.reject)
+        layout.addWidget(btns)
+
+    def _set_all(self, checked):
+        for cb in self._checks.values():
+            cb.setChecked(checked)
+
+    def get_selected_ids(self):
+        return [tid for tid, cb in self._checks.items() if cb.isChecked()]
+
+
+# ImportTab
+class ImportTab(QWidget):
+    def __init__(self, db, on_done_cb):
+        super().__init__()
+        self.db = db
+        self.on_done_cb = on_done_cb
+        self.parsed_rows = []
+        self._ofx_content = None
+        self._current_account = None
+        self._show_new_only = False
+        self._balamt = None
+        self._curdef = "CAD"
+        self._build_ui()
+
+    def _build_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setSpacing(10)
+        layout.setContentsMargins(16, 16, 16, 16)
+
+        # ── Toolbar ───────────────────────────────────────────────────────────
+        toolbar = QHBoxLayout()
+        toolbar.setSpacing(8)
+
+        btn_browse = QPushButton("📂  Select QFX File...")
+        btn_browse.setMinimumWidth(160)
+        btn_browse.clicked.connect(self._browse_ofx)
+
+        btn_clear = QPushButton("🧹 Clear")
+        btn_clear.setProperty("class", "secondary")
+        btn_clear.setMinimumWidth(80)
+        btn_clear.clicked.connect(self._clear)
+
+        btn_reapply = QPushButton("🔁  Re-apply Mappings")
+        btn_reapply.setProperty("class", "secondary")
+        btn_reapply.setMinimumWidth(150)
+        btn_reapply.setToolTip("Apply saved category mappings to existing uncategorized transactions")
+        btn_reapply.clicked.connect(self._reapply_mappings)
+
+        btn_import = QPushButton("✅  Import New")
+        btn_import.setMinimumWidth(130)
+        btn_import.clicked.connect(self.import_all)
+
+        for btn in (btn_browse, btn_clear, btn_reapply, btn_import):
+            toolbar.addWidget(btn)
+        toolbar.addStretch()
+        layout.addLayout(toolbar)
+
+        # ── File / account info row ───────────────────────────────────────────
+        info_row = QHBoxLayout()
+        info_row.setSpacing(6)
+
+        self.lbl_file = QLabel("File: —")
+        self.lbl_account = QLabel("")
+        self.lbl_period = QLabel("")
+        self.lbl_balance = QLabel("")
+
+        for lbl in (self.lbl_file, self.lbl_account, self.lbl_period, self.lbl_balance):
+            lbl.setProperty("class", "dim-label")
+
+        sep1 = QLabel("|");
+        sep1.setProperty("class", "dim-label")
+        sep2 = QLabel("|");
+        sep2.setProperty("class", "dim-label")
+        sep3 = QLabel("|");
+        sep3.setProperty("class", "dim-label")
+
+        info_row.addWidget(self.lbl_file)
+        info_row.addWidget(sep1)
+        info_row.addWidget(self.lbl_account)
+        info_row.addWidget(sep2)
+        info_row.addWidget(self.lbl_period)
+        info_row.addWidget(sep3)
+        info_row.addWidget(self.lbl_balance)
+        info_row.addStretch()
+
+        # hide separators until populated
+        for w in (sep1, sep2, sep3,
+                  self.lbl_account, self.lbl_period, self.lbl_balance):
+            w.setVisible(False)
+        self._info_seps = (sep1, sep2, sep3)
+
+        layout.addLayout(info_row)
+
+        # ── Preview label ─────────────────────────────────────────────────────
+        self.preview_lbl = QLabel("Parsed transactions appear here")
+        self.preview_lbl.setProperty("class", "dim-label")
+        layout.addWidget(self.preview_lbl)
+
+        # ── Table ─────────────────────────────────────────────────────────────
+        self.model = PreviewModel()
+        self.table = EditableTableView()
+        self.table.setModel(self.model)
+        self.table.setItemDelegate(NullDelegate(self.table))
+        for col in (COL_NAME, COL_MEMO, COL_FITID):
+            self.table.setItemDelegateForColumn(col, ReadOnlyCopyDelegate(self.table))
+        self.table.setSortingEnabled(False)
+        self.table.setAlternatingRowColors(True)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.ResizeToContents)
+        header.setStretchLastSection(False)
+        self.table.verticalHeader().setVisible(False)
+        self.table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self._context_menu)
+        self.table.doubleClicked.connect(self._on_cell_double_clicked)
+
+        QShortcut(QKeySequence.Copy, self.table, activated=self._copy_selected)
+
+        layout.addWidget(self.table, 1)
+
+        # ── Status row ────────────────────────────────────────────────────────
+        status_row = QHBoxLayout()
+        self.lbl_status = QLabel("")
+        self.lbl_status.setProperty("class", "dim-label")
+        status_row.addWidget(self.lbl_status)
+        status_row.addStretch()
+        self.chk_new_only = QCheckBox("Show new only")
+        self.chk_new_only.toggled.connect(self._apply_new_filter)
+        status_row.addWidget(self.chk_new_only)
+        layout.addLayout(status_row)
+
+    # ── File browsing ─────────────────────────────────────────────────────────
+
+    def _browse_ofx(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Open QFX/OFX File", "",
+            "QFX/OFX Files (*.qfx *.ofx);;All Files (*)"
+        )
+        if not path:
+            return
+
+        self.lbl_status.setText("📂 Opening file...")
+        QApplication.processEvents()
+
+        content = None
+        for enc in ["utf-8", "latin-1", "cp1252"]:
+            try:
+                with open(path, "r", encoding=enc) as f:
+                    content = f.read()
+                break
+            except UnicodeDecodeError:
+                continue
+
+        if content is None:
+            QMessageBox.warning(self, "Error", "Could not read file.")
+            return
+
+        self._ofx_content = content
+        self.lbl_file.setText(f"File: {os.path.basename(path)}")
+        self.lbl_status.setText("🔍 Parsing transactions...")
+        QApplication.processEvents()
+
+        header = parse_qfx_header(content)
+        acctid = header["acctid"]
+        accttype = header["accttype"]
+        bankid = header["bankid"]
+        dtstart = header["dtstart"]
+        dtend = header["dtend"]
+
+        def _fmt_date(d):
+            if len(d) == 8:
+                return f"{d[0:4]}-{d[4:6]}-{d[6:8]}"
+            return d
+
+        date_range = f"  ({_fmt_date(dtstart)} → {_fmt_date(dtend)})" if dtstart else ""
+        balamt = header["balamt"]
+        dtasof = header["dtasof"]
+        curdef = header["curdef"] or "CAD"
+
+        known = self.db.get_account_by_acctid(acctid) if acctid else None
+        if known:
+            self._current_account = known["name"]
+        else:
+            self._current_account = self._ask_account(acctid, accttype, bankid)
+            if not self._current_account:
+                self._clear()
+                return
+
+        s = get_settings()
+        acc = self.db.get_account_by_name(self._current_account)
+        account_color = (acc["color"] if acc and acc["color"] else None) or s.get("accent")
+
+        # store for post-import balance check
+        self._balamt = balamt
+        self._curdef = curdef
+
+        # populate info row labels
+        self.lbl_file.setText(f"File: {os.path.basename(path)}")
+
+        self.lbl_account.setText(self._current_account)
+        self.lbl_account.setStyleSheet(f"color: {account_color}; font-weight: bold;")
+        self.lbl_account.setVisible(True)
+
+        if dtstart:
+            self.lbl_period.setText(f"Period: {_fmt_date(dtstart)} → {_fmt_date(dtend)}")
+            self.lbl_period.setVisible(True)
+        else:
+            self.lbl_period.setVisible(False)
+
+        if balamt is not None:
+            asof = f"  as of {_fmt_date(dtasof)}" if dtasof else ""
+            self.lbl_balance.setText(f"Balance: ${balamt:,.2f} {curdef}{asof}")
+            self.lbl_balance.setVisible(True)
+        else:
+            self.lbl_balance.setVisible(False)
+
+        # show separators
+        for sep in self._info_seps:
+            sep.setVisible(True)
+
+        self.parse()
+
+    def _ask_account(self, acctid, accttype, bankid):
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Identify Account")
+        dlg.setMinimumWidth(400)
+
+        layout = QVBoxLayout(dlg)
+        layout.setSpacing(12)
+
+        info = QLabel(
+            f"This QFX file contains an account that hasn't been seen before.\n\n"
+            f"Account ID:   {acctid}\n"
+            f"Account Type: {accttype}\n"
+            f"Bank ID:      {bankid}\n\n"
+            f"Which account does this belong to?"
+        )
+        info.setWordWrap(True)
+        layout.addWidget(info)
+
+        combo = SingleSelectCombo()
+        for a in self.db.get_accounts():
+            combo.addItem(a["name"])
+        layout.addWidget(combo)
+
+        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        btns.accepted.connect(dlg.accept)
+        btns.rejected.connect(dlg.reject)
+        layout.addWidget(btns)
+
+        if dlg.exec():
+            account_name = combo.currentText()
+            if acctid:
+                self.db.save_account_id(acctid, account_name, accttype, bankid)
+            return account_name
+        return None
+
+    def _clear(self):
+        self._ofx_content = None
+        self._current_account = None
+        self.lbl_file.setText("File: —")
+        self._balamt = None
+        self._curdef = "CAD"
+        self.lbl_account.setVisible(False)
+        self.lbl_period.setVisible(False)
+        self.lbl_balance.setVisible(False)
+        for sep in self._info_seps:
+            sep.setVisible(False)
+        self.parsed_rows.clear()
+        self.model.set_rows([])
+        self.lbl_status.setText("")
+
+    def refresh(self):
+        pass  # account is auto-detected from file
+
+    # ── Parse ─────────────────────────────────────────────────────────────────
+
+    def parse(self):
+        if not self._ofx_content:
+            QMessageBox.warning(self, "No file", "Select a QFX/OFX file first.")
+            return
+        if not self._current_account:
+            QMessageBox.warning(self, "No account", "Account could not be determined.")
+            return
+
+        account = self._current_account
+        rows = parse_ofx(self._ofx_content, account)
+
+        if not rows:
+            self.lbl_status.setText("⚠️  No transactions found. Check format or file.")
+            return
+
+        uncategorized_cat = self.db.get_category_by_name(UNCATEGORIZED_CAT)
+        uncategorized_sub = (
+            self.db.get_subcategory_by_name(UNCATEGORIZED_SUB, uncategorized_cat["id"])
+            if uncategorized_cat else None
+        )
+
+        transfer_cat_internal = self.db.get_category_by_name("Internal Transfer")
+        transfer_cat_external = self.db.get_category_by_name("External Transfer")
+        transfer_sub_unmatched_int = self.db.get_subcategory_by_name(
+            "⚠️ Unmatched", transfer_cat_internal["id"]) if transfer_cat_internal else None
+        transfer_sub_unmatched_ext = self.db.get_subcategory_by_name(
+            "⚠️ Unmatched", transfer_cat_external["id"]) if transfer_cat_external else None
+
+        for r in rows:
+            r["subcategory"] = None
+            r["category"] = None
+            r["is_transfer"] = False
+            r["_tags"] = []  # tags to assign on import
+
+            name = r.get("name") or r.get("description") or ""
+            memorandum = r.get("memorandum") or r.get("memo") or ""
+
+            # Step 1 — Internal transfer
+            if r["type"] == "Transfer":
+                r["is_transfer"] = True
+                r["category"] = transfer_cat_internal
+                r["subcategory"] = transfer_sub_unmatched_int
+                fitid_t = r.get("fitid")
+                r["_status"] = "⏭️ Duplicate" if (fitid_t and self.db.fitid_exists(fitid_t, account)) else "🆕 New"
+                continue
+
+            # Step 2 — E-transfer with a Transfer mapping
+            if r.get("is_etransfer"):
+                ext_mapping = self.db.lookup_mapping(
+                    type_name="Transfer",
+                    account_name=account,
+                    name=name or None,
+                    memorandum=memorandum or None,
+                )
+                if ext_mapping and ext_mapping["subcategory_id"]:
+                    r["type"] = "Transfer"
+                    r["is_transfer"] = True
+                    r["category"] = transfer_cat_external
+                    r["subcategory"] = transfer_sub_unmatched_ext
+                    fitid_t = r.get("fitid")
+                    r["_status"] = "⏭️ Duplicate" if (fitid_t and self.db.fitid_exists(fitid_t, account)) else "🆕 New"
+                    continue
+
+            # Step 3 — Normal income/expense mapping
+            mapping = self.db.lookup_mapping(
+                type_name=r["type"],
+                account_name=account,
+                name=name or None,
+                memorandum=memorandum or None,
+            )
+            if mapping and mapping["subcategory_id"]:
+                sub = self.db.get_subcategory_by_id(mapping["subcategory_id"])
+                cat = self.db.get_category_by_id(mapping["category_id"]) if mapping["category_id"] else None
+                if sub and cat and sub["name"] != UNCATEGORIZED_SUB:
+                    r["subcategory"] = sub
+                    r["category"] = cat
+
+            if not r["subcategory"]:
+                r["subcategory"] = uncategorized_sub
+                r["category"] = uncategorized_cat
+
+            # Step 4 — Status
+            fitid = r.get("fitid")
+            is_dup = bool(fitid and self.db.fitid_exists(fitid, account))
+            sub = r["subcategory"]
+            is_uncat = sub is not None and sub["name"] == UNCATEGORIZED_SUB
+
+            if is_dup:
+                r["_status"] = "⏭️ Duplicate"
+            else:
+                r["_status"] = "🆕 New"
+
+        self.parsed_rows = rows
+        self.model.set_rows(self.parsed_rows)
+        self._apply_new_filter(self.chk_new_only.isChecked())
+        self._update_status_bar()
+
+    def _update_status_bar(self):
+        rows = self.parsed_rows
+        dups = sum(1 for r in rows if "Duplicate" in r.get("_status", ""))
+        transfers = sum(1 for r in rows if r.get("is_transfer"))
+        new_count = len(rows) - dups
+
+        parts = [f"{len(rows)} parsed", f"🆕 {new_count} new", f"⏭️ {dups} duplicate"]
+        if transfers: parts.append(f"🔄 {transfers} transfers")
+        self.lbl_status.setText("  |  ".join(parts))
+
+    # ── Double-click routing ──────────────────────────────────────────────────
+
+    def _on_cell_double_clicked(self, index):
+        if not index.isValid():
+            return
+        col = index.column()
+        row_idx = index.row()
+
+        if col in (COL_CAT, COL_SUB):
+            self._edit_cat_for_row(row_idx)
+        elif col == COL_TAGS:
+            self._edit_tags_for_row(row_idx)
+        elif col in (COL_NAME, COL_MEMO, COL_FITID):
+            self.table.edit(index)
+        # Status / Date / Amount — no action
+
+    def _edit_cat_for_row(self, row_idx):
+        row = self.model.get_row(row_idx)
+        if row.get("is_transfer"):
+            return
+        cat = row.get("category")
+        sub = row.get("subcategory")
+        dlg = ImportBulkCatDialog(
+            self.db, row.get("type", "Expense"), self,
+            preset_cat=cat["name"] if cat else None,
+            preset_sub=sub["name"] if sub else None,
+        )
+        if dlg.exec():
+            new_cat = self.db.get_category_by_name(dlg.cat_name) if dlg.cat_name else None
+            new_sub = (self.db.get_subcategory_by_name(dlg.sub_name, new_cat["id"])
+                       if (new_cat and dlg.sub_name) else None)
+            row["category"] = new_cat
+            row["subcategory"] = new_sub
+            self._refresh_status_for_row(row_idx)
+            self._emit_row_changed(row_idx)
+
+    def _edit_tags_for_row(self, row_idx):
+        row = self.model.get_row(row_idx)
+        dlg = ImportTagPickerDialog(self.db, row.get("_tags", []), self)
+        if dlg.exec():
+            selected_ids = dlg.get_selected_ids()
+            all_tags = {t["id"]: t for t in self.db.get_tags()}
+            row["_tags"] = [all_tags[tid] for tid in selected_ids if tid in all_tags]
+            self.model.dataChanged.emit(
+                self.model.index(row_idx, COL_TAGS),
+                self.model.index(row_idx, COL_TAGS),
+            )
+
+    def _refresh_status_for_row(self, row_idx):
+        row = self.model.get_row(row_idx)
+        fitid = row.get("fitid")
+        is_dup = bool(fitid and self.db.fitid_exists(fitid, self._current_account or ""))
+        row["_status"] = "⏭️ Duplicate" if is_dup else "🆕 New"
+
+    def _emit_row_changed(self, row_idx):
+        self.model.dataChanged.emit(
+            self.model.index(row_idx, 0),
+            self.model.index(row_idx, len(PREVIEW_COLS) - 1),
+        )
+
+    # ── Context menu ──────────────────────────────────────────────────────────
+
+    def _context_menu(self, pos):
+        idx = self.table.indexAt(pos)
+        if not idx.isValid():
+            return
+        selected = self._get_selected_row_indices()
+        if not selected:
+            return
+
+        menu = QMenu(self)
+        n = len(selected)
+
+        if n == 1:
+            row_idx = selected[0]
+            menu.addAction(QAction("✏️  Edit Category / Sub-Cat", self,
+                                   triggered=lambda: self._edit_cat_for_row(row_idx)))
+            menu.addAction(QAction("🏷️  Edit Tags", self,
+                                   triggered=lambda: self._edit_tags_for_row(row_idx)))
+        else:
+            menu.addAction(QAction(f"✏️  Bulk Edit Category / Sub-Cat ({n} rows)", self,
+                                   triggered=self._bulk_edit_cat))
+            menu.addAction(QAction(f"🏷️  Add Tags ({n} rows)", self,
+                                   triggered=self._bulk_add_tags))
+
+        menu.addSeparator()
+        menu.addAction(QAction(f"📋  Copy {n} row{'s' if n > 1 else ''}", self,
+                               triggered=self._copy_selected))
+        menu.exec(self.table.viewport().mapToGlobal(pos))
+
+    def _get_selected_row_indices(self):
+        return sorted(set(idx.row() for idx in self.table.selectedIndexes()))
+
+    def _bulk_edit_cat(self):
+        selected = self._get_selected_row_indices()
+        non_transfer = [i for i in selected if not self.model.get_row(i).get("is_transfer")]
+        if not non_transfer:
+            QMessageBox.information(self, "Info", "All selected rows are transfers — category is fixed.")
+            return
+        types = set(self.model.get_row(i)["type"] for i in non_transfer)
+        row_type = types.pop() if len(types) == 1 else "Expense"
+        dlg = ImportBulkCatDialog(self.db, row_type, self)
+        if dlg.exec():
+            new_cat = self.db.get_category_by_name(dlg.cat_name) if dlg.cat_name else None
+            new_sub = (self.db.get_subcategory_by_name(dlg.sub_name, new_cat["id"])
+                       if (new_cat and dlg.sub_name) else None)
+            for row_idx in non_transfer:
+                row = self.model.get_row(row_idx)
+                row["category"] = new_cat
+                row["subcategory"] = new_sub
+                self._refresh_status_for_row(row_idx)
+            self.model.dataChanged.emit(
+                self.model.index(non_transfer[0], 0),
+                self.model.index(non_transfer[-1], len(PREVIEW_COLS) - 1),
+            )
+
+    def _bulk_add_tags(self):
+        selected = self._get_selected_row_indices()
+        if not selected:
+            return
+        dlg = ImportTagPickerDialog(self.db, parent=self)
+        if dlg.exec():
+            new_ids = set(dlg.get_selected_ids())
+            if not new_ids:
+                return
+            all_tags = {t["id"]: t for t in self.db.get_tags()}
+            for row_idx in selected:
+                row = self.model.get_row(row_idx)
+                existing_ids = {t["id"] for t in row.get("_tags", [])}
+                merged_ids = existing_ids | new_ids
+                row["_tags"] = [all_tags[tid] for tid in merged_ids if tid in all_tags]
+            self.model.dataChanged.emit(
+                self.model.index(selected[0], COL_TAGS),
+                self.model.index(selected[-1], COL_TAGS),
+            )
+
+    # ── Copy ─────────────────────────────────────────────────────────────────
+
+    def _copy_selected(self):
+        selected = self._get_selected_row_indices()
+        if not selected:
+            return
+        lines = ["\t".join(PREVIEW_COLS)]
+        for row_idx in selected:
+            row = self.model.get_row(row_idx)
+            cat = row.get("category")
+            sub = row.get("subcategory")
+            tags = row.get("_tags", [])
+            memo = (row.get("memorandum") or row.get("memo") or "").strip()
+            values = [
+                row.get("_status", ""),
+                row.get("date", ""),
+                row.get("type", ""),
+                f"${row['amount']:,.2f}" if row.get("amount") is not None else "",
+                cat["name"] if cat else "",
+                sub["name"] if sub else "",
+                ", ".join(t["name"] for t in tags),
+                row.get("name", ""),
+                memo,
+                row.get("fitid", "") or "",
+            ]
+            lines.append("\t".join(values))
+        QApplication.clipboard().setText("\n".join(lines))
+
+    # ── Re-apply mappings ─────────────────────────────────────────────────────
+
+    def _reapply_mappings(self):
+        if not self.parsed_rows:
+            QMessageBox.warning(self, "Nothing", "Parse a statement first.")
+            return
+
+        account = self._current_account
+        uncat_cat_id, uncat_sub_id = self.db.get_uncategorized_ids()
+
+        updated = 0
+        for i, r in enumerate(self.parsed_rows):
+            if r.get("is_transfer"):
+                continue
+            sub = r.get("subcategory")
+            if sub and sub["id"] != uncat_sub_id:
+                continue
+
+            name = r.get("name") or r.get("description") or ""
+            memorandum = r.get("memorandum") or r.get("memo") or ""
+            mapping = self.db.lookup_mapping(
+                type_name=r["type"],
+                account_name=account,
+                name=name or None,
+                memorandum=memorandum or None,
+            )
+            if not mapping or not mapping["subcategory_id"]:
+                continue
+
+            new_sub = self.db.get_subcategory_by_id(mapping["subcategory_id"])
+            new_cat = self.db.get_category_by_id(mapping["category_id"]) if mapping["category_id"] else None
+            if not new_sub or not new_cat or new_sub["name"] == "Uncategorized":
+                continue
+
+            r["subcategory"] = new_sub
+            r["category"] = new_cat
+            self._refresh_status_for_row(i)
+            updated += 1
+
+        if updated:
+            self.model.dataChanged.emit(
+                self.model.index(0, 0),
+                self.model.index(len(self.parsed_rows) - 1, len(PREVIEW_COLS) - 1),
+            )
+        QMessageBox.information(
+            self, "Re-apply Mappings",
+            f"✅ Updated {updated} row{'s' if updated != 1 else ''} in preview."
+        )
+
+    # ── Filter ────────────────────────────────────────────────────────────────
+
+    def _apply_new_filter(self, checked):
+        self._show_new_only = checked
+        for i in range(self.model.rowCount()):
+            row = self.model.get_row(i)
+            is_dup = "Duplicate" in row.get("_status", "")
+            self.table.setRowHidden(i, checked and is_dup)
+
+    # ── Import ────────────────────────────────────────────────────────────────
+
+    def import_all(self):
+        if not self.parsed_rows:
+            QMessageBox.warning(self, "Nothing", "Parse a statement first.")
+            return
+        account = self._current_account
+        if not account:
+            QMessageBox.warning(self, "No account", "No account detected.")
+            return
+
+        imported = skipped_dup = 0
+
+        for r in self.parsed_rows:
+            # Skip duplicates automatically — no checkbox needed
+            fitid = r.get("fitid") or None
+            is_dup = bool(fitid and self.db.fitid_exists(fitid, account))
+            if is_dup:
+                skipped_dup += 1
+                continue
+
+            type_str = r.get("type", "Expense")
+            is_transfer = "Transfer" in type_str
+            _dp = date.fromisoformat(r["date"])
+
+            if is_transfer:
+                direction = r.get("direction", "debit")
+                from_acc = account if direction == "debit" else None
+                to_acc = None if direction == "debit" else account
+                tx_name = r.get("name") or None
+                tx_memo = r.get("memorandum") or r.get("memo") or None
+                cat_id, sub_id = self.db.get_transfer_cat_sub(
+                    description=tx_name or tx_memo or "",
+                    from_account=from_acc or "",
+                    to_account=to_acc or "",
+                    matched=False,
+                )
+                tx_id = self.db.add_transaction(
+                    _dp.year, MONTHS_ORDER[_dp.month - 1], _dp.day, type_str,
+                    from_acc, r["amount"], sub_id, cat_id,
+                    name=tx_name, memorandum=tx_memo,
+                    to_account_name=to_acc,
+                    transfer_status=TRANSFER_UNMATCHED,
+                    fitid=fitid,
+                )
+            else:
+                cat = r.get("category")
+                sub = r.get("subcategory")
+                cat_id = cat["id"] if cat else None
+                sub_id = sub["id"] if sub else None
+                if not cat_id:
+                    cat_id, _ = self.db.get_uncategorized_ids()
+                if not sub_id:
+                    _, sub_id = self.db.get_uncategorized_ids()
+                tx_name = r.get("name") or None
+                tx_memo = r.get("memorandum") or r.get("memo") or None
+                tx_id = self.db.add_transaction(
+                    _dp.year, MONTHS_ORDER[_dp.month - 1], _dp.day, type_str,
+                    account, r["amount"], sub_id, cat_id,
+                    name=tx_name, memorandum=tx_memo,
+                    fitid=fitid,
+                )
+
+            # Save pre-import tags
+            tags = r.get("_tags", [])
+            if tags and tx_id:
+                self.db.set_tags_for_transaction(tx_id, [t["id"] for t in tags])
+
+            imported += 1
+
+        msg = f"✅ Imported {imported} transaction{'s' if imported != 1 else ''}."
+        if skipped_dup:
+            msg += f"\n⏭️ {skipped_dup} duplicate{'s' if skipped_dup != 1 else ''} skipped automatically."
+
+        if self._balamt is not None and imported > 0:
+            acc = self.db.get_account_by_name(account)
+            if acc:
+                balances = self.db.get_latest_account_balances()
+                calc_bal = balances.get(acc["id"])
+                if calc_bal is not None:
+                    diff = round(self._balamt - calc_bal, 2)
+                    msg += f"\n\n💰 Bank balance:       ${self._balamt:,.2f} {self._curdef}"
+                    msg += f"\n📊 Calculated balance: ${calc_bal:,.2f} {self._curdef}"
+                    if abs(diff) < 0.02:
+                        msg += "\n\n✅ Balance matches!"
+                    else:
+                        sign = "+" if diff > 0 else ""
+                        msg += f"\n\n⚠️ Difference: {sign}${diff:,.2f} {self._curdef}"
+
+        QMessageBox.information(self, "Import complete", msg)
+
+        if imported > 0:
+            self.on_done_cb()
+
+        self._clear()
