@@ -1,3 +1,4 @@
+import os
 import shutil
 
 from PySide6.QtWidgets import (
@@ -10,7 +11,7 @@ from PySide6.QtGui import QFont, QColor, QPalette
 
 from daftarche.db import Database
 from daftarche.app_info import APP_NAME
-from daftarche.backup import copy_db, startup_backup
+from daftarche.backup import copy_db, mirror_snapshots, startup_backup
 from daftarche.paths import BACKUP_DIR, DB_PATH
 from daftarche.style import build_stylesheet, get_settings, DEFAULTS
 from daftarche.widgets import StepSpinBox, SingleSelectCombo
@@ -144,7 +145,7 @@ class MainWindow(QMainWindow):
 
     def _auto_backup(self):
         try:
-            startup_backup(self.db.conn)
+            startup_backup(self.db.conn, extra_dir=self.settings.get("backup_extra_dir"))
         except Exception as exc:
             print(f"Auto-backup failed: {exc}")
 
@@ -225,6 +226,7 @@ class SettingsDialog(QDialog):
             key: self.settings.get(key)
             for key, _ in self.COLOR_KEYS_COL_1 + self.COLOR_KEYS_COL_2
         }
+        self._pending_extra_dir = self.settings.get("backup_extra_dir") or ""
 
         self._build()
         self.setFixedSize(self.sizeHint())
@@ -276,6 +278,22 @@ class SettingsDialog(QDialog):
         color_grid.setColumnMinimumWidth(2, 40)
         color_grid.setColumnMinimumWidth(4, 60)
 
+        backups_lbl = QLabel("Backups")
+        backups_lbl.setProperty("class", "settings-section")
+        self.lbl_extra_dir = QLabel()
+        self.lbl_extra_dir.setWordWrap(True)
+        self._show_extra_dir()
+        btn_extra_choose = QPushButton("Choose…")
+        btn_extra_choose.clicked.connect(self._choose_extra_dir)
+        btn_extra_clear = QPushButton("Clear")
+        btn_extra_clear.setProperty("class", "secondary")
+        btn_extra_clear.clicked.connect(lambda: self._set_extra_dir(""))
+        extra_row = QHBoxLayout()
+        extra_row.addWidget(QLabel("Extra backup folder:"))
+        extra_row.addWidget(self.lbl_extra_dir, 1)
+        extra_row.addWidget(btn_extra_choose)
+        extra_row.addWidget(btn_extra_clear)
+
         btn_reset = QPushButton("Reset to Defaults")
         btn_reset.setProperty("class", "secondary")
         btn_reset.clicked.connect(self._reset)
@@ -302,7 +320,26 @@ class SettingsDialog(QDialog):
         layout.addWidget(colors_lbl)
         layout.addLayout(color_grid)
         layout.addWidget(self._sep())
+        layout.addWidget(backups_lbl)
+        layout.addLayout(extra_row)
+        layout.addWidget(self._sep())
         layout.addLayout(btn_row)
+
+    def _show_extra_dir(self):
+        path = self._pending_extra_dir.replace(os.path.expanduser("~"), "~", 1)
+        path = path.replace("~/Library/Mobile Documents/com~apple~CloudDocs", "iCloud Drive", 1)
+        self.lbl_extra_dir.setText(path or "none (monthly snapshots stay on this Mac only)")
+        self.lbl_extra_dir.setToolTip(self._pending_extra_dir)
+
+    def _set_extra_dir(self, path):
+        self._pending_extra_dir = path
+        self._show_extra_dir()
+        self.setFixedSize(self.sizeHint())
+
+    def _choose_extra_dir(self):
+        path = QFileDialog.getExistingDirectory(self, "Extra Backup Folder", self._pending_extra_dir or "")
+        if path:
+            self._set_extra_dir(path)
 
     def _sep(self):
         sep = QFrame()
@@ -333,6 +370,12 @@ class SettingsDialog(QDialog):
 
         for key, color in self._pending_colors.items():
             self.settings.set(key, color)
+
+        self.settings.set("backup_extra_dir", self._pending_extra_dir)
+        try:
+            mirror_snapshots(self._pending_extra_dir)
+        except OSError as exc:
+            QMessageBox.warning(self, "Extra Backup", f"Could not copy the backups to\n{self._pending_extra_dir}:\n{exc}")
 
         self.accept()
 

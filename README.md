@@ -77,8 +77,10 @@ keeps its files in one folder:
 On Windows the folder is `%APPDATA%\Daftarche`, on Linux `~/.local/share/daftarche`.
 Set `DAFTARCHE_HOME` to use another folder, for example a test copy.
 Backup and Restore in the top bar save and load a copy of the database by hand.
-The monthly snapshots sit on the same disk as the database, so keep the folder
-in your regular backups (Time Machine covers it).
+The monthly snapshots sit on the same disk as the database; Settings → Extra
+backup folder also copies them to a folder of your choice (iCloud Drive, an
+external disk), and Time Machine covers the data folder too. Help → Show Data
+Folder opens it.
 
 ## Development
 

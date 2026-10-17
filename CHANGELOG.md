@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.0 — 2026-10-17
+
+- Settings → Extra backup folder: the monthly snapshots are also copied to a folder
+  of your choice (iCloud Drive, an external disk), with the same 12-month rotation;
+  skipped when the folder is not there.
+- Help → About Daftarche (in the app menu on macOS) and Help → Show Data Folder.
+
 ## 0.2.0 — 2026-10-17
 
 - Renamed to **Daftarche** (package, command `daftarche`, app name).

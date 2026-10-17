@@ -66,3 +66,28 @@ def test_other_files_left_alone(folder, conn):
         backup.startup_backup(conn, date(2025, month, 1))
     assert (folder / "finance_backup.db").exists()
     assert (folder / "daftarche-backup.db").exists()
+
+
+def test_extra_folder_gets_the_snapshots(folder, conn, tmp_path_factory):
+    extra = tmp_path_factory.mktemp("extra")
+    backup.startup_backup(conn, date(2026, 9, 1))
+    written = backup.startup_backup(conn, date(2026, 10, 1), extra_dir=extra)
+    assert sorted(p.name for p in extra.iterdir()) == ["daftarche-2026-09.db", "daftarche-2026-10.db"]
+    assert extra / "daftarche-2026-10.db" in written
+    assert backup.startup_backup(conn, date(2026, 10, 2), extra_dir=extra) == [backup.LAST_BACKUP]
+
+
+def test_extra_folder_rotates(folder, conn, tmp_path_factory):
+    extra = tmp_path_factory.mktemp("extra")
+    for month in range(1, 13):
+        backup.startup_backup(conn, date(2025, month, 1), extra_dir=extra)
+    backup.startup_backup(conn, date(2026, 1, 1), extra_dir=extra)
+    assert monthly(extra) == monthly(folder)
+    assert len(monthly(extra)) == backup.KEEP_MONTHS
+
+
+def test_missing_extra_folder_is_skipped(folder, conn, tmp_path):
+    written = backup.startup_backup(conn, date(2026, 10, 1), extra_dir=tmp_path / "unplugged-disk")
+    assert len(written) == 2
+    assert not (tmp_path / "unplugged-disk").exists()
+    assert backup.mirror_snapshots("") == []
