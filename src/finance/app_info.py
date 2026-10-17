@@ -11,6 +11,10 @@ APP_NAME = "Finance Manager"
 
 APP_VERSION = __version__
 
+ICONS = Path(__file__).resolve().parent / "data" / "icons"
+APP_IMAGE = ICONS / "splash.png"
+"""Background of the splash screen (drawn by tools/make_icon.py)."""
+
 DIST_NAME = "finance"
 """Name of the package (PyPI, once public)."""
 
@@ -21,7 +25,7 @@ APP = AppInfo(
     module="finance",
     command="finance",
     github_repo="vahid-anari/finance",
-    icon=Path(__file__).resolve().parent / "data" / "icons" / "app_icon.png",
+    icon=ICONS / "app_icon.png",
     bundle_id="io.github.vahid-anari.finance",
     linux_id="finance",
     marker="Finance",

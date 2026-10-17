@@ -36,12 +36,17 @@ def refresh_launcher() -> None:
     refresh_if_outdated(APP)
 
 
+SPLASH_SECONDS = 4.5  # the splash stays at least this long, so it can be seen
+
+
 def run_view() -> int:
+    import time
+
     from PySide6.QtCore import QTimer
-    from PySide6.QtGui import QIcon
+    from PySide6.QtGui import QColor, QIcon
     from PySide6.QtWidgets import QApplication
 
-    from finance.app_info import APP
+    from finance.app_info import APP, APP_IMAGE
 
     app = QApplication.instance() or QApplication(sys.argv)
     app.setApplicationName("finance")
@@ -50,11 +55,42 @@ def run_view() -> int:
     if APP.icon.exists():
         app.setWindowIcon(QIcon(str(APP.icon)))
 
-    from finance.window import MainWindow  # the slow imports
+    splash = None
+    shown_at = time.monotonic()
+    if APP_IMAGE.exists():
+        from sciwidgets.splash import SplashScreen
 
+        base = 35
+        splash = SplashScreen(
+            APP_IMAGE,
+            size=(16 * base, 9 * base),
+            title=APP_DISPLAY_NAME.replace(" ", "\n"),
+            subtitle=f"Version {__version__}",
+            font_family="Helvetica Neue",
+            title_color=QColor("#e8e0d0"),
+            subtitle_color=QColor("#e8e0d0"),
+            message_color=QColor("#9a9080"),
+            delay=0.05,
+        )
+        splash.show_message("Starting...")
+
+    from finance.window import MainWindow  # the slow imports, behind the splash
+
+    if splash:
+        splash.show_message("Opening the database...")
     window = MainWindow()
-    window.show()
-    QTimer.singleShot(2000, refresh_launcher)
+
+    def show_window() -> None:
+        window.show()
+        if splash:
+            splash.finish(window)
+
+    remaining = SPLASH_SECONDS - (time.monotonic() - shown_at) if splash else 0
+    if remaining > 0:
+        QTimer.singleShot(round(1000 * remaining), show_window)
+    else:
+        show_window()
+    QTimer.singleShot(round(1000 * max(remaining, 0)) + 2000, refresh_launcher)
     return app.exec()
 
 

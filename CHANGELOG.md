@@ -8,3 +8,4 @@ First packaged version.
 - Data (database, settings, backups) moved out of the source tree into
   `~/Library/Application Support/Finance/` (override with `FINANCE_HOME`).
 - Automatic backup written to `backups/finance_backup.db` at every start.
+- App icon and splash screen, drawn by `tools/make_icon.py` (variants: bars, combo).
