@@ -10,10 +10,10 @@ from PySide6.QtCharts import (
     QSplineSeries, QLineSeries, QScatterSeries,
     QPieSeries, QPieSlice
 )
-from finance.db import MONTH_NUM, MONTHS_ORDER
-from finance.widgets import PeriodSelectorWidget, StepSpinBox, CheckComboBox, SingleSelectCombo
-from finance.style import get_settings, TAB20_COLORS
-from finance.chart_utils import HoverChartView, StackedOverlay, make_chart, make_x_axis, make_y_axis, style_chart_view
+from daftarche.db import MONTH_NUM, MONTHS_ORDER
+from daftarche.widgets import PeriodSelectorWidget, StepSpinBox, CheckComboBox, SingleSelectCombo
+from daftarche.style import get_settings, TAB20_COLORS
+from daftarche.chart_utils import HoverChartView, StackedOverlay, make_chart, make_x_axis, make_y_axis, style_chart_view
 
 
 # Helpers

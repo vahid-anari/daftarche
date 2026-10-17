@@ -11,7 +11,7 @@ from PySide6.QtGui import QColor, QBrush, QFont, QPen, QPainter
 from PySide6.QtCore import Qt, QLocale, QMargins, QEvent, Signal, QPointF, QRectF
 from PySide6.QtWidgets import QLabel, QWidget
 
-from finance.style import get_settings
+from daftarche.style import get_settings
 
 
 class HoverChartView(QChartView):

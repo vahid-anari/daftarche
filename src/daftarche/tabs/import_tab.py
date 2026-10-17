@@ -13,9 +13,9 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QAbstractTableModel, QModelIndex
 from PySide6.QtGui import QColor, QBrush, QKeySequence, QShortcut, QAction
 
-from finance.style import get_settings
-from finance.widgets import EditableTableView, ReadOnlyCopyDelegate, SingleSelectCombo
-from finance.db import (
+from daftarche.style import get_settings
+from daftarche.widgets import EditableTableView, ReadOnlyCopyDelegate, SingleSelectCombo
+from daftarche.db import (
     MONTHS_ORDER,
     TRANSFER_UNMATCHED,
     UNCATEGORIZED_CAT,

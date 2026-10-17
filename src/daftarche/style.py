@@ -1,5 +1,5 @@
 """
-style.py — Centralized style system for Finance Manager.
+style.py — Centralized style system for Daftarche.
 
 All colors, fonts, and QSS are generated from a Settings object.
 Settings are persisted to config.json and can be reloaded at runtime.
@@ -16,7 +16,7 @@ ACCOUNT_COLORS  list of 10 distinct account colors
 import json
 import os
 
-from finance.paths import CONFIG_PATH
+from daftarche.paths import CONFIG_PATH
 
 DEFAULTS: dict = {
     "font_family": "Helvetica Neue",

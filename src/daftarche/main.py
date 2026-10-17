@@ -1,15 +1,15 @@
-"""Entry point of the ``finance`` command."""
+"""Entry point of the ``daftarche`` command."""
 
 import argparse
 import sys
 
-from finance import __version__
-from finance.app_info import APP_NAME as APP_DISPLAY_NAME
+from daftarche import __version__
+from daftarche.app_info import APP_NAME as APP_DISPLAY_NAME
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="finance", description="Finance Manager: personal finance desktop app.")
-    parser.add_argument("--version", action="version", version=f"finance {__version__}")
+    parser = argparse.ArgumentParser(prog="daftarche", description="Daftarche: personal bookkeeping desktop app.")
+    parser.add_argument("--version", action="version", version=f"daftarche {__version__}")
     sub = parser.add_subparsers(dest="command")
 
     sub.add_parser("view", help="open the app (default)")
@@ -22,7 +22,7 @@ def build_parser() -> argparse.ArgumentParser:
 def run_install_app(args: argparse.Namespace) -> int:
     from sciwidgets.app.launcher import install_app_command
 
-    from finance.app_info import APP
+    from daftarche.app_info import APP
 
     return install_app_command(APP, remove=args.remove)
 
@@ -31,7 +31,7 @@ def refresh_launcher() -> None:
     """Rebuild an app launcher of this installation made by an older version (never raises)."""
     from sciwidgets.app.launcher import refresh_if_outdated
 
-    from finance.app_info import APP
+    from daftarche.app_info import APP
 
     refresh_if_outdated(APP)
 
@@ -46,10 +46,10 @@ def run_view() -> int:
     from PySide6.QtGui import QColor, QIcon
     from PySide6.QtWidgets import QApplication
 
-    from finance.app_info import APP, APP_IMAGE
+    from daftarche.app_info import APP, APP_IMAGE
 
     app = QApplication.instance() or QApplication(sys.argv)
-    app.setApplicationName("finance")
+    app.setApplicationName("daftarche")
     app.setApplicationDisplayName(APP_DISPLAY_NAME)
     app.setStyle("Fusion")
     if APP.icon.exists():
@@ -74,7 +74,7 @@ def run_view() -> int:
         )
         splash.show_message("Starting...")
 
-    from finance.window import MainWindow  # the slow imports, behind the splash
+    from daftarche.window import MainWindow  # the slow imports, behind the splash
 
     if splash:
         splash.show_message("Opening the database...")

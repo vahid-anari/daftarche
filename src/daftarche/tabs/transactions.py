@@ -11,12 +11,12 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QAbstractTableModel, QModelIndex, QItemSelectionModel
 from PySide6.QtGui import QColor, QAction, QBrush, QShortcut, QKeySequence
 
-from finance.db import MONTHS_ORDER, MONTH_NUM, TRANSFER_UNMATCHED, TRANSFER_MATCHED, SUB_MATCHED
-from finance.widgets import (
+from daftarche.db import MONTHS_ORDER, MONTH_NUM, TRANSFER_UNMATCHED, TRANSFER_MATCHED, SUB_MATCHED
+from daftarche.widgets import (
     CheckComboBox, PeriodSelectorWidget, StepSpinBox, SymbolButton, SingleSelectCombo, ReadOnlyCopyDelegate,
     EditableTableView, DatePicker
 )
-from finance.style import get_settings
+from daftarche.style import get_settings
 
 COLUMNS = [
     "Date", "Type", "Account",

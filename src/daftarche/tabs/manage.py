@@ -8,8 +8,8 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QBrush, QPalette
 
-from finance.style import get_settings
-from finance.widgets import SingleSelectCombo
+from daftarche.style import get_settings
+from daftarche.widgets import SingleSelectCombo
 
 
 def _apply_selection_palette(widget):

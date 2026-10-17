@@ -13,10 +13,10 @@ from PySide6.QtCharts import (
     QBarSeries, QBarSet, QPieSeries, QPieSlice
 )
 
-from finance.db import MONTHS_ORDER, MONTH_NUM
-from finance.style import get_settings, TAB20_COLORS
-from finance.widgets import AccountCard, SummaryCard, PeriodSelectorWidget
-from finance.chart_utils import HoverChartView, make_chart, make_x_axis, make_y_axis, style_chart_view
+from daftarche.db import MONTHS_ORDER, MONTH_NUM
+from daftarche.style import get_settings, TAB20_COLORS
+from daftarche.widgets import AccountCard, SummaryCard, PeriodSelectorWidget
+from daftarche.chart_utils import HoverChartView, make_chart, make_x_axis, make_y_axis, style_chart_view
 
 
 class DashboardTab(QWidget):

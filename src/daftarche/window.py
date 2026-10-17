@@ -1,6 +1,4 @@
-import os
 import shutil
-import sqlite3
 
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QTabWidget, QWidget, QVBoxLayout,
@@ -10,24 +8,26 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtGui import QFont, QColor, QPalette
 
-from finance.db import Database
-from finance.paths import BACKUP_PATH, DB_PATH
-from finance.style import build_stylesheet, get_settings, DEFAULTS
-from finance.widgets import StepSpinBox, SingleSelectCombo
+from daftarche.db import Database
+from daftarche.app_info import APP_NAME
+from daftarche.backup import copy_db, startup_backup
+from daftarche.paths import BACKUP_DIR, DB_PATH
+from daftarche.style import build_stylesheet, get_settings, DEFAULTS
+from daftarche.widgets import StepSpinBox, SingleSelectCombo
 
-from finance.tabs.transactions import TransactionsTab
-from finance.tabs.import_tab import ImportTab
-from finance.tabs.manage import ManageDialog
-from finance.tabs.dashboard import DashboardTab
-from finance.tabs.charts import ChartsTab
-from finance.tabs.accounts import AccountsTab
+from daftarche.tabs.transactions import TransactionsTab
+from daftarche.tabs.import_tab import ImportTab
+from daftarche.tabs.manage import ManageDialog
+from daftarche.tabs.dashboard import DashboardTab
+from daftarche.tabs.charts import ChartsTab
+from daftarche.tabs.accounts import AccountsTab
 
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
 
-        self.setWindowTitle("Finance Manager")
+        self.setWindowTitle(APP_NAME)
         self.setMinimumSize(1280, 800)
 
         self.db_path = DB_PATH
@@ -139,23 +139,12 @@ class MainWindow(QMainWindow):
 
     # ── Backup / restore ──────────────────────────────────────────────────────
     def _backup_db_to(self, destination_path):
-        """
-        Uses SQLite's backup API instead of copying the file directly.
-        This is safer when the database connection is open.
-        """
-        if not destination_path:
-            return
-
-        dest_dir = os.path.dirname(destination_path)
-        if dest_dir:
-            os.makedirs(dest_dir, exist_ok=True)
-
-        with sqlite3.connect(destination_path) as backup_conn:
-            self.db.conn.backup(backup_conn)
+        if destination_path:
+            copy_db(self.db.conn, destination_path)
 
     def _auto_backup(self):
         try:
-            self._backup_db_to(BACKUP_PATH)
+            startup_backup(self.db.conn)
         except Exception as exc:
             print(f"Auto-backup failed: {exc}")
 
@@ -163,7 +152,7 @@ class MainWindow(QMainWindow):
         path, _ = QFileDialog.getSaveFileName(
             self,
             "Save Backup",
-            str(BACKUP_PATH),
+            str(BACKUP_DIR / "daftarche-backup.db"),
             "Database (*.db)"
         )
 

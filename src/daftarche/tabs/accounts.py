@@ -12,10 +12,10 @@ from PySide6.QtCharts import (
     QStackedBarSeries, QScatterSeries
 )
 
-from finance.db import MONTHS_ORDER, MONTH_NUM
-from finance.style import get_settings
-from finance.widgets import PeriodSelectorWidget, ReadOnlyCopyDelegate
-from finance.chart_utils import (
+from daftarche.db import MONTHS_ORDER, MONTH_NUM
+from daftarche.style import get_settings
+from daftarche.widgets import PeriodSelectorWidget, ReadOnlyCopyDelegate
+from daftarche.chart_utils import (
     HoverChartView, make_chart, make_x_axis, make_y_axis,
     style_chart_view, StackedOverlay
 )

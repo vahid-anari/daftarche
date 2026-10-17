@@ -5,7 +5,7 @@ import re
 from datetime import datetime, date as _date
 import calendar
 from decimal import Decimal, ROUND_HALF_UP
-from finance.style import TAB20_COLORS
+from daftarche.style import TAB20_COLORS
 
 TRANSFER_MATCHED = "matched"
 TRANSFER_UNMATCHED = "unmatched"

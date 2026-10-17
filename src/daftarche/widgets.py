@@ -9,8 +9,8 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, Signal, QPoint, QDate, QObject, QEvent
 from PySide6.QtGui import QColor, QPainter, QPolygon, QPen
-from finance.style import get_settings, build_stylesheet
-from finance.db import MONTHS_ORDER, MONTH_NUM
+from daftarche.style import get_settings, build_stylesheet
+from daftarche.db import MONTHS_ORDER, MONTH_NUM
 
 # Global date range bounds — pickers never go outside this window
 PICKER_MIN_YEAR, PICKER_MIN_MONTH = 2023, "August"

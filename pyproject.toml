@@ -3,13 +3,13 @@ requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "finance"
-version = "0.1.0"
-description = "Finance Manager: track bank transactions imported from QFX and Excel statements"
+name = "daftarche"
+version = "0.2.0"
+description = "Daftarche: personal bookkeeping for bank transactions imported from QFX and Excel statements"
 readme = "README.md"
 authors = [{ name = "Vahid Anari", email = "vahid.anari8@gmail.com" }]
 requires-python = ">=3.10"
-keywords = ["personal finance", "budget", "QFX", "OFX", "CIBC", "PySide6"]
+keywords = ["personal finance", "bookkeeping", "budget", "QFX", "OFX", "CIBC", "PySide6"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Environment :: MacOS X",
@@ -31,17 +31,17 @@ dev = ["pytest>=7", "ruff", "build", "twine"]
 icon = ["Pillow", "numpy"]
 
 [project.scripts]
-finance = "finance.main:main"
+daftarche = "daftarche.main:main"
 
 [project.urls]
-Source = "https://github.com/vahid-anari/finance"
-Changelog = "https://github.com/vahid-anari/finance/blob/main/CHANGELOG.md"
+Source = "https://github.com/vahid-anari/daftarche"
+Changelog = "https://github.com/vahid-anari/daftarche/blob/main/CHANGELOG.md"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-finance = ["data/icons/*.png"]
+daftarche = ["data/icons/*.png"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

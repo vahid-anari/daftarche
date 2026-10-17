@@ -1,8 +1,8 @@
 """Draw the app icon and the splash image: a small rising chart on the app's warm dark background.
 
 Run from the repository root: python tools/make_icon.py [bars|combo]
-Writes src/finance/data/icons/app_icon.png (1024 x 1024, transparent corners,
-macOS icon grid) and src/finance/data/icons/splash.png (1600 x 900, chart on the
+Writes src/daftarche/data/icons/app_icon.png (1024 x 1024, transparent corners,
+macOS icon grid) and src/daftarche/data/icons/splash.png (1600 x 900, chart on the
 right, room for the title on the left). Same family as linecat's and Maxwell
 Bloch Studio's icons, in the Finance theme colours (style.py DEFAULTS).
 """
@@ -11,8 +11,8 @@ import sys
 import numpy as np
 from PIL import Image, ImageChops, ImageDraw, ImageFilter
 
-ICON_OUT = "src/finance/data/icons/app_icon.png"
-SPLASH_OUT = "src/finance/data/icons/splash.png"
+ICON_OUT = "src/daftarche/data/icons/app_icon.png"
+SPLASH_OUT = "src/daftarche/data/icons/splash.png"
 VARIANT = sys.argv[1] if len(sys.argv) > 1 else "bars"
 S = 1024                      # icon canvas
 SIDE = 824                    # icon body (macOS grid)
