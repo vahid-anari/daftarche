@@ -147,3 +147,12 @@ def test_failed_auto_backup_is_shown(qapp, monkeypatch, tmp_path):
         w = window_module.MainWindow()
     assert "disk full" in w.statusBar().currentMessage()
     w.db.conn.close()
+
+
+def test_popups_belong_to_their_widget(qapp):
+    """Parentless popups were left for Python's shutdown to delete, in no particular order;
+    on Python 3.15 that crashed the app as it quit."""
+    from daftarche.widgets import CheckComboBox, DatePicker
+    combo, picker = CheckComboBox(), DatePicker()
+    assert combo._popup.parent() is combo and picker._popup.parent() is picker
+    assert combo._popup.isWindow() and picker._popup.isWindow()  # still separate popup windows

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.8.1 — 2026-10-17
+
+- The drop-down popups (multi-select lists, date picker) now belong to their widget, so
+  they are deleted with the window instead of during Python's shutdown, where they could
+  crash the app as it quit (seen with Python 3.15).
+- Needs sciwidgets 0.11.2: Restart Now after an update reopens Daftarche itself on macOS
+  instead of starting it as "Python".
+
 ## 0.8.0 — 2026-10-17
 
 Speed and robustness.

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "daftarche"
-version = "0.8.0"
+version = "0.8.1"
 description = "Daftarche: personal bookkeeping for bank transactions imported from QFX and Excel statements"
 readme = "README.md"
 license = "MIT"
@@ -30,7 +30,7 @@ dependencies = [
     "PySide6>=6.6",
     "pandas>=2.0",
     "openpyxl>=3.1",
-    "sciwidgets~=0.11.1",
+    "sciwidgets~=0.11.2",
 ]
 
 [project.optional-dependencies]

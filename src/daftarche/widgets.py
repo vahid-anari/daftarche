@@ -217,7 +217,7 @@ class CheckComboBox(QToolButton):
         self.setMinimumHeight(32)
         self.setProperty("class", "check-combo")
 
-        self._popup = QFrame(None, Qt.Popup | Qt.FramelessWindowHint)
+        self._popup = QFrame(self, Qt.Popup | Qt.FramelessWindowHint)  # owned: deleted with self
         self._popup.setProperty("class", "picker-popup")
         self._popup.setMinimumWidth(200)
 
@@ -606,7 +606,7 @@ class DatePicker(QFrame):
         layout.addWidget(self._btn)
 
         # ── Popup ─────────────────────────────────────────────────────────────
-        self._popup = QFrame(None, Qt.Popup | Qt.FramelessWindowHint)
+        self._popup = QFrame(self, Qt.Popup | Qt.FramelessWindowHint)  # owned: deleted with self
         self._popup.setProperty("class", "picker-popup")
         self._pl = QVBoxLayout(self._popup)
         self._pl.setContentsMargins(8, 8, 8, 8)
