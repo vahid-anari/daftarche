@@ -24,8 +24,34 @@ from daftarche.db import (
 
 
 # OFX / QFX Parser
-def parse_ofx(content, account_name=""):
+def decode_statement(data: bytes) -> str:
+    """Text of a QFX/OFX file, decoded with the charset its header names (CIBC: 1252)."""
+    head = data[:600].decode("ascii", "replace").upper()
+    if re.search(r"ENCODING:\s*UTF-8", head) or b"encoding=\"utf-8\"" in data[:200].lower():
+        order = ["utf-8", "cp1252"]
+    elif re.search(r"CHARSET:\s*(1252|WINDOWS-1252)", head):
+        order = ["cp1252", "utf-8"]
+    else:
+        order = ["utf-8", "cp1252"]
+    for encoding in order:
+        try:
+            return data.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return data.decode("latin-1")
+
+
+_PAYMENT = re.compile(r"\b(PAYMENT|PAIEMENT)\b")
+
+
+def parse_ofx(content, account_name="", skipped=None):
+    """Transactions of a QFX/OFX statement, sorted by date.
+
+    Blocks that cannot be read (no date, an impossible date, an amount that is not a number)
+    are left out; with ``skipped`` (a list) each one is added to it as (reason, text).
+    """
     results = []
+    skipped = [] if skipped is None else skipped
     content = content.replace('\r\n', '\n').replace('\r', '\n')
 
     ofx_start = re.search(r'<OFX>', content, re.IGNORECASE)
@@ -38,10 +64,13 @@ def parse_ofx(content, account_name=""):
         m = re.search(rf'<{tag}>\s*([^<\n]+)', block, re.IGNORECASE)
         return m.group(1).strip() if m else ""
 
-    is_credit = "credit" in account_name.lower()
+    # credit-card statements are <CCSTMTRS> with <CCACCTFROM> (no ACCTTYPE); the account name
+    # is only a fallback for files without them
+    is_credit = bool(re.search(r"<CCSTMTRS>|<CCACCTFROM>", content, re.IGNORECASE)) or \
+        "credit" in account_name.lower()
     accttype = re.search(r'<ACCTTYPE>([^<\n]+)', content, re.IGNORECASE)
-    if accttype:
-        is_credit = is_credit or "CREDIT" in accttype.group(1).upper()
+    if accttype and accttype.group(1).strip().upper() in ("CREDITCARD", "CREDITLINE"):
+        is_credit = True
 
     for block in blocks:
         block = re.split(r'</STMTTRN>|<LEDGERBAL>|</BANKTRANLIST>', block,
@@ -57,20 +86,22 @@ def parse_ofx(content, account_name=""):
             desc = name if name else memo.strip()
 
             dtposted = re.sub(r'[\.\[].*', '', dtposted)
-            if len(dtposted) >= 8:
-                year = int(dtposted[0:4])
-                month_num = int(dtposted[4:6])
-                day = int(dtposted[6:8])
-                date_str = date(year, month_num, day).isoformat()  # ValueError for impossible dates
-            else:
+            if len(dtposted) < 8:
+                skipped.append((f"no date ({dtposted or 'missing'})", desc))
+                continue
+            try:
+                date_str = date(int(dtposted[0:4]), int(dtposted[4:6]), int(dtposted[6:8])).isoformat()
+            except ValueError:
+                skipped.append((f"impossible date {dtposted[:8]}", desc))
                 continue
 
             try:
                 amt = float(trnamt.replace(",", ""))
             except ValueError:
+                skipped.append((f"amount '{trnamt}' is not a number", desc))
                 continue
 
-            is_payment = "PAYMENT" in desc.upper() or "PAIEMENT" in desc.upper()
+            is_payment = bool(_PAYMENT.search(desc.upper()))
             memo_upper = memo.upper()
             is_internal = (
                     trntype in ("XFER", "TRANSFER") or
@@ -106,7 +137,8 @@ def parse_ofx(content, account_name=""):
                 "source": "ofx",
             })
 
-        except Exception:
+        except Exception as exc:  # anything else odd in one block: skip it, but say so
+            skipped.append((f"unreadable ({exc})", block.strip()[:60]))
             continue
 
     results.sort(key=lambda r: r["date"])
@@ -304,6 +336,18 @@ class ImportBulkCatDialog(QDialog):
     def _accept(self):
         self.cat_name = self.f_category.currentText().strip()
         self.sub_name = self.f_subcat.currentText().strip()
+        # the combos accept typing: a name that does not exist used to be saved as "no category"
+        cat = self.db.get_category_by_name(self.cat_name, type_name=self.row_type) if self.cat_name else None
+        if not cat:
+            QMessageBox.warning(self, "Unknown category",
+                                f"There is no category '{self.cat_name}'. Pick one from the list, "
+                                "or add it in Manage first.")
+            return
+        if not self.db.get_subcategory_by_name(self.sub_name, cat["id"]):
+            QMessageBox.warning(self, "Unknown sub-category",
+                                f"'{cat['name']}' has no sub-category '{self.sub_name}'. Pick one from the "
+                                "list, or add it in Manage first.")
+            return
         self.accept()
 
 
@@ -380,6 +424,7 @@ class ImportTab(QWidget):
         self.db = db
         self.on_done_cb = on_done_cb
         self.parsed_rows = []
+        self._skipped = []
         self._ofx_content = None
         self._current_account = None
         self._show_new_only = False
@@ -510,20 +555,15 @@ class ImportTab(QWidget):
         self.parsed_rows = []
         self.model.set_rows([])
         self._current_account = None
+        self._skipped = []
         self.lbl_status.setText("📂 Opening file...")
         QApplication.processEvents()
 
-        content = None
-        for enc in ["utf-8", "latin-1", "cp1252"]:
-            try:
-                with open(path, "r", encoding=enc) as f:
-                    content = f.read()
-                break
-            except UnicodeDecodeError:
-                continue
-
-        if content is None:
-            QMessageBox.warning(self, "Error", "Could not read file.")
+        try:
+            with open(path, "rb") as f:
+                content = decode_statement(f.read())
+        except OSError as exc:
+            QMessageBox.warning(self, "Error", f"Could not read file:\n{exc}")
             return
 
         self._ofx_content = content
@@ -655,12 +695,15 @@ class ImportTab(QWidget):
             return
 
         account = self._current_account
-        rows = parse_ofx(self._ofx_content, account)
+        skipped = []
+        rows = parse_ofx(self._ofx_content, account, skipped=skipped)
+        self._skipped = skipped
 
         if not rows:
             self.parsed_rows = []
             self.model.set_rows([])
-            self.lbl_status.setText("⚠️  No transactions found. Check format or file.")
+            note = f" ({len(skipped)} unreadable)" if skipped else ""
+            self.lbl_status.setText(f"⚠️  No transactions found{note}. Check format or file.")
             return
 
         uncategorized_cat = self.db.get_category_by_name(UNCATEGORIZED_CAT)
@@ -753,7 +796,11 @@ class ImportTab(QWidget):
 
         parts = [f"{len(rows)} parsed", f"🆕 {new_count} new", f"⏭️ {dups} duplicate"]
         if transfers: parts.append(f"🔄 {transfers} transfers")
+        skipped = getattr(self, "_skipped", [])
+        if skipped:
+            parts.append(f"⚠️ {len(skipped)} unreadable (left out)")
         self.lbl_status.setText("  |  ".join(parts))
+        self.lbl_status.setToolTip("\n".join(f"{why}: {text}" for why, text in skipped))
 
     # ── Double-click routing ──────────────────────────────────────────────────
 
@@ -1011,12 +1058,15 @@ class ImportTab(QWidget):
                         to_acc = None if direction == "debit" else account
                         tx_name = r.get("name") or None
                         tx_memo = r.get("memorandum") or r.get("memo") or None
-                        cat_id, sub_id = self.db.get_transfer_cat_sub(
-                            description=tx_name or tx_memo or "",
-                            from_account=from_acc or "",
-                            to_account=to_acc or "",
-                            matched=False,
-                        )
+                        if r.get("category") and r.get("subcategory"):  # as shown in the preview
+                            cat_id, sub_id = r["category"]["id"], r["subcategory"]["id"]
+                        else:
+                            cat_id, sub_id = self.db.get_transfer_cat_sub(
+                                description=tx_name or tx_memo or "",
+                                from_account=from_acc or "",
+                                to_account=to_acc or "",
+                                matched=False,
+                            )
                         tx_id = self.db.add_transaction(
                             _dp.year, MONTHS_ORDER[_dp.month - 1], _dp.day, type_str,
                             from_acc, r["amount"], sub_id, cat_id,

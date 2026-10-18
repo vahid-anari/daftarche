@@ -586,6 +586,7 @@ class DatePicker(QFrame):
         self._year = now.year()
         self._month = MONTHS_ORDER[now.month() - 1]
         self._day = now.day()
+        self._vy, self._vm = self._year, self._month  # month shown in the popup while browsing
         self._min = None
         self._max = None
         self._build()
@@ -677,56 +678,54 @@ class DatePicker(QFrame):
     # ── Nav actions ───────────────────────────────────────────────────────────
 
     def _prev_month(self):
-        mn = MONTH_NUM.get(self._month, 1)
+        mn = MONTH_NUM.get(self._vm, 1)
         if mn == 1:
-            if self._year <= PICKER_MIN_YEAR: return
-            self._year -= 1
-            self._month = MONTHS_ORDER[11]
+            if self._vy <= PICKER_MIN_YEAR: return
+            self._vy -= 1
+            self._vm = MONTHS_ORDER[11]
         else:
-            self._month = MONTHS_ORDER[mn - 2]
+            self._vm = MONTHS_ORDER[mn - 2]
         self._sync_nav()
         if self._mode == "day":
             self._rebuild_grid()
 
     def _next_month(self):
-        mn = MONTH_NUM.get(self._month, 1)
+        mn = MONTH_NUM.get(self._vm, 1)
         if mn == 12:
-            if self._year >= PICKER_MAX_YEAR: return
-            self._year += 1
-            self._month = MONTHS_ORDER[0]
+            if self._vy >= PICKER_MAX_YEAR: return
+            self._vy += 1
+            self._vm = MONTHS_ORDER[0]
         else:
-            self._month = MONTHS_ORDER[mn]
+            self._vm = MONTHS_ORDER[mn]
         self._sync_nav()
         if self._mode == "day":
             self._rebuild_grid()
 
     def _on_nav_month_changed(self, month_name):
         if month_name and month_name in MONTHS_ORDER:
-            self._month = month_name
+            self._vm = month_name
             if self._mode == "day":
                 self._rebuild_grid()
 
     def _on_nav_year_changed(self, value):
-        self._year = int(value)
+        self._vy = int(value)
         if self._mode == "day":
             self._rebuild_grid()
 
     def _sync_nav(self):
         self._month_combo.blockSignals(True)
         self._year_spin._edit.blockSignals(True)
-        idx = self._month_combo.findText(self._month)
+        idx = self._month_combo.findText(self._vm)
         if idx >= 0:
             self._month_combo.setCurrentIndex(idx)
-        self._year_spin._value = self._year
-        self._year_spin._edit.setText(str(self._year))
+        self._year_spin._value = self._vy
+        self._year_spin._edit.setText(str(self._vy))
         self._month_combo.blockSignals(False)
         self._year_spin._edit.blockSignals(False)
 
     def _confirm_month(self):
-        """Month mode: OK button pressed — emit and close."""
-        self._update_btn()
-        self._popup.hide()
-        self.dateChanged.emit(self._year, self._month, 1)
+        """Month mode: OK button pressed — the shown month becomes the date; emit and close."""
+        self._commit(self._vy, self._vm, 1)
 
     # ── Day grid (mode="day" only) ────────────────────────────────────────────
 
@@ -738,16 +737,16 @@ class DatePicker(QFrame):
 
     def _rebuild_grid(self):
         self._clear_grid()
-        mn = MONTH_NUM.get(self._month, 1)
-        first_wd = QDate(self._year, mn, 1).dayOfWeek() - 1
-        days_in_month = calendar.monthrange(self._year, mn)[1]
+        mn = MONTH_NUM.get(self._vm, 1)
+        first_wd = QDate(self._vy, mn, 1).dayOfWeek() - 1
+        days_in_month = calendar.monthrange(self._vy, mn)[1]
         today = QDate.currentDate()
 
         prev_mn = mn - 1 if mn > 1 else 12
-        prev_yr = self._year if mn > 1 else self._year - 1
+        prev_yr = self._vy if mn > 1 else self._vy - 1
         prev_days = calendar.monthrange(prev_yr, prev_mn)[1]
         next_mn = mn + 1 if mn < 12 else 1
-        next_yr = self._year if mn < 12 else self._year + 1
+        next_yr = self._vy if mn < 12 else self._vy + 1
 
         for i in range(42):
             day_num = i - first_wd + 1
@@ -769,14 +768,14 @@ class DatePicker(QFrame):
                 b.setText(str(day_num))
                 disabled = False
                 if self._min:
-                    if (self._year, mn, day_num) < (self._min[0], MONTH_NUM.get(self._min[1], 1), self._min[2]):
+                    if (self._vy, mn, day_num) < (self._min[0], MONTH_NUM.get(self._min[1], 1), self._min[2]):
                         disabled = True
                 if self._max:
-                    if (self._year, mn, day_num) > (self._max[0], MONTH_NUM.get(self._max[1], 12), self._max[2]):
+                    if (self._vy, mn, day_num) > (self._max[0], MONTH_NUM.get(self._max[1], 12), self._max[2]):
                         disabled = True
 
-                is_today = (self._year == today.year() and mn == today.month() and day_num == today.day())
-                is_sel = (day_num == self._day and mn == MONTH_NUM.get(self._month, 1))
+                is_today = (self._vy == today.year() and mn == today.month() and day_num == today.day())
+                is_sel = (self._vy, self._vm, day_num) == (self._year, self._month, self._day)
 
                 b.setEnabled(not disabled)
                 if is_sel:
@@ -793,23 +792,23 @@ class DatePicker(QFrame):
         self._popup.adjustSize()
 
     def _pick_day(self, day):
-        self._day = day
-        self._update_btn()
-        self._popup.hide()
-        self.dateChanged.emit(self._year, self._month, self._day)
+        self._commit(self._vy, self._vm, day)
 
     def _pick_overflow(self, year, month_num, day):
-        self._year = year
-        self._month = MONTHS_ORDER[month_num - 1]
-        self._day = day
-        self._sync_nav()
-        self._rebuild_grid()
+        """A grey day of the previous or next month: pick it like any other day."""
+        self._commit(year, MONTHS_ORDER[month_num - 1], day)
+
+    def _commit(self, year, month, day):
+        self._year, self._month, self._day = year, month, day
         self._update_btn()
+        self._popup.hide()
+        self.dateChanged.emit(year, month, day if self._mode == "day" else 1)
 
     # ── Show ──────────────────────────────────────────────────────────────────
 
     def _show(self):
         self._popup.setStyleSheet(build_stylesheet())
+        self._vy, self._vm = self._year, self._month  # open on the chosen date
         self._sync_nav()
         if self._mode == "day":
             self._rebuild_grid()
@@ -837,8 +836,8 @@ class DatePicker(QFrame):
         return self._day if self._mode == "day" else 1
 
     def set_date(self, year, month, day=1):
-        self._year = year
-        self._month = month
+        self._year = self._vy = year
+        self._month = self._vm = month
         if self._mode == "day":
             mn = MONTH_NUM.get(month, 1)
             self._day = min(day, calendar.monthrange(year, mn)[1])
@@ -915,6 +914,9 @@ class DateRangeWidget(QWidget):
                                self.to_p.get_year(), self.to_p.get_month(), self.to_p.get_day())
 
     def _on_to_changed(self, year, month, day):
+        fy, fm, fd = self.from_p.get_year(), self.from_p.get_month(), self.from_p.get_day()
+        if (year, MONTH_NUM.get(month, 0), day) < (fy, MONTH_NUM.get(fm, 0), fd):
+            self.from_p.set_date(year, month, day)  # From moves back along with To
         self._save()
         self.rangeChanged.emit(self.from_p.get_year(), self.from_p.get_month(), self.from_p.get_day(),
                                year, month, day)
@@ -1094,7 +1096,7 @@ class PeriodSelectorWidget(QWidget):
             to_d = min(_date(ty, MONTH_NUM.get(tm, 1), last_day), _date.today())
         else:
             to_d = _date(ty, MONTH_NUM.get(tm, 1), td)
-        self.rangeChanged.emit(from_d, to_d)
+        self.rangeChanged.emit(min(from_d, to_d), to_d)
 
     # ── Public API ────────────────────────────────────────────────────────────
     def get_range(self):
@@ -1110,7 +1112,7 @@ class PeriodSelectorWidget(QWidget):
                 to_d = min(_date(ty, MONTH_NUM.get(tm, 1), last_day), _date.today())
             else:
                 to_d = _date(ty, MONTH_NUM.get(tm, 1), td)
-            return from_d, to_d
+            return min(from_d, to_d), to_d
 
         return self._compute_preset_range(self._active_idx)
 

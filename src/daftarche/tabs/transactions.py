@@ -1277,6 +1277,18 @@ class BulkCatDialog(QDialog):
     def _accept(self):
         self.cat_name = self.f_category.currentText().strip()
         self.sub_name = self.f_subcat.currentText().strip()
+        # the combos accept typing: a name that does not exist used to be saved as "no category"
+        cat = self.db.get_category_by_name(self.cat_name, type_name=self.row_type) if self.cat_name else None
+        if not cat:
+            QMessageBox.warning(self, "Unknown category",
+                                f"There is no category '{self.cat_name}'. Pick one from the list, "
+                                "or add it in Manage first.")
+            return
+        if not self.db.get_subcategory_by_name(self.sub_name, cat["id"]):
+            QMessageBox.warning(self, "Unknown sub-category",
+                                f"'{cat['name']}' has no sub-category '{self.sub_name}'. Pick one from the "
+                                "list, or add it in Manage first.")
+            return
         self.accept()
 
 

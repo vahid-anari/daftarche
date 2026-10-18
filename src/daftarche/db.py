@@ -1209,72 +1209,59 @@ class Database:
         from_rows = [r for r in rows if r["account_id"] is not None and r["to_account_id"] is None]
         to_rows = [r for r in rows if r["to_account_id"] is not None and r["account_id"] is None]
 
-        used = set()
-        matched = 0
-
+        # every possible pair, closest dates first: a greedy pass over the rows in date order
+        # could take an 8-day-apart partner while an exact same-day one existed
+        pairs = []
         for r1 in from_rows:
-            if r1["id"] in used:
-                continue
-
             r1_ttype = _transfer_type(r1["memorandum"], r1["name"])
-
-            best = None
-            best_diff = 999
             for r2 in to_rows:
-                if r2["id"] in used:
+                if round2(r2["amount"]) != round2(r1["amount"]) or r2["to_account_id"] == r1["account_id"]:
                     continue
-                if round2(r2["amount"]) != round2(r1["amount"]):
-                    continue
-                if r2["to_account_id"] == r1["account_id"]:
-                    continue
-
                 r2_ttype = _transfer_type(r2["memorandum"], r2["name"])
                 if r1_ttype != "other" and r2_ttype != "other" and r1_ttype != r2_ttype:
                     continue
-
                 try:
                     diff = abs((_date.fromisoformat(r2["date"]) - _date.fromisoformat(r1["date"])).days)
-                except Exception:
-                    diff = 999
-                if diff <= 10 and diff < best_diff:
-                    best = r2
-                    best_diff = diff
+                except (TypeError, ValueError):
+                    continue
+                if diff <= 10:
+                    pairs.append((diff, r1["date"], r1["id"], r2["id"], r1, r2))
+        pairs.sort(key=lambda p: p[:4])
 
-            if best is None:
+        internal = self.get_category_by_name(CAT_INTERNAL_TRANSFER)
+        internal_id = internal["id"] if internal else None
+        used = set()
+        matched = 0
+        for _, _, _, _, r1, r2 in pairs:
+            if r1["id"] in used or r2["id"] in used:
                 continue
-
-            r2 = best
-            acc1_name = self.conn.execute(
-                "SELECT name FROM accounts WHERE id=?", (r1["account_id"],)
-            ).fetchone()
-            acc2_name = self.conn.execute(
-                "SELECT name FROM accounts WHERE id=?", (r2["to_account_id"],)
-            ).fetchone()
-
+            acc1_name = self.get_account_name_by_id(r1["account_id"]) or ""
+            acc2_name = self.get_account_name_by_id(r2["to_account_id"]) or ""
+            text = " ".join(t for t in (r1["name"], r1["memorandum"], r2["name"], r2["memorandum"]) if t)
             cat_id, sub_id = self.get_transfer_cat_sub(
-                from_account=acc1_name["name"] if acc1_name else "",
-                to_account=acc2_name["name"] if acc2_name else "",
-                matched=True
-            )
+                description=text, from_account=acc1_name, to_account=acc2_name, matched=True)
+            if internal_id in (r1["category_id"], r2["category_id"]):  # already known to be internal
+                cat_id, sub_id = internal_id, self.get_subcategory_by_name(SUB_MATCHED, internal_id)["id"]
 
-            fitid1 = r1["fitid"] or ""
-            fitid2 = r2["fitid"] or ""
-            combined_fitid = "|".join(f for f in [fitid1, fitid2] if f) or None
-
+            combined_fitid = "|".join(f for f in [r1["fitid"], r2["fitid"]] if f) or None
             self.conn.execute("""
                               UPDATE transactions
                               SET to_account_id=?,
                                   transfer_status=?,
                                   subcategory_id=?,
                                   category_id=?,
-                                  fitid=?
+                                  fitid=?,
+                                  name=?,
+                                  memorandum=?
                               WHERE id = ?
-                              """, (r2["to_account_id"], TRANSFER_MATCHED,
-                                    sub_id, cat_id, combined_fitid, r1["id"]))
+                              """, (r2["to_account_id"], TRANSFER_MATCHED, sub_id, cat_id, combined_fitid,
+                                    r1["name"] or r2["name"], r1["memorandum"] or r2["memorandum"], r1["id"]))
+            # the incoming side's tags stay with the pair
+            self.conn.execute("""INSERT OR IGNORE INTO transaction_tags(transaction_id, tag_id)
+                                 SELECT ?, tag_id FROM transaction_tags WHERE transaction_id = ?""",
+                              (r1["id"], r2["id"]))
             self.conn.execute("DELETE FROM transactions WHERE id=?", (r2["id"],))
-
-            used.add(r1["id"])
-            used.add(r2["id"])
+            used.update((r1["id"], r2["id"]))
             matched += 1
 
         return matched

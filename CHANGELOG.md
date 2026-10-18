@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.7.0 — 2026-10-17
+
+Dates, transfers and statements.
+
+- Date picker: browsing to another month no longer changes the date until a day is
+  picked (Jan 31 → February used to leave an impossible Feb 31, which broke the
+  Dashboard, Charts and Accounts tabs). Clicking a grey day of the next or previous
+  month picks it. In month mode the month changes only on OK.
+- Custom ranges: setting "To" before "From" moves "From" back with it; a range never ends
+  before it starts.
+- Match Transfers pairs the closest dates first, keeps the incoming side's tags, name and
+  memo, and keeps transfers labelled Internal.
+- Statements are decoded with the charset their header names (CIBC: Windows-1252), so
+  ’ – € and accented letters come through.
+- Credit cards are recognised from the statement itself, not only from an account name
+  containing "credit"; "PAYMENT" must be a whole word ("PAYMENTUS …" is not a payment).
+- Rows of a statement that cannot be read are counted in the Import status bar
+  ("⚠️ N unreadable", reasons in its tooltip) instead of disappearing silently.
+- Transfers are stored with the category the import preview showed.
+- Edit Category: a typed category or sub-category that does not exist is refused with a
+  message, instead of saving the rows as "no category".
+
 ## 0.6.0 — 2026-10-17
 
 Rules and merges.
