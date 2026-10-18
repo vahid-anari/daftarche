@@ -5,6 +5,7 @@ sub-category (marked "New") is created then, together with the rule changes. Rul
 can also be applied to other uncategorized transactions (the caller's ``candidates``).
 """
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox, QDialog, QDialogButtonBox, QFormLayout, QFrame, QGridLayout, QHBoxLayout,
     QLabel, QLineEdit, QMessageBox, QPushButton, QScrollArea, QVBoxLayout, QWidget,
@@ -60,6 +61,9 @@ class CategoryDialog(QDialog):
         self._categories = [c["name"] for c in (db.get_categories(type_id) if type_id else db.get_categories())]
         if preset_cat and preset_cat not in self._categories:
             self._categories.insert(0, preset_cat)  # e.g. Uncategorized, which has no type
+        # gone as soon as it closes: a closed one lingering until quit crashed Python's shutdown
+        # (its results are plain attributes, still readable after exec returns)
+        self.setAttribute(Qt.WA_DeleteOnClose)
         self.setWindowTitle("Edit Category / Sub-Category")
         self.setMinimumSize(780, 580)
         self._build(about)
@@ -229,9 +233,8 @@ class CategoryDialog(QDialog):
         while self._grid.count():
             item = self._grid.takeAt(0)
             widget = item.widget()
-            if widget:  # off the window now: deleteLater alone waits until this dialog closes
-                widget.hide()
-                widget.setParent(None)
+            if widget:  # hidden now (deleteLater waits until the dialog closes); keep the parent:
+                widget.hide()  # a parentless combo crashed Python's shutdown
                 widget.deleteLater()
         for r in range(self._grid.rowCount()):
             self._grid.setRowStretch(r, 0)

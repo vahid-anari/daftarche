@@ -163,5 +163,32 @@ def test_switching_names_leaves_no_old_rows_behind(qapp, db, food):
     d = dialog(db, preset_cat="Food", preset_sub="Groceries")
     for sub in ("Snacks", "Groceries", "Uncategorized", "Groceries"):
         d.f_subcat.setCurrentText(sub)
-    shown = [w for w in d._grid_host.findChildren(QWidget) if w.parent() is d._grid_host]
+    shown = [w for w in d._grid_host.findChildren(QWidget) if w.parent() is d._grid_host and not w.isHidden()]
     assert len(shown) == d._grid.count()
+
+
+QUIT_AFTER_DIALOG = """
+from PySide6.QtCore import QTimer
+from PySide6.QtWidgets import QApplication
+app = QApplication([])
+from daftarche.window import MainWindow
+from daftarche.category_dialog import CategoryDialog
+w = MainWindow(); db = w.db
+uc, us = db.get_uncategorized_ids()
+db.add_transaction(2026, "May", 1, "Expense", "Card", 5, us, uc, name="SHOP")
+w.show(); tab = w.transactions_tab; tab.show_matching()
+def close():
+    d = [x for x in app.topLevelWidgets() if isinstance(x, CategoryDialog) and x.isVisible()][0]
+    d.f_subcat.setCurrentText("Bus"); d.reject()
+QTimer.singleShot(200, close)
+tab._edit_categories([0])
+QTimer.singleShot(100, app.quit); app.exec()
+"""
+
+
+def test_quitting_after_the_dialog_does_not_crash(tmp_path):
+    import os, subprocess, sys  # noqa: E401
+    env = dict(os.environ, DAFTARCHE_HOME=str(tmp_path), QT_QPA_PLATFORM="offscreen")
+    for _ in range(3):  # the crash came at Python's shutdown, about 4 runs in 5
+        run = subprocess.run([sys.executable, "-c", QUIT_AFTER_DIALOG], env=env, capture_output=True, timeout=60)
+        assert run.returncode == 0, run.stderr.decode()[-500:]

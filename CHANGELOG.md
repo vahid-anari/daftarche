@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.13.2 — 2026-10-18
+
+- Fixed a crash when quitting after Edit Category / Sub-Category had been opened: the
+  closed window stayed in memory until quit, and Python's shutdown crashed while cleaning
+  it up. The window is now deleted as soon as it closes.
+
 ## 0.13.1 — 2026-10-18
 
 - Edit Category / Sub-Category: the list of suggestions while typing uses the theme's
