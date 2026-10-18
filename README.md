@@ -2,7 +2,7 @@
 
 [![tests](https://github.com/vahid-anari/daftarche/actions/workflows/tests.yml/badge.svg)](https://github.com/vahid-anari/daftarche/actions/workflows/tests.yml)
 [![PyPI](https://img.shields.io/pypi/v/daftarche)](https://pypi.org/project/daftarche/)
-[![Python](https://img.shields.io/pypi/pyversions/daftarche)](https://pypi.org/project/daftarche/)
+[![Python](https://img.shields.io/pypi/pyversions/daftarche?v=1)](https://pypi.org/project/daftarche/)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 **Daftarche** (دفترچه, "little account book") is a desktop app for personal
