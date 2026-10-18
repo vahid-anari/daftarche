@@ -22,7 +22,7 @@ from daftarche.style import get_settings
 
 COLUMNS = [
     "Date", "Type", "Account",
-    "Amount", "Category", "Sub-Category", "Tags", "Name", "Memorandum", "FITID",
+    "Amount", "Category", "Sub-Category", "Tags", "Name", "Memorandum", "FITID", "Note",
 ]
 COL_DATE = 0
 COL_TYPE = 1
@@ -34,6 +34,9 @@ COL_TAGS = 6
 COL_NAME = 7
 COL_MEMO = 8
 COL_FITID = 9
+COL_NOTE = 10  # last: saved column and sort settings refer to columns by position
+SORT_KEYS = ["date", "type", "account", "amount", "category", "subcategory", "tags", "name", "memorandum",
+             "fitid", "note"]  # by column
 
 
 # NullDelegate  — suppresses any editor (nothing happens on double-click)
@@ -137,7 +140,7 @@ class TxModel(QAbstractTableModel):
             row["type"], account_str, row["amount"],
             row["category"], row["subcategory"],
             row.get("tags") or "",
-            row["name"], row["memorandum"], row["fitid"],
+            row["name"], row["memorandum"], row["fitid"], row.get("note"),
         ]
         val = keys_vals[col]
 
@@ -158,10 +161,26 @@ class TxModel(QAbstractTableModel):
             if col == COL_ACCOUNT and row["account_color"]:
                 return QBrush(QColor(row["account_color"]))
 
+        if role == Qt.EditRole and col == COL_NOTE:
+            return row.get("note") or ""
+
         if role == Qt.TextAlignmentRole:
             if col in (COL_DATE, COL_AMOUNT): return Qt.AlignRight | Qt.AlignVCenter
 
         return None
+
+    on_note_edited = None  # set by the tab: (row, text) → save
+
+    def setData(self, index, value, role=Qt.EditRole):
+        if role != Qt.EditRole or index.column() != COL_NOTE or not self.on_note_edited:
+            return False
+        row = self._rows[index.row()]
+        text = (value or "").strip() or None
+        if text != row.get("note"):
+            self.on_note_edited(row, text)
+            row["note"] = text
+            self.dataChanged.emit(index, index)
+        return True
 
     def set_rows(self, rows):
         self.beginResetModel()
@@ -174,17 +193,13 @@ class TxModel(QAbstractTableModel):
     def sort(self, column, order=Qt.AscendingOrder):
         self.beginResetModel()
         reverse = (order == Qt.DescendingOrder)
-        keys = ["date", "type", "account", "amount",
-                "category", "subcategory", "tags", "name", "memorandum", "fitid"]
-        key = keys[column] if column < len(keys) else "date"
+        key = SORT_KEYS[column] if column < len(SORT_KEYS) else "date"
 
         def sort_key(r):
             base = r["date"] or ""
             if key == "date":   return base
             if key == "amount": return (r["amount"] or 0, base)
-            val = r[key] if key in ("type", "account", "category", "subcategory", "tags", "name", "memorandum",
-                                    "fitid") else None
-            return (str(val or "").lower(), base)
+            return (str(r.get(key) or "").lower(), base)
 
         self._rows = sorted(self._rows, key=sort_key, reverse=reverse)
         self.endResetModel()
@@ -215,10 +230,10 @@ class TransactionsTab(QWidget):
             self._visible_columns = {i: True for i in range(len(COLUMNS))}
         saved_sf = get_settings().get("search_fields")
         if saved_sf and isinstance(saved_sf, dict):
-            self._search_fields = saved_sf
+            self._search_fields = {"note": True, **saved_sf}  # Note came later: searched unless turned off
         else:
             self._search_fields = {"name": True, "memo": True, "category": True, "subcategory": True, "tags": False,
-                                   "fitid": False}
+                                   "fitid": False, "note": True}
         self._build_ui()
         self.refresh()
 
@@ -328,6 +343,8 @@ class TransactionsTab(QWidget):
         self.table.setItemDelegateForColumn(COL_ACCOUNT, AccountDelegate(self.model, self.table))
         for col in (COL_NAME, COL_MEMO, COL_FITID):
             self.table.setItemDelegateForColumn(col, ReadOnlyCopyDelegate(self.table))
+        self.table.setItemDelegateForColumn(COL_NOTE, QStyledItemDelegate(self.table))  # typed in place
+        self.model.on_note_edited = self._save_note
         self.table.setSortingEnabled(False)
         self.table.setAlternatingRowColors(True)
         self.table.setSelectionBehavior(QAbstractItemView.SelectItems)
@@ -656,8 +673,12 @@ class TransactionsTab(QWidget):
             self._bulk_edit_cat_for_row(index.row())
         elif col == COL_TAGS:
             self._edit_tags_for_row(index.row())
-        elif col in (COL_NAME, COL_MEMO, COL_FITID):
+        elif col in (COL_NAME, COL_MEMO, COL_FITID, COL_NOTE):
             self.table.edit(index)
+
+    def _save_note(self, row, text):
+        with self.db.transaction():
+            self.db.update_transaction(row["id"], note=text)
 
     def _bulk_edit_cat_for_row(self, row_idx):
         self._edit_categories([row_idx])
@@ -789,8 +810,7 @@ class TransactionsTab(QWidget):
         if not self._sort_config or not self._current_rows:
             return
         rows = list(self._current_rows)
-        keys = ["date", "type", "account", "amount",
-                "category", "subcategory", "tags", "name", "memorandum", "fitid"]
+        keys = SORT_KEYS
 
         def get_val(r, k):
             try:
@@ -862,6 +882,7 @@ class TransactionsTab(QWidget):
                 str(row["name"] or ""),
                 str(row["memorandum"] or ""),
                 str(row["fitid"] or ""),
+                str(row.get("note") or ""),
             ]
             lines.append("\t".join(all_values[i] for i in visible_cols))
         QApplication.clipboard().setText("\n".join(lines))
@@ -1080,6 +1101,9 @@ class TransactionDialog(QDialog):
         self.f_memo = QLineEdit((self.row["memorandum"] or "") if self.row else "")
         self.f_memo.setPlaceholderText("Bank memorandum (e.g. location)")
 
+        self.f_note = QLineEdit((self.row.get("note") or "") if self.row else "")
+        self.f_note.setPlaceholderText("Your note: what it was (e.g. USB cable, phone case)")
+
         self.f_fitid = QLineEdit((self.row["fitid"] or "") if self.row else "")
         self.f_fitid.setReadOnly(True)
         self.f_fitid.setPlaceholderText("No FITID")
@@ -1103,6 +1127,7 @@ class TransactionDialog(QDialog):
         form.addRow("Sub-Category:", self.f_subcat)
         form.addRow("Name:", self.f_name)
         form.addRow("Memorandum:", self.f_memo)
+        form.addRow("Note:", self.f_note)
         form.addRow("FITID:", self.f_fitid)
         form.addRow("Tags:", self.f_tags)
         layout.addLayout(form)
@@ -1216,7 +1241,7 @@ class TransactionDialog(QDialog):
                     type_name=type_name, account_name=account,
                     to_account_name=to_acc, amount=amount,
                     subcategory_id=sub_id, category_id=cat_id,
-                    name=name, memorandum=memo,
+                    name=name, memorandum=memo, note=self.f_note.text().strip() or None,
                     transfer_status=transfer_status,
                 )
                 tx_id = self.row["id"]
@@ -1225,6 +1250,7 @@ class TransactionDialog(QDialog):
                                                 amount, sub_id, cat_id,
                                                 name=name, memorandum=memo,
                                                 to_account_name=to_acc)
+                self.db.update_transaction(tx_id, note=self.f_note.text().strip() or None)
 
             # Save tags
             selected_names = self.f_tags.get_selected()
@@ -1387,6 +1413,7 @@ _SEARCH_FIELD_LABELS = {
     "subcategory": "Sub-Category",
     "tags": "Tags",
     "fitid": "FITID",
+    "note": "Note",
 }
 
 
@@ -1434,7 +1461,7 @@ class SearchFieldsDialog(QDialog):
 # SortDialog
 SORT_COLUMNS = [
     "Date", "Type", "Account", "Amount",
-    "Category", "Sub-Category", "Name", "Memorandum", "FITID", "Tags",
+    "Category", "Sub-Category", "Name", "Memorandum", "Note", "FITID", "Tags",
 ]
 
 _SORT_ORDERS = {
@@ -1529,11 +1556,12 @@ class SortDialog(QDialog):
         col_combo = SingleSelectCombo()
         for c in SORT_COLUMNS:
             col_combo.addItem(c)
-        col_combo.setCurrentIndex(col_idx)
+        name = COLUMNS[col_idx] if col_idx < len(COLUMNS) else "Date"  # col_idx: a table column
+        col_combo.setCurrentIndex(max(SORT_COLUMNS.index(name), 0) if name in SORT_COLUMNS else 0)
         col_combo.setMaxVisibleItems(15)
 
         order_combo = SingleSelectCombo()
-        self._populate_order_combo(order_combo, SORT_COLUMNS[col_idx], desc)
+        self._populate_order_combo(order_combo, col_combo.currentText(), desc)
         order_combo.setMaxVisibleItems(15)
 
         col_combo.currentTextChanged.connect(
@@ -1595,7 +1623,7 @@ class SortDialog(QDialog):
         self._config = []
         for w in self._rows_widgets:
             col_name = w._col_combo.currentText()
-            col_idx = SORT_COLUMNS.index(col_name)
+            col_idx = COLUMNS.index(col_name)  # the table column, as clicking a header gives
             orders = _SORT_ORDERS.get(col_name, [("Z → A", True), ("A → Z", False)])
             order_idx = w._order_combo.currentIndex()
             desc = orders[order_idx][1] if order_idx < len(orders) else True

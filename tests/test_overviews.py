@@ -4,6 +4,8 @@ from pathlib import Path
 from unittest import mock
 
 import pytest
+
+from conftest import keep
 from conftest import answer_import
 
 from daftarche.db import SUB_UNMATCHED, UNCATEGORIZED_SUB
@@ -62,7 +64,7 @@ def test_uncategorized_subcategory_is_offered_first(qapp, db):
     from daftarche.category_dialog import CategoryDialog
     food = category(db, "Food")
     db.add_subcategory("Groceries", food)
-    dialog = CategoryDialog(db, "Expense")
+    dialog = keep(CategoryDialog(db, "Expense"))
     dialog.f_category.setCurrentText("Food")
     assert [dialog.f_subcat.itemText(i) for i in range(dialog.f_subcat.count())] == [UNCATEGORIZED_SUB, "Groceries"]
     with mock.patch.object(dialog, "accept") as accept:

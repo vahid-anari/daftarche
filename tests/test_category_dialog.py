@@ -4,6 +4,8 @@ from unittest import mock
 
 import pytest
 
+from conftest import keep
+
 
 @pytest.fixture(scope="module")
 def qapp():
@@ -22,7 +24,7 @@ def food(db):
 
 def dialog(db, **kw):
     from daftarche.category_dialog import CategoryDialog
-    return CategoryDialog(db, "Expense", **kw)
+    return keep(CategoryDialog(db, "Expense", **kw))
 
 
 def press_ok(d):
@@ -77,7 +79,7 @@ def test_cancel_saves_nothing(qapp, db, food):
 
 def test_an_income_category_is_not_an_expense_one(qapp, db, food):
     from daftarche.category_dialog import CategoryDialog
-    d = CategoryDialog(db, "Income")
+    d = keep(CategoryDialog(db, "Income"))
     d.f_category.setCurrentText("Food")
     assert not d.new_cat.isHidden()
     assert press_ok(d) == (True, False)
@@ -138,7 +140,7 @@ def test_transactions_tab_applies_the_new_rule(qapp, db, food, tmp_path):
     uc, us = db.get_uncategorized_ids()
     for name in ("COSTCO #1", "COSTCO #2", "NOFRILLS"):
         db.add_transaction(2026, "May", 1, "Expense", "Card", 10, us, uc, name=name)
-    tab = TransactionsTab(db)
+    tab = keep(TransactionsTab(db))
     tab.show_matching()
     row = next(i for i in range(tab.model.rowCount()) if tab.model.get_row(i)["name"] == "COSTCO #1")
 

@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.14.0 — 2026-10-18
+
+- Transactions: a Note column for your own words (what a purchase was). Double-click the
+  cell to type; it is also in Edit Transaction, in the search (on unless turned off in 🔍)
+  and in the Excel export. The database layout goes to 2: older versions of Daftarche
+  will ask to be updated before opening it.
+- The Sort window sorted by the wrong column for Name, Memorandum, FITID and Tags.
+- tools/export_shop_charges.py writes the Amazon and AliExpress transactions to a CSV
+  file; tools/import_notes.py writes notes (and categories) from such a file back, after
+  showing them and backing up the database.
+
 ## 0.13.2 — 2026-10-18
 
 - Fixed a crash when quitting after Edit Category / Sub-Category had been opened: the

@@ -93,6 +93,11 @@ pytest
 
 The tests use only invented data (`tests/data/sample.qfx`) and a temporary data
 folder. `python tools/make_icon.py` redraws the icon and the splash image.
+
+Two one-off tools fill in notes for past online purchases: `python tools/export_shop_charges.py`
+writes the Amazon and AliExpress transactions (only those, and only the columns needed) to
+`shop_charges.csv`; `python tools/import_notes.py notes.csv` shows the notes and categories a
+filled-in copy would write, and `--apply` writes them after backing up the database.
 Pushing a tag `vX.Y.Z` publishes a GitHub Release with that version's section of
 [`CHANGELOG.md`](CHANGELOG.md); `python -m build && twine upload dist/*` puts it on PyPI.
 

@@ -4,6 +4,8 @@ import datetime
 
 import pytest
 
+from conftest import keep
+
 
 @pytest.fixture(scope="module")
 def qapp():
@@ -23,9 +25,7 @@ def charts(qapp, db):
     for d, cat, amount in ((today, food, 120), (today, rent, 900), (last, food, 80), (last, rent, 900)):
         sub = db.uncategorized_subcategory(cat)["id"]
         db.add_transaction(d.year, MONTHS_ORDER[d.month - 1], 1, "Expense", "Vahid-CIBC-Checking", amount, sub, cat)
-    tab = ChartsTab(db)
-    yield tab
-    tab.deleteLater()
+    yield keep(ChartsTab(db))
 
 
 def _category(db, name):

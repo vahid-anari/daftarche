@@ -63,7 +63,7 @@ def _date_str_to_parts(date_str):
         return None, None, None
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2  # 2: transactions.note
 """Database layout version, stored in the file (PRAGMA user_version). Raise it whenever
 _migrate learns something new, so an older Daftarche refuses a database it cannot read."""
 
@@ -417,6 +417,7 @@ class Database:
             c.commit()
         elif "date" not in tx_cols:
             add_col_if_missing("transactions", "date", "TEXT NOT NULL DEFAULT '2026-01-01'")
+        add_col_if_missing("transactions", "note", "TEXT")  # your own words: what it was (layout 2)
 
         # Ensure date index exists (safe to run every time)
         c.execute("CREATE INDEX IF NOT EXISTS idx_tx_date ON transactions(date)")
@@ -906,6 +907,7 @@ class Database:
                    c.name   as category,
                    t.name,
                    t.memorandum,
+                   t.note,
                    t.description,
                    t.fitid,
                    t.transfer_status,
@@ -992,6 +994,9 @@ class Database:
                 params.append(kw)
             if sf.get("fitid"):
                 field_clauses.append("t.fitid LIKE ?")
+                params.append(kw)
+            if sf.get("note", True):  # on unless turned off (older settings do not know it)
+                field_clauses.append("t.note LIKE ?")
                 params.append(kw)
             if field_clauses:
                 q += " AND (" + " OR ".join(field_clauses) + ")"
@@ -1812,6 +1817,7 @@ class Database:
                 "Category": r["category"],
                 "Name": r["name"] or "",
                 "Memorandum": r["memorandum"] or "",
+                "Note": (r["note"] if "note" in r.keys() else "") or "",
                 "Description": r["description"] or "",
                 "Status": r["transfer_status"] or "",
                 "Tags": r["tags"] if "tags" in r.keys() else "",
