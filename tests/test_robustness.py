@@ -156,3 +156,39 @@ def test_popups_belong_to_their_widget(qapp):
     combo, picker = CheckComboBox(), DatePicker()
     assert combo._popup.parent() is combo and picker._popup.parent() is picker
     assert combo._popup.isWindow() and picker._popup.isWindow()  # still separate popup windows
+
+
+def test_splash_time_is_a_setting(qapp, monkeypatch, tmp_path):
+    from daftarche import style, window as window_module
+    monkeypatch.setattr(style, "CONFIG_PATH", str(tmp_path / "config.json"))
+    settings = style.Settings()
+    assert settings.get("splash_seconds") == 3.5
+    dialog = window_module.SettingsDialog(settings)
+    dialog.f_splash.setValue(1.5)
+    dialog._save()
+    assert json.loads((tmp_path / "config.json").read_text())["splash_seconds"] == 1.5
+
+
+@pytest.mark.parametrize("seconds, shown", [(0, False), (3, True)])
+def test_start_up_follows_the_splash_setting(qapp, monkeypatch, tmp_path, seconds, shown):
+    from PySide6.QtTest import QTest
+    from daftarche import main, style, window as window_module
+    monkeypatch.setattr(window_module, "DB_PATH", tmp_path / "w.db")
+    monkeypatch.setattr(style.get_settings(), "_data", {**style.DEFAULTS, "splash_seconds": seconds})
+    monkeypatch.setattr(main, "after_start", lambda updates: None)
+    seen = {}
+
+    def exec_briefly():  # instead of the real event loop: look at the screen, then stop
+        QTest.qWait(100)
+        visible = [w for w in qapp.topLevelWidgets() if w.isVisible()]
+        seen["splash"] = any(type(w).__name__ == "SplashScreen" for w in visible)
+        QTest.qWait(int(seconds * 1000) + 500)
+        seen["window"] = any(type(w).__name__ == "MainWindow" and w.isVisible() for w in qapp.topLevelWidgets())
+        for w in qapp.topLevelWidgets():
+            w.close()
+        return 0
+
+    monkeypatch.setattr(qapp, "exec", exec_briefly)
+    with mock.patch.object(window_module, "startup_backup"):
+        assert main.run_view() == 0
+    assert seen == {"splash": shown, "window": True}

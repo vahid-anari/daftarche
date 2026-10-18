@@ -336,6 +336,10 @@ class SettingsDialog(QDialog):
         form.setSpacing(10)
         form.addRow("Font Family:", self.f_font)
         form.addRow("Font Size:", self.f_size)
+        self.f_splash = StepSpinBox(value=self.settings.get("splash_seconds"), min_val=0, max_val=10,
+                                    step=0.5, decimals=1)
+        self.f_splash.setToolTip("Seconds the splash screen stays at start-up; 0 = no splash screen")
+        form.addRow("Splash Screen (s):", self.f_splash)
 
         btn_row = QHBoxLayout()
         btn_row.addWidget(btn_reset)
@@ -398,6 +402,7 @@ class SettingsDialog(QDialog):
     def _save(self):
         self.settings.set("font_family", self.f_font.currentText())
         self.settings.set("font_size", int(self.f_size.value()))
+        self.settings.set("splash_seconds", float(self.f_splash.value()))
 
         for key, color in self._pending_colors.items():
             self.settings.set(key, color)
@@ -416,6 +421,7 @@ class SettingsDialog(QDialog):
 
         self.f_font.setCurrentText(default_font)
         self.f_size.setValue(default_size)
+        self.f_splash.setValue(self._default_value("splash_seconds"))
 
         for key, btn in self._color_btns.items():
             default_color = self._default_value(key)

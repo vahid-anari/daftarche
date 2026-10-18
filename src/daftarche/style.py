@@ -21,6 +21,7 @@ from daftarche.paths import CONFIG_PATH
 DEFAULTS: dict = {
     "font_family": "Helvetica Neue",
     "font_size": 14,
+    "splash_seconds": 3.5,   # how long the splash stays at least; 0 = no splash
     "accent": "#7c6af7",
     "bg_base": "#1e1c18",
     "bg_surface": "#2a2720",

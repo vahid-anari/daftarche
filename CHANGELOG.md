@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.2 — 2026-10-18
+
+- Settings → Splash Screen (s): how long the splash screen stays at start-up
+  (default 3.5 s; 0 turns it off).
+
 ## 0.8.1 — 2026-10-17
 
 - The drop-down popups (multi-select lists, date picker) now belong to their widget, so

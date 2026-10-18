@@ -61,9 +61,6 @@ def add_update_action(window):
     return updates
 
 
-SPLASH_SECONDS = 4.5  # the splash stays at least this long, so it can be seen
-
-
 def run_view() -> int:
     import time
 
@@ -80,9 +77,12 @@ def run_view() -> int:
     if APP.icon.exists():
         app.setWindowIcon(QIcon(str(APP.icon)))
 
+    from daftarche.style import get_settings
+
+    splash_seconds = float(get_settings().get("splash_seconds") or 0)  # Settings → Splash Screen; 0 = none
     splash = None
     shown_at = time.monotonic()
-    if APP_IMAGE.exists():
+    if APP_IMAGE.exists() and splash_seconds > 0:
         from sciwidgets.splash import SplashScreen
 
         base = 35
@@ -119,7 +119,7 @@ def run_view() -> int:
         if splash:
             splash.finish(window)
 
-    remaining = SPLASH_SECONDS - (time.monotonic() - shown_at) if splash else 0
+    remaining = splash_seconds - (time.monotonic() - shown_at) if splash else 0
     if remaining > 0:
         QTimer.singleShot(round(1000 * remaining), show_window)
     else:
