@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.14.2 — 2026-10-18
+
+- Update Now right after a release no longer stops with "The update did not finish":
+  while PyPI is still publishing the new version, the update tries again every 30 s, up
+  to 5 times (sciwidgets 0.11.3).
+
 ## 0.14.1 — 2026-10-18
 
 - Names with "&" ("Food & Drink") showed as "Food _Drink" in the Charts category list,
