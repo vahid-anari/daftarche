@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.16.0 — 2026-10-18
+
+- Charts: a details panel to the right of the category list shows what is inside the
+  category under the mouse: its sub-categories with totals and shares, or, when the
+  Category box is set to one category, the transactions of the sub-category. Hovering the
+  list covers the whole range; hovering a point, bar or slice on the chart covers that
+  month. A click on the chart (or Pin) keeps it while the mouse moves on; Pin again or
+  Esc lets go. Double-click a line to see those transactions in the Transactions tab.
+
 ## 0.15.2 — 2026-10-18
 
 - The search fields moved into the search box: it reads "Search in Name, Memo +3…", and

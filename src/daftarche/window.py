@@ -122,6 +122,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.accounts_tab, "🏦  Accounts")
         self.tabs.addTab(self.import_tab, "📥  Import")
         self.tabs.currentChanged.connect(self._on_tab_changed)
+        self.charts_tab.detail.openRequested.connect(lambda filters: self._show_transactions(**filters))
         self.dashboard_tab.open_overview = (  # the Dashboard's warning opens the same windows
             lambda uncategorized: self.show_uncategorized() if uncategorized else self.show_unmatched_transfers())
         return self.tabs

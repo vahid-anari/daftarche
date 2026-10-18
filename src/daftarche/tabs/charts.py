@@ -4,7 +4,7 @@ from PySide6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QHeaderView
 )
 from PySide6.QtCore import Qt, QPoint, QPointF, QObject, QEvent
-from PySide6.QtGui import QFont, QColor, QPen
+from PySide6.QtGui import QFont, QColor, QPen, QKeySequence, QShortcut
 from PySide6.QtCharts import (
     QBarSeries, QBarSet, QStackedBarSeries,
     QSplineSeries, QLineSeries, QScatterSeries,
@@ -13,6 +13,7 @@ from PySide6.QtCharts import (
 from daftarche.db import MONTH_NUM, MONTHS_ORDER
 from daftarche.widgets import plain_label, PeriodSelectorWidget, StepSpinBox, CheckComboBox, SingleSelectCombo
 from daftarche.style import get_settings, TAB20_COLORS
+from daftarche.tabs.chart_detail import DetailPanel
 from daftarche.chart_utils import HoverChartView, StackedOverlay, make_chart, make_x_axis, make_y_axis, style_chart_view
 
 
@@ -88,6 +89,7 @@ class ChartsTab(QWidget):
         self._last_hover_key = None
         self._stack_overlay_widget = None
         self._refreshing_chart = False
+        self._chart_periods = []
         self._n_chart_cats = 0
         self._wanted_chart = "Line"  # the last chart picked by hand; a one-month range shows Donut instead of a line
         self._one_month = None
@@ -224,9 +226,15 @@ class ChartsTab(QWidget):
         chart_layout = QVBoxLayout()
         chart_layout.addWidget(self.chart_view, 1)
 
+        # ── Detail panel: what is inside the category under the mouse ────────
+        self.detail = DetailPanel()
+        self.chart_view.mousePressed.connect(lambda _pos: self.detail.toggle_pinned())
+        QShortcut(QKeySequence(Qt.Key_Escape), self, activated=lambda: self.detail.set_pinned(False))
+
         bottom_layout = QHBoxLayout()
         bottom_layout.addLayout(chart_layout)
         bottom_layout.addWidget(cat_panel)
+        bottom_layout.addWidget(self.detail)
         layout.addLayout(bottom_layout, 1)
 
     # ── Styling helpers ───────────────────────────────────────────────────────
@@ -282,17 +290,20 @@ class ChartsTab(QWidget):
         self._update_custom_y_enabled()
 
     def _on_range_or_account_changed(self):
+        self.detail.clear()
         self._refresh_chart_choices()
         self._refresh_category_picker()
         self._refresh_cat_list()
         self._refresh_chart()
 
     def _on_type_changed(self):
+        self.detail.clear()
         self._refresh_category_picker()
         self._refresh_cat_list()
         self._refresh_chart()
 
     def _on_category_pick_changed(self):
+        self.detail.clear()
         self._refresh_cat_list()
         self._refresh_chart()
 
@@ -507,6 +518,7 @@ class ChartsTab(QWidget):
 
             def eventFilter(self_, obj, event):
                 if event.type() == QEvent.Enter:
+                    self._detail(self_._name)  # the whole range
                     if self_._cb.isChecked():
                         if self._current_chart_type == "Donut":
                             self._donut_highlight_from_cb(self_._name, True)
@@ -586,6 +598,51 @@ class ChartsTab(QWidget):
         self._cat_table.setItem(row, 1, self._total_item)
         self._cat_table.setRowHeight(row, 28)
         self._update_total_row()
+
+    # ── Detail panel ──────────────────────────────────────────────────────────
+
+    def _detail(self, name, period_index=None):
+        """Show what is inside ``name`` (a category: its sub-categories; a sub-category: its
+        transactions), in the month ``period_index`` of the chart or over the whole range."""
+        if self.detail.pinned or not name:
+            return
+        type_filter = "Expense" if "Expense" in self.f_type.currentText() else "Income"
+        selected_cat = self.f_cat_selector.current_text()
+        accounts = self.f_account.get_selected()
+        if period_index is not None and 0 <= period_index < len(self._chart_periods):
+            fy, fm = ty, tm = self._chart_periods[period_index]
+        else:
+            fy, fm, ty, tm = self._get_range()
+            if not fy:
+                return
+        when = f"{fm[:3]} {fy}" if (fy, fm) == (ty, tm) else f"{fm[:3]} {fy} – {tm[:3]} {ty}"
+        key = (name, fy, fm, ty, tm, type_filter, selected_cat, tuple(accounts))
+        if key == self.detail.key:
+            return
+        base = {"types": [type_filter], "accounts": list(accounts)}
+        if selected_cat == "All":
+            totals = self.db.get_period_totals_by_group(fy, fm, ty, tm, type_filter=type_filter,
+                                                        account_names=accounts or None, category_name=name,
+                                                        group_by="subcategory")
+            items = sorted(((k, v) for k, v in totals.items() if v), key=lambda kv: kv[1], reverse=True)
+            total = sum(v for _, v in items) or 1
+            rows = [(f"{v / total * 100:.0f}%", sub, v, {**base, "categories": [name], "subcategories": [sub]})
+                    for sub, v in items]
+            title = f"<b>{name}</b><br>{when}<br>${sum(v for _, v in items):,.2f}"
+        else:
+            from_day, to_day = self.db._month_range_dates(fy, fm, ty, tm)
+            filters = {"type": [type_filter], "category": [selected_cat], "subcategory": [name],
+                       "from_day": from_day, "to_day": to_day}
+            if accounts:
+                filters["account"] = list(accounts)
+            txs = self.db.get_transactions(filters)
+            open_filters = {**base, "categories": [selected_cat], "subcategories": [name]}
+            rows = [(f"{MONTHS_ORDER[int(t['date'][5:7]) - 1][:3]} {int(t['date'][8:10])}",
+                     t["note"] or t["name"] or t["memorandum"] or "", t["amount"], open_filters) for t in txs]
+            n = len(rows)
+            title = (f"<b>{selected_cat} › {name}</b><br>{when}<br>{n} transaction{'s' if n != 1 else ''}"
+                     f"  ·  ${sum(r[2] for r in rows):,.2f}")
+        self.detail.show_rows(key, title, rows)
 
     # ── Range helper ──────────────────────────────────────────────────────────
 
@@ -673,6 +730,7 @@ class ChartsTab(QWidget):
             return
 
         all_periods = _months_between(min(data, key=_month_key), max(data, key=_month_key))
+        self._chart_periods = all_periods
         for period in all_periods:  # a month without data is a zero, not a gap the line skips over
             data.setdefault(period, {})
         labels = [f"{m[:3]} {str(y)[2:]}" for y, m in all_periods]
@@ -767,6 +825,7 @@ class ChartsTab(QWidget):
                             self._active_bar_hover = (text, cat_color)
                             self.chart_view.show_hover(text, self._last_mouse_pos, cat_color)
                             self._highlight_cb(bs.label())
+                            self._detail(bs.label(), idx)
                         else:
                             self._active_bar_hover = None
                             self.chart_view.hide_hover()
@@ -832,6 +891,7 @@ class ChartsTab(QWidget):
             self._highlight_cb(None)
             return
         pi, cat, val, baseline, vp_pos = hit
+        self._detail(cat, pi)
         labels = self._stacked_paint_data.get("labels", [])
         month_label = labels[pi] if pi < len(labels) else ""
         cat_color = self._cat_colors.get(cat)
@@ -875,6 +935,7 @@ class ChartsTab(QWidget):
                     self._active_bar_hover = (text, col)
                     self.chart_view.show_hover(text, self._last_mouse_pos, col)
                     self._highlight_cb(c)
+                    self._detail(c, 0)
                 else:
                     self._active_bar_hover = None
                     self.chart_view.hide_hover()
@@ -965,6 +1026,7 @@ class ChartsTab(QWidget):
                     s_.setExploded(state)
                     s_.setExplodeDistanceFactor(0.06)
                     if state:
+                        self._detail(c)  # a donut covers the range
                         self.chart_view.show_hover(
                             f"{c}\n${v:,.2f}   {p:.1f}%",
                             self._last_mouse_pos,
@@ -1012,6 +1074,7 @@ class ChartsTab(QWidget):
                     return
                 self._last_hover_key = hover_key
                 self._set_highlighted(cat, hover_point=(x, value))
+                self._detail(cat, int(x))
                 dot_chart_pos = self._map_to_chart_position(chart, cat, x, value)
                 dot_scene_pos = chart.mapToScene(dot_chart_pos)
                 dot_vp_pos = self.chart_view.mapFromScene(dot_scene_pos)

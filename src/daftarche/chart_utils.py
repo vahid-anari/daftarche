@@ -17,6 +17,7 @@ from daftarche.style import get_settings
 class HoverChartView(QChartView):
     mouseMoved = Signal(object)
     mouseLeft = Signal()
+    mousePressed = Signal(object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -41,6 +42,9 @@ class HoverChartView(QChartView):
                 pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
                 self._last_mouse_pos = pos
                 self.mouseMoved.emit(pos)
+
+            elif event.type() == QEvent.MouseButtonPress:
+                self.mousePressed.emit(event.position().toPoint())
 
             elif event.type() == QEvent.Leave:
                 self._last_mouse_pos = None
@@ -195,6 +199,9 @@ class StackedOverlay(QWidget):
             self._hovered = hit
             if self._on_hover_cb:
                 self._on_hover_cb(hit)
+
+    def mousePressEvent(self, event):
+        event.ignore()  # on to the chart view (a click there pins the Charts detail panel)
 
     def leaveEvent(self, event):
         self._hovered = None

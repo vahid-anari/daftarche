@@ -95,3 +95,60 @@ def test_hover_label_shows_the_month_total(charts):
     assert charts._with_month_total("Food", i) == "Food\nMonth total   $1,020.00"
     charts._cat_cbs["Food"][0].setChecked(False)  # one category: its value is the total
     assert charts._with_month_total("Rent", i) == "Rent"
+
+
+@pytest.fixture
+def detailed(qapp, db):
+    """Food › Groceries and Food › Restaurants, this month and last month."""
+    from daftarche.db import MONTHS_ORDER
+    from daftarche.tabs.charts import ChartsTab
+    food = _category(db, "Food")
+    for sub in ("Groceries", "Restaurants"):
+        db.add_subcategory(sub, food)
+    today = datetime.date.today()
+    last = today.replace(day=1) - datetime.timedelta(days=1)
+    for d, sub, amount, name in ((today, "Groceries", 60, "NOFRILLS"), (today, "Restaurants", 40, "PHO"),
+                                 (last, "Groceries", 100, "COSTCO")):
+        db.add_transaction(d.year, MONTHS_ORDER[d.month - 1], 2, "Expense", "Vahid-CIBC-Checking", amount,
+                           db.get_subcategory_by_name(sub, food)["id"], food, name=name)
+    return keep(ChartsTab(db))
+
+
+def _panel_rows(tab):
+    t = tab.detail.table
+    return [tuple(t.item(r, c).text() if t.item(r, c) else "" for c in range(3)) for r in range(t.rowCount())]
+
+
+def test_detail_shows_subcategories_for_the_range_or_a_month(detailed):
+    tab = detailed
+    tab._period._select_preset(3)  # 3 months
+    assert tab.detail.hint.isVisibleTo(tab.detail) and not tab.detail.pin.isEnabled()
+    tab._detail("Food")  # list hover: whole range
+    assert _panel_rows(tab) == [("80%", "Groceries", "$160.00"), ("20%", "Restaurants", "$40.00")]
+    assert "$200.00" in tab.detail.title.text()
+    tab._detail("Food", len(tab._chart_periods) - 1)  # chart hover on this month
+    assert _panel_rows(tab) == [("60%", "Groceries", "$60.00"), ("40%", "Restaurants", "$40.00")]
+
+
+def test_detail_pins_and_lists_transactions_of_a_subcategory(detailed):
+    tab = detailed
+    tab._period._select_preset(3)
+    tab.f_cat_selector.set_items(["Food"], include_all=True, selected="Food")
+    tab._on_category_pick_changed()
+    tab._detail("Groceries")
+    rows = _panel_rows(tab)
+    assert [r[1:] for r in rows] == [("NOFRILLS", "$60.00"), ("COSTCO", "$100.00")]
+    assert "2 transactions" in tab.detail.title.text()
+    tab.chart_view.mousePressed.emit(None)  # a click on the chart pins
+    assert tab.detail.pinned and tab.detail.pin.text() == "Pinned"
+    tab._detail("Restaurants")
+    assert [r[1] for r in _panel_rows(tab)] == ["NOFRILLS", "COSTCO"]  # unchanged while pinned
+    tab.detail.set_pinned(False)
+    tab._detail("Restaurants")
+    assert [r[1] for r in _panel_rows(tab)] == ["PHO"]
+    seen = []
+    tab.detail.openRequested.connect(seen.append)
+    tab.detail.table.cellDoubleClicked.emit(0, 1)
+    assert seen and seen[0]["categories"] == ["Food"] and seen[0]["subcategories"] == ["Restaurants"]
+    tab._period._select_preset(1)  # a new range clears it
+    assert tab.detail.key is None and not tab.detail.pinned
