@@ -131,7 +131,8 @@ def test_category_merge_with_same_named_subcategories(db):
 
 def test_subcategory_merge_keeps_its_rules(db):
     c = cat(db, "Food")
-    a, b = sub(db, "Cafe", c), sub(db, "Coffee", c)
+    a = sub(db, "Cafe", c)
+    sub(db, "Coffee", c)
     db.save_mapping("Expense", None, name="Tim", subcategory_id=a, category_id=c)
     db.rename_subcategory(a, "Coffee")
     assert rule_sub(db, "TIM") == "Coffee"

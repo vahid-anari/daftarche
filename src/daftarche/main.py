@@ -103,7 +103,15 @@ def run_view() -> int:
 
     if splash:
         splash.show_message("Opening the database...")
-    window = MainWindow()
+    from daftarche.db import NewerDatabaseError
+    try:
+        window = MainWindow()
+    except NewerDatabaseError as exc:
+        from PySide6.QtWidgets import QMessageBox
+        if splash:
+            splash.close()
+        QMessageBox.critical(None, APP_DISPLAY_NAME, str(exc))
+        return 1
     updates = add_update_action(window)
 
     def show_window() -> None:

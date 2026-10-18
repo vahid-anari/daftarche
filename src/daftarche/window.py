@@ -93,6 +93,7 @@ class MainWindow(QMainWindow):
     def _build_tabs(self):
         self.tabs = QTabWidget()
         self.tabs.setDocumentMode(True)
+        self._stale = set()
 
         self.dashboard_tab = DashboardTab(self.db)
         self.transactions_tab = TransactionsTab(self.db, self._refresh_all)
@@ -105,6 +106,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.charts_tab, "📈  Charts")
         self.tabs.addTab(self.accounts_tab, "🏦  Accounts")
         self.tabs.addTab(self.import_tab, "📥  Import")
+        self.tabs.currentChanged.connect(self._on_tab_changed)
         return self.tabs
 
     def _rebuild_tabs(self):
@@ -132,10 +134,20 @@ class MainWindow(QMainWindow):
 
     # ── Refresh callbacks ─────────────────────────────────────────────────────
     def _refresh_all(self):
-        self.transactions_tab.refresh()
-        self.dashboard_tab.refresh()
-        self.charts_tab.refresh()
-        self.accounts_tab.refresh()
+        """After a change: refresh the tab on screen now, the others when they are next shown."""
+        current = self.tabs.currentWidget()
+        for tab in (self.dashboard_tab, self.transactions_tab, self.charts_tab, self.accounts_tab):
+            if tab is current:
+                tab.refresh()
+                self._stale.discard(tab)
+            else:
+                self._stale.add(tab)
+
+    def _on_tab_changed(self, index):
+        tab = self.tabs.widget(index)
+        if tab in self._stale:
+            self._stale.discard(tab)
+            tab.refresh()
 
     # ── Dialogs ───────────────────────────────────────────────────────────────
     def open_settings(self):
@@ -161,8 +173,8 @@ class MainWindow(QMainWindow):
     def _auto_backup(self):
         try:
             startup_backup(self.db.conn, extra_dir=self.settings.get("backup_extra_dir"))
-        except Exception as exc:
-            print(f"Auto-backup failed: {exc}")
+        except Exception as exc:  # the app still opens, but the problem stays in sight
+            self.statusBar().showMessage(f"⚠️ Automatic backup failed: {exc}")
 
     def _save_backup(self):
         path, _ = QFileDialog.getSaveFileName(

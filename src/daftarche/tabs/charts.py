@@ -1,10 +1,10 @@
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QSizePolicy, QCheckBox, QFrame,
-    QScrollArea, QApplication, QTableWidget, QTableWidgetItem, QHeaderView
+    QTableWidget, QTableWidgetItem, QHeaderView
 )
 from PySide6.QtCore import Qt, QPoint, QPointF, QObject, QEvent
-from PySide6.QtGui import QFont, QPainter, QColor, QPen
+from PySide6.QtGui import QFont, QColor, QPen
 from PySide6.QtCharts import (
     QBarSeries, QBarSet, QStackedBarSeries,
     QSplineSeries, QLineSeries, QScatterSeries,
@@ -46,6 +46,21 @@ def _make_cb_stylesheet(color_hex):
 
 
 # ChartsTab
+
+def _month_key(ym):
+    return ym[0], MONTH_NUM.get(ym[1], 0)
+
+
+def _months_between(first, last):
+    """Every (year, month name) from ``first`` to ``last``, both included."""
+    year, month = first[0], MONTH_NUM[first[1]]
+    end = _month_key(last)
+    out = []
+    while (year, month) <= end:
+        out.append((year, MONTHS_ORDER[month - 1]))
+        year, month = (year + 1, 1) if month == 12 else (year, month + 1)
+    return out
+
 class ChartsTab(QWidget):
     def __init__(self, db):
         super().__init__()
@@ -368,7 +383,8 @@ class ChartsTab(QWidget):
             ))
 
         selected = current if current in cats else "All"
-        self.f_cat_selector.set_items(cats, include_all=True, selected=selected)
+        # every caller refreshes the list and the chart itself right after: no signal, no second pass
+        self.f_cat_selector.set_items(cats, include_all=True, selected=selected, emit=False)
 
     def refresh(self):
         s = get_settings()
@@ -572,7 +588,9 @@ class ChartsTab(QWidget):
             self._show_empty_chart("No data for selected range", animated=animated)
             return
 
-        all_periods = sorted(data.keys(), key=lambda ym: (ym[0], MONTH_NUM.get(ym[1], 0)))
+        all_periods = _months_between(min(data, key=_month_key), max(data, key=_month_key))
+        for period in all_periods:  # a month without data is a zero, not a gap the line skips over
+            data.setdefault(period, {})
         labels = [f"{m[:3]} {str(y)[2:]}" for y, m in all_periods]
         all_cats = sorted({cat for pd in data.values() for cat in pd.keys()})
         all_cats = [c for c in all_cats if c in selected_cats]

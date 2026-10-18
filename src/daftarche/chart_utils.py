@@ -49,6 +49,14 @@ class HoverChartView(QChartView):
 
         return super().eventFilter(obj, event)
 
+    def setChart(self, chart):
+        """QChartView.setChart lets go of the old chart without deleting it: every refresh of
+        a tab leaked its charts. Delete the old one (unless it is the same chart)."""
+        old = self.chart()
+        super().setChart(chart)
+        if old is not None and old is not chart:
+            old.deleteLater()
+
     def last_mouse_pos(self):
         return self._last_mouse_pos
 
@@ -266,6 +274,6 @@ def style_chart_view(view, bordered=True):
         )
     else:
         view.setStyleSheet(
-            f"background: transparent; "
-            f"border: none;"
+            "background: transparent; "
+            "border: none;"
         )

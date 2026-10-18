@@ -1,19 +1,19 @@
 from datetime import date
 
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QTableView, QLineEdit,
+    QWidget, QVBoxLayout, QHBoxLayout, QLineEdit,
     QPushButton, QLabel, QHeaderView, QAbstractItemView,
     QMenu, QMessageBox, QDialog, QFormLayout, QDialogButtonBox,
     QCheckBox, QFrame, QGridLayout, QSizePolicy,
     QStyledItemDelegate, QStyle, QFileDialog, QApplication, QTextEdit,
     QScrollArea
 )
-from PySide6.QtCore import Qt, QAbstractTableModel, QModelIndex, QItemSelectionModel
+from PySide6.QtCore import Qt, QAbstractTableModel, QModelIndex, QItemSelectionModel, QTimer
 from PySide6.QtGui import QColor, QAction, QBrush, QShortcut, QKeySequence
 
 from daftarche.db import MONTHS_ORDER, MONTH_NUM, TRANSFER_UNMATCHED, TRANSFER_MATCHED, SUB_MATCHED
 from daftarche.widgets import (
-    CheckComboBox, PeriodSelectorWidget, StepSpinBox, SymbolButton, SingleSelectCombo, ReadOnlyCopyDelegate,
+    CheckComboBox, PeriodSelectorWidget, SymbolButton, SingleSelectCombo, ReadOnlyCopyDelegate,
     EditableTableView, DatePicker
 )
 from daftarche.style import get_settings
@@ -257,7 +257,10 @@ class TransactionsTab(QWidget):
         btn_cols.clicked.connect(self._open_columns_dialog)
         btn_exp.clicked.connect(self.export)
         btn_refresh.clicked.connect(self.refresh)
-        self.f_search.textChanged.connect(lambda *_: self._on_any_filter_changed())
+        # filter once typing pauses, not on every keystroke (each pass reloads the table)
+        self._search_timer = QTimer(self, singleShot=True, interval=300)
+        self._search_timer.timeout.connect(self._on_any_filter_changed)
+        self.f_search.textChanged.connect(lambda *_: self._search_timer.start())
 
         btn_search_fields = QPushButton("🔍")
         btn_search_fields.setProperty("class", "secondary")
@@ -447,10 +450,8 @@ class TransactionsTab(QWidget):
                 "search_fields": self._search_fields,
             }
         from_year = from_date.year
-        from_month = MONTHS_ORDER[from_date.month - 1]
         from_day = from_date.day
         to_year = to_date.year
-        to_month = MONTHS_ORDER[to_date.month - 1]
         to_day = to_date.day
         return {
             "from_day": f"{from_year:04d}-{from_date.month:02d}-{from_day:02d}",
@@ -588,7 +589,7 @@ class TransactionsTab(QWidget):
 
         edit_label = "✏️  Edit Category/Sub-Cat" if n == 1 else "✏️  Bulk Edit Category/Sub-Cat"
         menu.addAction(QAction(edit_label, self, triggered=self._bulk_edit_cat))
-        menu.addAction(QAction(f"🏷️  Add Tags", self, triggered=self._add_tags_to_selected))
+        menu.addAction(QAction("🏷️  Add Tags", self, triggered=self._add_tags_to_selected))
         menu.addSeparator()
         menu.addAction(QAction(f"📋  Copy {n} row{'s' if n > 1 else ''}", self, triggered=self._copy_selected))
         menu.addAction(QAction("✅  Select All", self, triggered=self.table.selectAll))
@@ -770,7 +771,7 @@ class TransactionsTab(QWidget):
         def get_val(r, k):
             try:
                 return r[k]
-            except:
+            except (KeyError, IndexError):
                 return None
 
         for level in reversed(self._sort_config):
@@ -896,9 +897,16 @@ class TransactionsTab(QWidget):
 
     def export(self):
         path, _ = QFileDialog.getSaveFileName(self, "Export", "export.xlsx", "Excel (*.xlsx)")
-        if path:
-            self.db.export_to_xlsx(path, self._get_filters())
-            QMessageBox.information(self, "Done", f"Exported to {path}")
+        if not path:
+            return
+        if not path.lower().endswith(".xlsx"):
+            path += ".xlsx"
+        try:  # the rows as shown: same filters, same order
+            self.db.export_to_xlsx(path, rows=list(self.model._rows))
+        except OSError as exc:  # e.g. the file is open in Excel
+            QMessageBox.warning(self, "Export Failed", f"Could not write {path}:\n{exc}")
+            return
+        QMessageBox.information(self, "Done", f"Exported to {path}")
 
 
 # ColumnVisibilityDialog

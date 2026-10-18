@@ -83,12 +83,16 @@ class Settings:
             try:
                 with open(CONFIG_PATH, "r") as f:
                     self._data.update(json.load(f))
-            except Exception:
-                pass
+            except (OSError, ValueError):
+                # keep the damaged file for a look instead of silently overwriting it
+                os.replace(CONFIG_PATH, f"{CONFIG_PATH}.broken")
 
     def save(self) -> None:
-        with open(CONFIG_PATH, "w") as f:
+        """Write to a temporary file and swap it in: a crash mid-write never leaves half a file."""
+        tmp = f"{CONFIG_PATH}.tmp"
+        with open(tmp, "w") as f:
             json.dump(self._data, f, indent=2)
+        os.replace(tmp, CONFIG_PATH)
 
     def get(self, key: str):
         return self._data.get(key, DEFAULTS.get(key))
@@ -368,9 +372,7 @@ QComboBox QAbstractItemView::item:hover {{ background: {ac_item}; }}
 
 
 def _style_frames(v) -> str:
-    bg, surf, raised, bdr, dim, ac, fs = (
-        v["bg"], v["surf"], v["raised"], v["bdr"], v["dim"], v["ac"], v["fs"]
-    )
+    bg, surf, bdr, dim, fs = v["bg"], v["surf"], v["bdr"], v["dim"], v["fs"]
     return f"""
 /* cards — shared base */
 QFrame[class="stat-card"],
@@ -483,9 +485,7 @@ QFrame[class="picker-popup"] QListWidget::indicator:checked {{ background: {ac};
 
 
 def _style_tabs(v) -> str:
-    surf, raised, bdr, txt, dim, ac = (
-        v["surf"], v["raised"], v["bdr"], v["txt"], v["dim"], v["ac"]
-    )
+    surf, raised, txt, dim, ac = v["surf"], v["raised"], v["txt"], v["dim"], v["ac"]
     return f"""
 /* ── QTabWidget / QTabBar ─────────────────────────── */
 

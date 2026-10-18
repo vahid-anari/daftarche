@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.8.0 — 2026-10-17
+
+Speed and robustness.
+
+- Settings are written to a temporary file and swapped in, so a crash can no longer leave
+  a half-written `config.json` (which used to reset every setting silently); a damaged
+  file is kept as `config.json.broken`.
+- The database records its layout version; an older Daftarche refuses to open, or
+  restore, a database written by a newer one instead of changing it.
+- Account balances are computed in one pass and reused until the data changes (three
+  tabs used to recompute them on every refresh); months without transactions now appear
+  in the Accounts tab with the balance carried over.
+- After a change only the tab on screen refreshes; the others refresh when shown. The
+  search box filters once typing pauses. Duplicate checks during import are one query
+  per row; three database indexes added.
+- Charts: replaced charts are deleted (each refresh leaked them), the Charts tab builds
+  once per change instead of twice, and a month without data shows as zero.
+- Export writes the rows as shown (same filters, same order) with Tags and FITID, adds
+  `.xlsx` when missing, and says so when the file cannot be written (e.g. open in Excel).
+- A failed automatic backup is shown in the window's status bar.
+- Code clean-up; `ruff` now runs in CI.
+
 ## 0.7.0 — 2026-10-17
 
 Dates, transfers and statements.

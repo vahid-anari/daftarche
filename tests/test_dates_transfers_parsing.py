@@ -1,6 +1,5 @@
 """Batch C (0.7.0): date picker and ranges, transfer matching, QFX parsing, typed category names."""
 
-from datetime import date
 from pathlib import Path
 from unittest import mock
 

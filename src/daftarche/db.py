@@ -2,9 +2,8 @@ import sqlite3
 from contextlib import contextmanager
 from functools import wraps
 import pandas as pd
-import os
 import re
-from datetime import datetime, date as _date
+from datetime import date as _date
 import calendar
 from decimal import Decimal, ROUND_HALF_UP
 from daftarche.style import TAB20_COLORS
@@ -64,6 +63,15 @@ def _date_str_to_parts(date_str):
         return None, None, None
 
 
+SCHEMA_VERSION = 1
+"""Database layout version, stored in the file (PRAGMA user_version). Raise it whenever
+_migrate learns something new, so an older Daftarche refuses a database it cannot read."""
+
+
+class NewerDatabaseError(ValueError):
+    """The database was written by a newer Daftarche."""
+
+
 def atomic(method):
     """Run a Database method as one transaction: all its writes are kept, or none."""
     @wraps(method)
@@ -77,11 +85,20 @@ class Database:
     def __init__(self, path):
         self.path = path
         self._tx_depth = 0
+        self._data_version = 0  # goes up with every committed change; keys self._cache
+        self._cache = {}
         self.conn = sqlite3.connect(path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
+        version = self.conn.execute("PRAGMA user_version").fetchone()[0]
+        if version > SCHEMA_VERSION:
+            self.conn.close()
+            raise NewerDatabaseError(
+                f"This database was saved by a newer version of Daftarche (layout {version}; this "
+                f"version knows up to {SCHEMA_VERSION}). Update Daftarche to open it.")
         self.conn.execute("PRAGMA foreign_keys = ON")
         self._create_tables()
         self._migrate()
+        self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
     @contextmanager
     def transaction(self):
@@ -101,6 +118,7 @@ class Database:
         self._tx_depth -= 1
         if self._tx_depth == 0:
             self.conn.commit()
+            self._data_version += 1
 
     # ── Schema ────────────────────────────────────────────────────
     def _create_tables(self):
@@ -461,7 +479,6 @@ class Database:
                             """)
 
         # Migrate categories to UNIQUE(name, type_id) if still using old UNIQUE(name)
-        cat_indices = [r[1] for r in c.execute("PRAGMA index_list(categories)").fetchall()]
         # Check by trying to detect the old single-column unique index
         cat_index_info = c.execute("PRAGMA index_list(categories)").fetchall()
         needs_cat_rebuild = False
@@ -496,6 +513,8 @@ class Database:
         # Tags tables — ensure indices exist for older DBs
         c.execute("CREATE INDEX IF NOT EXISTS idx_tx_tags_tx  ON transaction_tags(transaction_id)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_tx_tags_tag ON transaction_tags(tag_id)")
+        for column in ("to_account_id", "subcategory_id", "fitid"):
+            c.execute(f"CREATE INDEX IF NOT EXISTS idx_tx_{column} ON transactions({column})")
 
         self._dedupe_rules()
         c.commit()
@@ -1062,32 +1081,18 @@ class Database:
         self.conn.execute("DELETE FROM transactions WHERE id=?", (tx_id,))
 
     def fitid_exists(self, fitid, account_name):
+        """Whether the account already has a transaction with this FITID. A matched transfer
+        keeps both sides' FITIDs as "a|b" and counts for both accounts."""
         if not fitid:
             return False
         acc = self.get_account_by_name(account_name)
         if not acc:
             return False
-        row = self.conn.execute("""
-                                SELECT fitid
-                                FROM transactions
-                                WHERE account_id = ?
-                                  AND fitid IS NOT NULL
-                                """, (acc["id"],)).fetchall()
-        for r in row:
-            stored = r["fitid"] or ""
-            if fitid in stored.split("|"):
-                return True
-        row2 = self.conn.execute("""
-                                 SELECT fitid
-                                 FROM transactions
-                                 WHERE to_account_id = ?
-                                   AND fitid IS NOT NULL
-                                 """, (acc["id"],)).fetchall()
-        for r in row2:
-            stored = r["fitid"] or ""
-            if fitid in stored.split("|"):
-                return True
-        return False
+        return self.conn.execute("""
+            SELECT 1 FROM transactions
+            WHERE (account_id = :acc OR to_account_id = :acc) AND fitid IS NOT NULL
+              AND (fitid = :fitid OR instr('|' || fitid || '|', '|' || :fitid || '|') > 0)
+            LIMIT 1""", {"acc": acc["id"], "fitid": fitid}).fetchone() is not None
 
     def get_uncategorized_transactions(self, from_str, to_str):
         uncat_cat_id, _ = self.get_uncategorized_ids()
@@ -1631,58 +1636,58 @@ class Database:
         return {r["k"]: round2(r["total"] or 0) for r in rows if r["k"]}
 
     def get_account_monthly_balance(self):
-        """Running balance per account per month, starting from 0."""
-        rows = self.conn.execute("""
-                                 SELECT strftime('%Y', t.date) AS year,
-                   strftime('%m', t.date) AS month_num,
-                   a.id as account_id, a.name as account,
-                   ty.name as type_name,
-                   t.amount as total,
-                   ta.id as to_account_id, ta.name as to_account
-                                 FROM transactions t
-                                     LEFT JOIN types ty
-                                 ON t.type_id=ty.id
-                                     LEFT JOIN accounts a ON t.account_id=a.id
-                                     LEFT JOIN accounts ta ON t.to_account_id=ta.id
-                                 ORDER BY t.date
-                                 """, []).fetchall()
+        """Running balance per account at the end of every month, starting from 0.
 
+        Every month from the first transaction to the last has an entry (a month without
+        transactions repeats the balances before it). One pass over the transactions, and
+        cached until the next change to the database: three tabs ask for it on each refresh.
+        """
+        cached = self._cache.get("monthly_balance")
+        if cached and cached[0] == self._data_version:
+            return cached[1]
+        rows = self.conn.execute("""
+            SELECT t.date, t.account_id, t.to_account_id, t.amount, ty.name AS type_name
+            FROM transactions t LEFT JOIN types ty ON t.type_id = ty.id
+            WHERE t.date IS NOT NULL
+            ORDER BY t.date
+        """).fetchall()
         accounts = {a["id"]: a["name"] for a in self.get_accounts()}
         running = {aid: 0.0 for aid in accounts}
         snapshots = {}
 
-        all_periods = sorted(
-            {(int(r["year"]), MONTHS_ORDER[int(r["month_num"]) - 1]) for r in rows},
-            key=lambda ym: (ym[0], MONTH_NUM.get(ym[1], 0))
-        )
+        def close_months(until):  # snapshot every month before ``until`` (year, month_num)
+            nonlocal current
+            while current is not None and current < until:
+                y, mn = current
+                snapshots[(y, MONTHS_ORDER[mn - 1])] = {aid: round2(bal) for aid, bal in running.items()}
+                current = (y + 1, 1) if mn == 12 else (y, mn + 1)
 
-        for period in all_periods:
-            y, m = period
-            mn = f"{MONTH_NUM.get(m, 1):02d}"
-            for r in rows:
-                if r["year"] != str(y) or r["month_num"] != mn:
-                    continue
-                type_name = r["type_name"] or ""
-                aid = r["account_id"]
-                taid = r["to_account_id"]
-                total = r["total"] or 0
+        current = None
+        for r in rows:
+            month = (int(r["date"][:4]), int(r["date"][5:7]))
+            if current is None:
+                current = month
+            close_months(month)
+            type_name = r["type_name"] or ""
+            aid, taid, total = r["account_id"], r["to_account_id"], r["amount"] or 0
+            if "Income" in type_name:
+                if aid: running[aid] = running.get(aid, 0) + total
+            elif "Expense" in type_name:
+                if aid: running[aid] = running.get(aid, 0) - total
+            elif "Transfer" in type_name:
+                if aid: running[aid] = running.get(aid, 0) - total
+                if taid: running[taid] = running.get(taid, 0) + total
+        if current is not None:
+            last = current
+            close_months((last[0] + 1, 1) if last[1] == 12 else (last[0], last[1] + 1))
 
-                if "Income" in type_name:
-                    if aid:  running[aid] = running.get(aid, 0) + total
-                elif "Expense" in type_name:
-                    if aid:  running[aid] = running.get(aid, 0) - total
-                elif "Transfer" in type_name:
-                    if aid:  running[aid] = running.get(aid, 0) - total
-                    if taid: running[taid] = running.get(taid, 0) + total
-
-            snapshots[period] = {aid: round2(bal) for aid, bal in running.items()}
-
+        self._cache["monthly_balance"] = (self._data_version, (snapshots, accounts))
         return snapshots, accounts
 
     def get_categories_in_month_range(self, from_year, from_month, to_year, to_month,
                                       type_filter, account_names=None):
         from_str, to_str = self._month_range_dates(from_year, from_month, to_year, to_month)
-        q = f"""
+        q = """
             SELECT c.name
             FROM transactions t
             JOIN categories c ON t.category_id = c.id
@@ -1714,8 +1719,10 @@ class Database:
         return _date.fromisoformat(row["min_date"]), _date.fromisoformat(row["max_date"])
 
     # ── Export from xlsx ──────────────────────────────────────────
-    def export_to_xlsx(self, path, filters=None):
-        rows = self.get_transactions(filters)
+    def export_to_xlsx(self, path, filters=None, rows=None):
+        """Write transactions to an Excel file: ``rows`` as given (e.g. the table's rows in
+        their on-screen order), or those matching ``filters``."""
+        rows = self.get_transactions(filters) if rows is None else rows
         data = []
         for r in rows:
             y, m, d = _date_str_to_parts(r["date"])
@@ -1732,6 +1739,8 @@ class Database:
                 "Memorandum": r["memorandum"] or "",
                 "Description": r["description"] or "",
                 "Status": r["transfer_status"] or "",
+                "Tags": r["tags"] if "tags" in r.keys() else "",
+                "FITID": r["fitid"] or "",
             })
         pd.DataFrame(data).to_excel(path, index=False)
 

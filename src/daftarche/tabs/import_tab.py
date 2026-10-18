@@ -477,11 +477,11 @@ class ImportTab(QWidget):
         for lbl in (self.lbl_file, self.lbl_account, self.lbl_period, self.lbl_balance):
             lbl.setProperty("class", "dim-label")
 
-        sep1 = QLabel("|");
+        sep1 = QLabel("|")
         sep1.setProperty("class", "dim-label")
-        sep2 = QLabel("|");
+        sep2 = QLabel("|")
         sep2.setProperty("class", "dim-label")
-        sep3 = QLabel("|");
+        sep3 = QLabel("|")
         sep3.setProperty("class", "dim-label")
 
         info_row.addWidget(self.lbl_file)
@@ -583,7 +583,6 @@ class ImportTab(QWidget):
                 return f"{d[0:4]}-{d[4:6]}-{d[6:8]}"
             return d
 
-        date_range = f"  ({_fmt_date(dtstart)} → {_fmt_date(dtend)})" if dtstart else ""
         balamt = header["balamt"]
         dtasof = header["dtasof"]
         curdef = header["curdef"] or "CAD"
@@ -776,7 +775,6 @@ class ImportTab(QWidget):
             fitid = r.get("fitid")
             is_dup = bool(fitid and self.db.fitid_exists(fitid, account))
             sub = r["subcategory"]
-            is_uncat = sub is not None and sub["name"] == UNCATEGORIZED_SUB
 
             if is_dup:
                 r["_status"] = "⏭️ Duplicate"

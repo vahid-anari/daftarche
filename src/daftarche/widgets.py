@@ -534,7 +534,7 @@ class SingleSelectCombo(QComboBox):
     def _emit_change(self, text):
         self.selectionChanged.emit(text or self._placeholder)
 
-    def set_items(self, items, include_all=True, selected=None):
+    def set_items(self, items, include_all=True, selected=None, emit=True):
         self.blockSignals(True)
         self.clear()
         values = list(items or [])
@@ -545,7 +545,8 @@ class SingleSelectCombo(QComboBox):
         idx = self.findText(selected) if selected else -1
         self.setCurrentIndex(idx if idx >= 0 else 0)
         self.blockSignals(False)
-        self.selectionChanged.emit(self.current_text())
+        if emit:
+            self.selectionChanged.emit(self.current_text())
 
     def current_text(self):
         t = self.currentText().strip()

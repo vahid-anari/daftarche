@@ -1,12 +1,11 @@
-from datetime import date
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QTableWidget,
     QTableWidgetItem, QHeaderView, QAbstractItemView,
     QApplication, QFrame, QSizePolicy, QCheckBox, QPushButton,
 )
-from PySide6.QtCore import Qt, QObject, QEvent, QPointF, Signal
-from PySide6.QtGui import QFont, QColor, QBrush, QKeySequence, QShortcut, QPen, QPainter, QFontMetrics
+from PySide6.QtCore import Qt, QObject, QEvent, QPointF
+from PySide6.QtGui import QFont, QColor, QBrush, QKeySequence, QShortcut, QPen, QFontMetrics
 from PySide6.QtCharts import (
     QLineSeries, QSplineSeries, QBarSeries, QBarSet,
     QStackedBarSeries, QScatterSeries
@@ -295,7 +294,6 @@ class AccountsTab(QWidget):
 
     # ── Refresh ───────────────────────────────────────────────────────────────
     def refresh(self):
-        s = get_settings()
         self.chart_view.refresh_hover_style()
         self._period.refresh_style()
 
@@ -338,9 +336,6 @@ class AccountsTab(QWidget):
 
     # ── Account checkbox panel ────────────────────────────────────────────────
     def _refresh_acc_list(self):
-        s = get_settings()
-        fs = s.get("font_size")
-
         saved = get_settings().get("accounts_selection") or {}
         old_states = {name: cb.isChecked() for name, (cb, _) in self._acc_cbs.items()}
         # Merge: saved takes priority, old_states as fallback for new accounts
@@ -367,7 +362,6 @@ class AccountsTab(QWidget):
 
         for row, acc in enumerate(self._all_accounts):
             name = acc["name"]
-            color = self._account_colors.get(name, "#7c6af7")
             checked = states.get(name, True)
 
             self._acc_table.insertRow(row)
@@ -757,7 +751,7 @@ class AccountsTab(QWidget):
                 )
             else:
                 self._clear_highlight()
-        except Exception as exc:
+        except Exception:  # a hover must never take the window down
             pass
 
     def _nearest_line_at_position(self, chart, chart_pos):

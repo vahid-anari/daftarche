@@ -16,6 +16,7 @@ import sqlite3
 from datetime import date, datetime
 from pathlib import Path
 
+from daftarche.db import SCHEMA_VERSION
 from daftarche.paths import BACKUP_DIR
 
 KEEP_MONTHS = 12
@@ -89,6 +90,9 @@ def check_backup(path: Path | str) -> None:
         missing = REQUIRED_TABLES - tables
         if missing:
             raise ValueError(f"{path.name} is not a Daftarche database (missing: {', '.join(sorted(missing))}).")
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+        if version > SCHEMA_VERSION:
+            raise ValueError(f"{path.name} was saved by a newer version of Daftarche; update Daftarche first.")
     finally:
         conn.close()
 
