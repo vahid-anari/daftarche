@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "daftarche"
-version = "0.14.0"
+version = "0.14.1"
 description = "Daftarche: personal bookkeeping for bank transactions imported from QFX and Excel statements"
 readme = "README.md"
 license = "MIT"

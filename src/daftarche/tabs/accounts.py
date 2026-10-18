@@ -13,7 +13,7 @@ from PySide6.QtCharts import (
 
 from daftarche.db import MONTHS_ORDER, MONTH_NUM
 from daftarche.style import get_settings
-from daftarche.widgets import PeriodSelectorWidget, ReadOnlyCopyDelegate
+from daftarche.widgets import plain_label, PeriodSelectorWidget, ReadOnlyCopyDelegate
 from daftarche.chart_utils import (
     HoverChartView, make_chart, make_x_axis, make_y_axis,
     style_chart_view, StackedOverlay
@@ -367,7 +367,7 @@ class AccountsTab(QWidget):
             self._acc_table.insertRow(row)
             self._acc_table.setRowHeight(row, 28)
 
-            cb = QCheckBox(name)
+            cb = QCheckBox(plain_label(name))
             cb.setChecked(checked)
             cb.toggled.connect(lambda chk, n=name: self._on_cb_toggled(n, chk))
             cb.clicked.connect(lambda _=None, n=name: self._on_cb_clicked(n))

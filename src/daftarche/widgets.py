@@ -86,6 +86,12 @@ def fit_combo_column(table, col, combo, padding=100):
 
 
 
+def plain_label(text):
+    """A name for a checkbox or button label: Qt reads "&" there as a shortcut marker
+    ("Food & Drink" showed as "Food _Drink"), so it is doubled to show as itself."""
+    return (text or "").replace("&", "&&")
+
+
 def add_subcategory_items(combo, db, category_id):
     """A category's sub-categories into ``combo``, with "Uncategorized" first: picking only the
     category is enough, and the sub-category can be set later."""

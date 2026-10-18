@@ -148,3 +148,17 @@ def test_view_menu_and_dashboard_link(qapp, monkeypatch, tmp_path):
         w.dashboard_tab._on_alert_clicked()
     assert unc.call_count == 1 and unm.call_count == 1
     w.db.conn.close()
+
+
+def test_ampersand_names_show_as_themselves(qapp, db):
+    from daftarche.tabs.transactions import TagPickerDialog
+    from daftarche.widgets import plain_label
+    assert plain_label("Food & Drink") == "Food && Drink"  # Qt shows "&&" as "&"
+    db.add_tag("R&D")
+    tag_id = db.get_tags()[0]["id"]
+    uc, us = db.get_uncategorized_ids()
+    tx = db.add_transaction(2026, "May", 1, "Expense", "Checking", 5, us, uc)
+    db.set_tags_for_transaction(tx, [tag_id])
+    row = next(r for r in db.get_transactions() if r["id"] == tx)
+    dialog = keep(TagPickerDialog(db, row))
+    assert dialog.get_selected() == ["R&D"]

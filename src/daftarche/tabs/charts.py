@@ -11,7 +11,7 @@ from PySide6.QtCharts import (
     QPieSeries, QPieSlice
 )
 from daftarche.db import MONTH_NUM, MONTHS_ORDER
-from daftarche.widgets import PeriodSelectorWidget, StepSpinBox, CheckComboBox, SingleSelectCombo
+from daftarche.widgets import plain_label, PeriodSelectorWidget, StepSpinBox, CheckComboBox, SingleSelectCombo
 from daftarche.style import get_settings, TAB20_COLORS
 from daftarche.chart_utils import HoverChartView, StackedOverlay, make_chart, make_x_axis, make_y_axis, style_chart_view
 
@@ -530,7 +530,7 @@ class ChartsTab(QWidget):
 
             self._cat_table.insertRow(row)
 
-            cb = QCheckBox(name)
+            cb = QCheckBox(plain_label(name))
             cb.setChecked(checked)
             cb.toggled.connect(lambda chk, n=name: self._on_cb_toggled(n, chk))
             cb.clicked.connect(lambda _=None, n=name: self._on_cb_clicked(n))

@@ -15,7 +15,7 @@ from PySide6.QtGui import QColor, QBrush, QKeySequence, QShortcut, QAction
 
 from daftarche.style import get_settings
 from daftarche.category_dialog import CategoryDialog
-from daftarche.widgets import EditableTableView, ReadOnlyCopyDelegate, SingleSelectCombo
+from daftarche.widgets import plain_label, EditableTableView, ReadOnlyCopyDelegate, SingleSelectCombo
 from daftarche.db import (
     MONTHS_ORDER,
     TRANSFER_UNMATCHED,
@@ -328,7 +328,7 @@ class ImportTagPickerDialog(QDialog):
         container_layout.setContentsMargins(4, 4, 4, 4)
 
         for tag in all_tags:
-            cb = QCheckBox(tag["name"])
+            cb = QCheckBox(plain_label(tag["name"]))
             cb.setChecked(tag["id"] in self._current_ids)
             self._checks[tag["id"]] = cb
             container_layout.addWidget(cb)

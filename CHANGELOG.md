@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.14.1 — 2026-10-18
+
+- Names with "&" ("Food & Drink") showed as "Food _Drink" in the Charts category list,
+  the Accounts list and the tag pickers: Qt reads "&" in a checkbox label as a keyboard
+  shortcut marker. They show as written now.
+
 ## 0.14.0 — 2026-10-18
 
 - Transactions: a Note column for your own words (what a purchase was). Double-click the

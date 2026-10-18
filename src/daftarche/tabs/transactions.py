@@ -13,6 +13,7 @@ from PySide6.QtGui import QColor, QAction, QBrush, QShortcut, QKeySequence
 
 from daftarche.db import MONTHS_ORDER, MONTH_NUM, TRANSFER_UNMATCHED, TRANSFER_MATCHED, SUB_MATCHED
 from daftarche.widgets import (
+    plain_label,
     add_subcategory_items, confirm_category,
     CheckComboBox, PeriodSelectorWidget, SymbolButton, SingleSelectCombo, ReadOnlyCopyDelegate,
     EditableTableView, DatePicker
@@ -1313,7 +1314,7 @@ class TagPickerDialog(QDialog):
         container_layout.setContentsMargins(4, 4, 4, 4)
 
         for tag in all_tags:
-            cb = QCheckBox(tag["name"])
+            cb = QCheckBox(plain_label(tag["name"]))
             cb.setChecked(tag["id"] in current_tag_ids)
             self._checks[tag["id"]] = cb
             container_layout.addWidget(cb)
@@ -1333,7 +1334,7 @@ class TagPickerDialog(QDialog):
             cb.setChecked(checked)
 
     def get_selected(self):
-        return [cb.text() for cb in self._checks.values() if cb.isChecked()]
+        return [cb.text().replace("&&", "&") for cb in self._checks.values() if cb.isChecked()]  # see plain_label
 
 
 # BulkAddTagsDialog  — add tags to multiple transactions (does not remove existing)
@@ -1382,7 +1383,7 @@ class BulkAddTagsDialog(QDialog):
         container_layout.setContentsMargins(4, 4, 4, 4)
 
         for tag in all_tags:
-            cb = QCheckBox(tag["name"])
+            cb = QCheckBox(plain_label(tag["name"]))
             cb.setChecked(False)
             self._checks[tag["id"]] = cb
             container_layout.addWidget(cb)
@@ -1402,7 +1403,7 @@ class BulkAddTagsDialog(QDialog):
             cb.setChecked(checked)
 
     def get_selected(self):
-        return [cb.text() for cb in self._checks.values() if cb.isChecked()]
+        return [cb.text().replace("&&", "&") for cb in self._checks.values() if cb.isChecked()]  # see plain_label
 
 
 # SearchFieldsDialog
