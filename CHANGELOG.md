@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.6.0 — 2026-10-17
+
+Rules and merges.
+
+- Rule matching: a rule's words must appear as whole words, so "Ali" no longer matches
+  "NATALIE" or "ALIMENTATION". When several rules match, the most specific wins (the most
+  matched text, then a rule for this account, then the newest), so "Ali Mohammad" beats
+  "Ali". `tools/compare_rules.py` lists the past transactions the new matching would
+  categorize differently (read-only).
+- Saving a rule again changes it instead of adding a copy; existing copies are cleaned
+  up on first start, keeping the newest.
+- Renaming onto an existing name asks first, then merges completely:
+  - accounts: transactions, bank IDs and rules move (this used to fail half-way);
+  - categories: sub-categories with the same name are merged too, rules move;
+  - sub-categories: rules move instead of being deleted.
+- A category name used under two types (e.g. "Other" under Income and Expense) is no
+  longer confused with the other one when editing, renaming or moving sub-categories.
+- Moving a sub-category to another category also moves its transactions.
+- Deleting a category that a rule points to works; deleting or renaming a type that is
+  in use explains why it can't instead of failing silently.
+- Needs sciwidgets 0.11.1 (reliable Update Now).
+
 ## 0.5.0 — 2026-10-17
 
 Data safety fixes.

@@ -296,7 +296,7 @@ class ImportBulkCatDialog(QDialog):
     def _refresh_subcats(self, cat_name=None):
         cat_name = cat_name or self.f_category.currentText()
         self.f_subcat.clear()
-        cat = self.db.get_category_by_name(cat_name)
+        cat = self.db.get_category_by_name(cat_name, type_name=self.row_type)
         if cat:
             for sub in self.db.get_subcategories(cat["id"]):
                 self.f_subcat.addItem(sub["name"])
@@ -783,7 +783,8 @@ class ImportTab(QWidget):
             preset_sub=sub["name"] if sub else None,
         )
         if dlg.exec():
-            new_cat = self.db.get_category_by_name(dlg.cat_name) if dlg.cat_name else None
+            new_cat = (self.db.get_category_by_name(dlg.cat_name, type_name=row.get("type"))
+                       if dlg.cat_name else None)
             new_sub = (self.db.get_subcategory_by_name(dlg.sub_name, new_cat["id"])
                        if (new_cat and dlg.sub_name) else None)
             row["category"] = new_cat
@@ -858,7 +859,7 @@ class ImportTab(QWidget):
         row_type = types.pop() if len(types) == 1 else "Expense"
         dlg = ImportBulkCatDialog(self.db, row_type, self)
         if dlg.exec():
-            new_cat = self.db.get_category_by_name(dlg.cat_name) if dlg.cat_name else None
+            new_cat = self.db.get_category_by_name(dlg.cat_name, type_name=row_type) if dlg.cat_name else None
             new_sub = (self.db.get_subcategory_by_name(dlg.sub_name, new_cat["id"])
                        if (new_cat and dlg.sub_name) else None)
             for row_idx in non_transfer:

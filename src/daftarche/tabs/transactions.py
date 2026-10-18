@@ -641,7 +641,7 @@ class TransactionsTab(QWidget):
         if dlg.exec():
             cat_name = dlg.cat_name
             sub_name = dlg.sub_name
-            cat = self.db.get_category_by_name(cat_name) if cat_name else None
+            cat = self.db.get_category_by_name(cat_name, type_name=row_type) if cat_name else None
             sub = self.db.get_subcategory_by_name(sub_name, cat["id"]) if (cat and sub_name) else None
             row_id = row["id"]
             scroll_pos = self.table.verticalScrollBar().value()
@@ -690,7 +690,7 @@ class TransactionsTab(QWidget):
         if dlg.exec():
             cat_name = dlg.cat_name
             sub_name = dlg.sub_name
-            cat = self.db.get_category_by_name(cat_name) if cat_name else None
+            cat = self.db.get_category_by_name(cat_name, type_name=row_type) if cat_name else None
             sub = self.db.get_subcategory_by_name(sub_name, cat["id"]) if (cat and sub_name) else None
             scroll_pos = self.table.verticalScrollBar().value()
             selected_ids = [self.model.get_row(i)["id"] for i in selected]
@@ -1140,7 +1140,7 @@ class TransactionDialog(QDialog):
 
         self.f_subcat.blockSignals(True)
         self.f_subcat.clear()
-        cat = self.db.get_category_by_name(cat_name)
+        cat = self.db.get_category_by_name(cat_name, type_name=self.f_type.currentText())
         if cat:
             for s in self.db.get_subcategories(cat["id"]):
                 self.f_subcat.addItem(s["name"])
@@ -1170,10 +1170,10 @@ class TransactionDialog(QDialog):
             if not account and not (self.row and to_acc):
                 raise ValueError("choose an account")
 
-            cat = self.db.get_category_by_name(cat_name)
+            cat = self.db.get_category_by_name(cat_name, type_name=type_name)
             if not cat:
                 self.db.add_category(cat_name, type_name)
-                cat = self.db.get_category_by_name(cat_name)
+                cat = self.db.get_category_by_name(cat_name, type_name=type_name)
             cat_id = cat["id"]
 
             sub = self.db.get_subcategory_by_name(sub_name, cat_id)
@@ -1269,7 +1269,7 @@ class BulkCatDialog(QDialog):
     def _refresh_subcats(self, cat_name=None):
         cat_name = cat_name or self.f_category.currentText()
         self.f_subcat.clear()
-        cat = self.db.get_category_by_name(cat_name)
+        cat = self.db.get_category_by_name(cat_name, type_name=self.row_type)
         if cat:
             for sub in self.db.get_subcategories(cat["id"]):
                 self.f_subcat.addItem(sub["name"])

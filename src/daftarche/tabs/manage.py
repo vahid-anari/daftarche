@@ -23,6 +23,15 @@ def _apply_selection_palette(widget):
 
 
 # ManageDialog
+
+def _confirm_merge(parent, kind, old, new, what):
+    """Renaming onto an existing name merges the two; ask first."""
+    return QMessageBox.question(
+        parent, f"Merge {kind}",
+        f"There is already a {kind} named '{new}'.\n\n"
+        f"Move all {what} of '{old}' into '{new}', and delete '{old}'?",
+        QMessageBox.Yes | QMessageBox.No, QMessageBox.No) == QMessageBox.Yes
+
 class ManageDialog(QDialog):
     def __init__(self, db, on_change_cb, parent=None):
         super().__init__(parent)
@@ -208,6 +217,10 @@ class AccountsPanel(QWidget):
                 if new_name:
                     old_name = self.db.get_account_name_by_id(acc_id)
                     if old_name and old_name != new_name:
+                        if self.db.get_account_by_name(new_name) and not _confirm_merge(
+                                self, "account", old_name, new_name, "transactions, bank IDs and rules"):
+                            item.setText(old_name)
+                            return
                         self.db.rename_account(old_name, new_name)
                         self.on_change()
             else:
@@ -279,6 +292,9 @@ class AccountsPanel(QWidget):
         if dlg.exec():
             new_name, acctid, accttype, bankid = dlg.values()
             if new_name and new_name != acc["name"]:
+                if self.db.get_account_by_name(new_name) and not _confirm_merge(
+                        self, "account", acc["name"], new_name, "transactions, bank IDs and rules"):
+                    return
                 self.db.rename_account(acc["name"], new_name)
             if acctid:
                 self.db.save_account_id(acctid, new_name or acc["name"], accttype or None, bankid or None)
@@ -672,7 +688,11 @@ class CatsRulesPanel(QWidget):
             return
         new, ok = QInputDialog.getText(self, "Rename Type", "New name:", text=data["name"])
         if ok and new.strip() and new.strip() != data["name"]:
-            self.db.rename_type(data["name"], new.strip())
+            try:
+                self.db.rename_type(data["name"], new.strip())
+            except ValueError as exc:
+                QMessageBox.warning(self, "Rename Type", str(exc))
+                return
             self.on_change()
 
     def _delete_type(self):
@@ -685,7 +705,11 @@ class CatsRulesPanel(QWidget):
         if count:
             msg += f"\n⚠️ Affects {count} transactions!"
         if QMessageBox.question(self, "Delete", msg, QMessageBox.Yes | QMessageBox.No) == QMessageBox.Yes:
-            self.db.delete_type(data["name"])
+            try:
+                self.db.delete_type(data["name"])
+            except ValueError as exc:
+                QMessageBox.warning(self, "Delete Type", str(exc))
+                return
             self.on_change()
 
     # ── Category actions ──────────────────────────────────────────────────────
@@ -710,7 +734,11 @@ class CatsRulesPanel(QWidget):
             return
         new, ok = QInputDialog.getText(self, "Rename Category", "New name:", text=data["name"])
         if ok and new.strip() and new.strip() != data["name"]:
-            self.db.rename_category(data["name"], new.strip())
+            target = self.db.get_category_by_name(new.strip(), data["type_id"]) if data["type_id"] else None
+            if target and not _confirm_merge(self, "category", data["name"], new.strip(),
+                                             "transactions, sub-categories and rules"):
+                return
+            self.db.rename_category(data["id"], new.strip())
             self.on_change()
 
     def _delete_cat(self):
@@ -748,6 +776,9 @@ class CatsRulesPanel(QWidget):
             return
         new, ok = QInputDialog.getText(self, "Rename Sub-Category", "New name:", text=data["name"])
         if ok and new.strip() and new.strip() != data["name"]:
+            if self.db.get_subcategory_by_name(new.strip(), data["category_id"]) and not _confirm_merge(
+                    self, "sub-category", data["name"], new.strip(), "transactions and rules"):
+                return
             self.db.rename_subcategory(data["id"], new.strip())
             self.on_change()
 
@@ -776,7 +807,9 @@ class CatsRulesPanel(QWidget):
         dlg = _PickCategoryDialog(cats, desc, parent=self)
         if dlg.exec():
             new_cat = dlg.selected()
-            cat = self.db.get_category_by_name(new_cat)
+            same_type = type_id or (current_cat["type_id"] if current_cat else None)
+            cat = self.db.get_category_by_name(new_cat, same_type) if same_type else \
+                self.db.get_category_by_name(new_cat)
             if cat:
                 for sub in selected_subs:
                     self.db.reparent_subcategory(sub["id"], cat["id"])

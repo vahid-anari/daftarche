@@ -33,6 +33,20 @@ MONTHS_ORDER = [
 MONTH_NUM = {m: i + 1 for i, m in enumerate(MONTHS_ORDER)}
 
 
+def rule_match_length(value, pattern):
+    """How much of a rule pattern matches ``value``: the total length of its ``|``-separated
+    terms when every term appears as whole words (case-insensitive), 0 for an empty pattern
+    (matches anything), None when it does not match."""
+    if not pattern or not pattern.strip():
+        return 0
+    terms = [t.strip() for t in pattern.split("|") if t.strip()]
+    for term in terms:
+        words = r"\s+".join(re.escape(w) for w in term.split())
+        if not re.search(rf"(?<!\w){words}(?!\w)", value or "", re.IGNORECASE):
+            return None
+    return sum(len(" ".join(t.split())) for t in terms)
+
+
 def _ymd_to_date_str(year, month, day):
     """Convert year (int), month (name str), day (int) -> 'YYYY-MM-DD'."""
     mn = MONTH_NUM.get(month, 1)
@@ -483,9 +497,22 @@ class Database:
         c.execute("CREATE INDEX IF NOT EXISTS idx_tx_tags_tx  ON transaction_tags(transaction_id)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_tx_tags_tag ON transaction_tags(tag_id)")
 
+        self._dedupe_rules()
         c.commit()
         self._seed_uncategorized()
         self._seed_transfer_categories()
+
+    def _dedupe_rules(self):
+        """One rule per (type, account, name, memo): SQLite's UNIQUE never compares empty (NULL)
+        fields, so saving a rule again used to add a copy. Keep the newest (the one meant last)."""
+        c = self.conn
+        c.execute("UPDATE import_mappings SET name=NULL WHERE TRIM(name)=''")
+        c.execute("UPDATE import_mappings SET memorandum=NULL WHERE TRIM(memorandum)=''")
+        c.execute("""DELETE FROM import_mappings WHERE id NOT IN (
+                         SELECT MAX(id) FROM import_mappings
+                         GROUP BY type_id, IFNULL(account_id, -1), IFNULL(name, ''), IFNULL(memorandum, ''))""")
+        c.execute("""CREATE UNIQUE INDEX IF NOT EXISTS ux_mapping_key ON import_mappings
+                         (type_id, IFNULL(account_id, -1), IFNULL(name, ''), IFNULL(memorandum, ''))""")
 
     def _seed_transfer_categories(self):
         for cat_name in [CAT_INTERNAL_TRANSFER, CAT_EXTERNAL_TRANSFER]:
@@ -574,10 +601,25 @@ class Database:
 
     @atomic
     def rename_type(self, old_name, new_name):
+        """Raises ValueError when another type already has ``new_name``."""
+        if self.get_type_by_name(new_name):
+            raise ValueError(f"A type named '{new_name}' already exists.")
         self.conn.execute("UPDATE types SET name=? WHERE name=?", (new_name, old_name))
 
     @atomic
     def delete_type(self, name):
+        """Raises ValueError while transactions, categories or rules still use the type."""
+        type_id = self.get_type_id(name)
+        uses = {
+            ("transaction", "transactions"): self.get_transaction_count_for_type(type_id),
+            ("category", "categories"): self.get_category_count_for_type(type_id),
+            ("rule", "rules"): self.conn.execute("SELECT COUNT(*) FROM import_mappings WHERE type_id=?",
+                                                 (type_id,)).fetchone()[0],
+        }
+        used = [f"{n} {one if n == 1 else many}" for (one, many), n in uses.items() if n]
+        if used:
+            raise ValueError(f"'{name}' is still used by {', '.join(used)}. "
+                             "Move or delete them first.")
         self.conn.execute("DELETE FROM types WHERE name=?", (name,))
 
     # ── Categories ────────────────────────────────────────────────
@@ -590,14 +632,19 @@ class Database:
             "SELECT c.*, t.name as type_name FROM categories c LEFT JOIN types t ON c.type_id=t.id ORDER BY c.name"
         ).fetchall()
 
-    def get_category_by_name(self, name, type_id=None):
+    def get_category_by_name(self, name, type_id=None, type_name=None):
+        """The category ``name``. With ``type_id``: only that type's. With ``type_name``: that
+        type's if there is one, else one without a type (Uncategorized), else any — the same
+        name can exist under several types (e.g. "Other" under Income and under Expense)."""
         if type_id is not None:
             return self.conn.execute(
                 "SELECT c.*, t.name as type_name FROM categories c LEFT JOIN types t ON c.type_id=t.id WHERE c.name=? AND c.type_id=?",
                 (name, type_id)).fetchone()
+        preferred = self.get_type_id(type_name) if type_name else None
         return self.conn.execute(
-            "SELECT c.*, t.name as type_name FROM categories c LEFT JOIN types t ON c.type_id=t.id WHERE c.name=? LIMIT 1",
-            (name,)).fetchone()
+            "SELECT c.*, t.name as type_name FROM categories c LEFT JOIN types t ON c.type_id=t.id WHERE c.name=? "
+            "ORDER BY (c.type_id IS ?) DESC, (c.type_id IS NULL) DESC, c.id LIMIT 1",
+            (name, preferred)).fetchone()
 
     def get_category_by_id(self, id_):
         return self.conn.execute(
@@ -614,21 +661,34 @@ class Database:
             return False  # already exists under same type
 
     @atomic
-    def rename_category(self, old_name, new_name):
-        old = self.get_category_by_name(old_name)
+    def rename_category(self, cat_id, new_name):
+        """Rename a category; when its type already has ``new_name``, merge into that one:
+        transactions, sub-categories (same-named ones merged too) and rules all move."""
+        old = self.get_category_by_id(cat_id)
         if not old:
             return
-        existing = self.get_category_by_name(new_name, old["type_id"])
-        if existing and existing["id"] != old["id"]:
-            self.conn.execute(
-                "UPDATE transactions SET category_id=? WHERE category_id=?",
-                (existing["id"], old["id"]))
-            self.conn.execute(
-                "UPDATE subcategories SET category_id=? WHERE category_id=?",
-                (existing["id"], old["id"]))
-            self.conn.execute("DELETE FROM categories WHERE id=?", (old["id"],))
-        else:
+        target = self.get_category_by_name(new_name, old["type_id"]) if old["type_id"] is not None else \
+            self.conn.execute("SELECT * FROM categories WHERE name=? AND type_id IS NULL", (new_name,)).fetchone()
+        if not target or target["id"] == old["id"]:
             self.conn.execute("UPDATE categories SET name=? WHERE id=?", (new_name, old["id"]))
+            return
+        for sub in self.get_subcategories(old["id"]):
+            twin = self.get_subcategory_by_name(sub["name"], target["id"])
+            if twin:
+                self._move_subcategory_contents(sub["id"], twin["id"], target["id"])
+                self.conn.execute("DELETE FROM subcategories WHERE id=?", (sub["id"],))
+            else:
+                self.conn.execute("UPDATE subcategories SET category_id=? WHERE id=?", (target["id"], sub["id"]))
+        self.conn.execute("UPDATE transactions SET category_id=? WHERE category_id=?", (target["id"], old["id"]))
+        self.conn.execute("UPDATE import_mappings SET category_id=? WHERE category_id=?", (target["id"], old["id"]))
+        self.conn.execute("DELETE FROM categories WHERE id=?", (old["id"],))
+
+    def _move_subcategory_contents(self, from_sub_id, to_sub_id, to_cat_id):
+        """Transactions and rules of one sub-category over to another (part of a merge)."""
+        self.conn.execute("UPDATE transactions SET subcategory_id=?, category_id=? WHERE subcategory_id=?",
+                          (to_sub_id, to_cat_id, from_sub_id))
+        self.conn.execute("UPDATE import_mappings SET subcategory_id=?, category_id=? WHERE subcategory_id=?",
+                          (to_sub_id, to_cat_id, from_sub_id))
 
     @atomic
     def delete_category(self, cat_id):
@@ -639,6 +699,7 @@ class Database:
                               subcategory_id=?
                           WHERE category_id = ?
                           """, (uncat_cat_id, uncat_sub_id, cat_id))
+        self.conn.execute("DELETE FROM import_mappings WHERE category_id=?", (cat_id,))
         self.conn.execute("DELETE FROM categories WHERE id=?", (cat_id,))
 
     # ── Subcategories ─────────────────────────────────────────────
@@ -677,14 +738,16 @@ class Database:
         target_cat_id = new_category_id if new_category_id else old["category_id"]
         existing = self.get_subcategory_by_name(new_name, target_cat_id)
         if existing and existing["id"] != subcat_id:
-            self.conn.execute(
-                "UPDATE transactions SET subcategory_id=? WHERE subcategory_id=?",
-                (existing["id"], subcat_id))
+            self._move_subcategory_contents(subcat_id, existing["id"], target_cat_id)
             self.conn.execute("DELETE FROM subcategories WHERE id=?", (subcat_id,))
         else:
             self.conn.execute(
                 "UPDATE subcategories SET name=?, category_id=? WHERE id=?",
                 (new_name, target_cat_id, subcat_id))
+            self.conn.execute("UPDATE transactions SET category_id=? WHERE subcategory_id=?",
+                              (target_cat_id, subcat_id))
+            self.conn.execute("UPDATE import_mappings SET category_id=? WHERE subcategory_id=?",
+                              (target_cat_id, subcat_id))
 
     @atomic
     def reparent_subcategory(self, subcat_id, new_category_id):
@@ -790,13 +853,14 @@ class Database:
         if not old:
             return
         if existing and existing["id"] != old["id"]:
-            self.conn.execute(
-                "UPDATE transactions SET account_id=? WHERE account_id=?",
-                (existing["id"], old["id"]))
-            self.conn.execute(
-                "UPDATE transactions SET to_account_id=? WHERE to_account_id=?",
-                (existing["id"], old["id"]))
-            self.conn.execute("DELETE FROM accounts WHERE id=?", (old["id"],))
+            new_id, old_id = existing["id"], old["id"]
+            self.conn.execute("UPDATE transactions SET account_id=? WHERE account_id=?", (new_id, old_id))
+            self.conn.execute("UPDATE transactions SET to_account_id=? WHERE to_account_id=?", (new_id, old_id))
+            self.conn.execute("UPDATE account_ids SET account_id=? WHERE account_id=?", (new_id, old_id))
+            # the merged-into account's own rule wins where both have the same one
+            self.conn.execute("UPDATE OR IGNORE import_mappings SET account_id=? WHERE account_id=?", (new_id, old_id))
+            self.conn.execute("DELETE FROM import_mappings WHERE account_id=?", (old_id,))
+            self.conn.execute("DELETE FROM accounts WHERE id=?", (old_id,))
         else:
             self.conn.execute("UPDATE accounts SET name=? WHERE name=?", (new_name, old_name))
 
@@ -1341,53 +1405,48 @@ class Database:
     @atomic
     def save_mapping(self, type_name, account_name, name=None, memorandum=None,
                      subcategory_id=None, category_id=None):
+        """Add a rule, or change the rule with the same type, account, name and memo."""
         type_id = self.get_type_id(type_name) if type_name else None
         acc = self.get_account_by_name(account_name) if account_name else None
         account_id = acc["id"] if acc else None
-
-        self.conn.execute("""
-                          INSERT INTO import_mappings(type_id, account_id, name, memorandum, subcategory_id, category_id)
-                          VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(type_id, account_id, name, memorandum) DO
-                          UPDATE SET
-                              subcategory_id = excluded.subcategory_id,
-                              category_id = excluded.category_id
-                          """, (type_id, account_id, name, memorandum, subcategory_id, category_id))
+        name = (name or "").strip() or None
+        memorandum = (memorandum or "").strip() or None
+        same = self.conn.execute(
+            "SELECT id FROM import_mappings WHERE type_id IS ? AND account_id IS ? AND name IS ? AND memorandum IS ?",
+            (type_id, account_id, name, memorandum)).fetchone()
+        if same:
+            self.conn.execute("UPDATE import_mappings SET subcategory_id=?, category_id=? WHERE id=?",
+                              (subcategory_id, category_id, same["id"]))
+        else:
+            self.conn.execute(
+                "INSERT INTO import_mappings(type_id, account_id, name, memorandum, subcategory_id, category_id) "
+                "VALUES (?, ?, ?, ?, ?, ?)", (type_id, account_id, name, memorandum, subcategory_id, category_id))
 
     def lookup_mapping(self, type_name, account_name, name=None, memorandum=None):
+        """The rule for a transaction, or None.
+
+        A rule's name and memo patterns are terms separated by ``|``; all of them must appear
+        as whole words (case-insensitive), so "Ali" matches "E-TRANSFER ALI" and "ALI MOHAMMAD"
+        but not "NATALIE". When several rules match, the most specific wins: the most matched
+        text, then a rule for this account over one for all accounts, then the newest rule.
+        """
         type_id = self.get_type_id(type_name) if type_name else None
+        account_id = None
         if account_name:
             acc = self.get_account_by_name(account_name)
             account_id = acc["id"] if acc else None
-        else:
-            account_id = None
-
-        def _field_matches(value, pattern):
-            if not pattern:
-                return True, 0
-            value = (value or "").lower()
-            terms = [p.strip().lower() for p in pattern.split("|")]
-            matched = all(t in value for t in terms)
-            return matched, len(terms) if matched else 0
-
-        candidates = self.conn.execute("""
-                                       SELECT *
-                                       FROM import_mappings
-                                       WHERE type_id = ?
-                                         AND (account_id = ? OR account_id IS NULL)
-                                       """, (type_id, account_id)).fetchall()
-
-        best = None
-        best_score = -1
+        candidates = self.conn.execute(
+            "SELECT * FROM import_mappings WHERE type_id = ? AND (account_id = ? OR account_id IS NULL)",
+            (type_id, account_id)).fetchall()
+        best, best_key = None, None
         for row in candidates:
-            name_ok, name_score = _field_matches(name, row["name"])
-            memo_ok, memo_score = _field_matches(memorandum, row["memorandum"])
-            if not name_ok or not memo_ok:
+            name_len = rule_match_length(name, row["name"])
+            memo_len = rule_match_length(memorandum, row["memorandum"])
+            if name_len is None or memo_len is None:
                 continue
-            score = (1 if row["account_id"] else 0) + name_score + memo_score
-            if score > best_score:
-                best_score = score
-                best = row
-
+            key = (name_len + memo_len, row["account_id"] is not None, row["id"])
+            if best_key is None or key > best_key:
+                best, best_key = row, key
         return best
 
     # ── Dashboard / Analytics ─────────────────────────────────────

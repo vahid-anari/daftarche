@@ -22,12 +22,12 @@ def rows(db):
 # ── transactions ─────────────────────────────────────────────────────────────
 
 def test_failed_method_leaves_nothing_behind(db):
-    """Renaming A into B with a bank-ID mapping on A failed after moving the transactions;
-    the half-move was committed by the next save."""
+    """A merge whose last step fails used to leave the first steps pending, and the next
+    unrelated save committed them (transactions moved, old account still there)."""
     add(db, account="A")
     add(db, account="B")
-    db.save_account_id("123", "A")
-    with pytest.raises(sqlite3.IntegrityError):
+    db.conn.execute("CREATE TRIGGER keep BEFORE DELETE ON accounts BEGIN SELECT RAISE(ABORT, 'blocked'); END")
+    with pytest.raises(sqlite3.DatabaseError, match="blocked"):
         db.rename_account("A", "B")
     db.add_tag("later")
     accounts = {r["account"] for r in db.get_transactions()}
