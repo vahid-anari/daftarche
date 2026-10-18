@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.15.1 — 2026-10-18
+
+- The button next to Search showed an empty square on macOS (its 🔍 did not fit). It now
+  says what the search looks in ("In: Name, Memo +3"); click it to change that.
+
 ## 0.15.0 — 2026-10-18
 
 - Transactions: drag a column's header to move the column; the order is kept. The Columns

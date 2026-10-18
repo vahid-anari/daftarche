@@ -298,17 +298,19 @@ class TransactionsTab(QWidget):
         self._search_timer.timeout.connect(self._on_any_filter_changed)
         self.f_search.textChanged.connect(lambda *_: self._search_timer.start())
 
-        btn_search_fields = QPushButton("🔍")
+        btn_search_fields = QPushButton()  # "In: Name, Memo +3": what the search looks in
         btn_search_fields.setProperty("class", "secondary")
-        btn_search_fields.setToolTip("Select search fields")
-        btn_search_fields.setFixedWidth(36)
+        btn_search_fields.setToolTip("Choose what the search looks in")
         btn_search_fields.clicked.connect(self._open_search_fields_dialog)
+        self.btn_search_fields = btn_search_fields
+        self._update_search_fields_label()
 
         for btn in [btn_add, btn_edit_cat, btn_match, btn_sort, btn_resort, btn_cols, btn_exp, btn_refresh]:
             title_row.addWidget(btn)
             btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
         title_row.addWidget(self.f_search, 1)
+        self.f_search.setMinimumWidth(200)
         self.f_search.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         title_row.addWidget(btn_search_fields)
         layout.addLayout(title_row)
@@ -615,11 +617,26 @@ class TransactionsTab(QWidget):
         self.refresh()
 
     # ── Search fields ────────────────────────────────────────────────────────
+    def _update_search_fields_label(self):
+        on = [label for key, label in _SEARCH_FIELD_LABELS.items() if self._search_fields.get(key)]
+        if len(on) == len(_SEARCH_FIELD_LABELS):
+            text = "In: all fields"
+        elif not on:  # the search then falls back to name, memo, category and sub-category
+            text = "In: Name, Memo +2"
+        else:
+            text = "In: " + ", ".join(on[:2]) + (f" +{len(on) - 2}" if len(on) > 2 else "")
+        self.btn_search_fields.setText(text)
+        fm = self.btn_search_fields.fontMetrics()
+        self.btn_search_fields.setFixedWidth(fm.horizontalAdvance(text) + 36)
+        self.btn_search_fields.setToolTip("The search looks in: " + (", ".join(on) or "Name, Memo, Category, "
+                                          "Sub-Category") + ". Click to change.")
+
     def _open_search_fields_dialog(self):
         dlg = SearchFieldsDialog(self._search_fields, self)
         if dlg.exec():
             self._search_fields = dlg.result_map()
             get_settings().set("search_fields", self._search_fields)
+            self._update_search_fields_label()
             self._apply_filters()
 
     # ── Column visibility ─────────────────────────────────────────────────────
