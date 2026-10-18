@@ -1009,26 +1009,21 @@ class TransactionDialog(QDialog):
         self.f_type.currentTextChanged.connect(self._on_type_changed)
         self.f_type.setMaxVisibleItems(15)
 
+        # all accounts (closed ones too), and the row's own value even if empty:
+        # a combo must never fall back to some other account on Save
+        account_names = [a["name"] for a in self.db.get_accounts()]
         self.f_account = SingleSelectCombo()
         self.f_account.setEditable(True)
-        for a in self.db.get_accounts(active_only=True):
-            self.f_account.addItem(a["name"])
-        if self.row and self.row["account"]:
-            idx = self.f_account.findText(self.row["account"])
-            if idx >= 0:
-                self.f_account.setCurrentIndex(idx)
+        self._fill_account_combo(self.f_account, account_names,
+                                 self.row["account"] if self.row else None,
+                                 blank=bool(self.row) and not self.row["account"])
         self.f_account.setMaxVisibleItems(15)
 
         self.lbl_to = QLabel("To Account:")
         self.f_to_account = SingleSelectCombo()
         self.f_to_account.setEditable(True)
-        self.f_to_account.addItem("")
-        for a in self.db.get_accounts(active_only=True):
-            self.f_to_account.addItem(a["name"])
-        if self.row and self.row["to_account"]:
-            idx = self.f_to_account.findText(self.row["to_account"])
-            if idx >= 0:
-                self.f_to_account.setCurrentIndex(idx)
+        self._fill_account_combo(self.f_to_account, account_names,
+                                 self.row["to_account"] if self.row else None, blank=True)
         self.f_to_account.setMaxVisibleItems(15)
 
         self.f_amount = QLineEdit(str(self.row["amount"]) if self.row and self.row["amount"] is not None else "")
@@ -1087,6 +1082,15 @@ class TransactionDialog(QDialog):
 
         self._on_type_changed(self.f_type.currentText())
 
+    @staticmethod
+    def _fill_account_combo(combo, names, current, blank):
+        if blank:
+            combo.addItem("")
+        combo.addItems(names)
+        if current and combo.findText(current) < 0:
+            combo.addItem(current)
+        combo.setCurrentIndex(combo.findText(current) if current else 0)
+
     def _validate_date(self, date_str):
         try:
             date.fromisoformat(date_str)
@@ -1115,6 +1119,9 @@ class TransactionDialog(QDialog):
         for c in self.db.get_categories():
             if type_filter is None or (c["type_name"] and type_filter in c["type_name"]):
                 self.f_category.addItem(c["name"])
+        if cur_cat and self.f_category.findText(cur_cat) < 0:
+            # e.g. Uncategorized (no type): keep it, never fall back to another category
+            self.f_category.insertItem(0, cur_cat)
         idx = self.f_category.findText(cur_cat)
         if idx >= 0:
             self.f_category.setCurrentIndex(idx)
@@ -1137,6 +1144,8 @@ class TransactionDialog(QDialog):
         if cat:
             for s in self.db.get_subcategories(cat["id"]):
                 self.f_subcat.addItem(s["name"])
+        if cur_sub and cat and self.f_subcat.findText(cur_sub) < 0 and cat_name == self._preset_cat:
+            self.f_subcat.insertItem(0, cur_sub)
         idx = self.f_subcat.findText(cur_sub)
         if idx >= 0:
             self.f_subcat.setCurrentIndex(idx)
@@ -1149,13 +1158,17 @@ class TransactionDialog(QDialog):
             date_str = f"{year:04d}-{mn:02d}-{day:02d}"
             self._validate_date(date_str)
             type_name = self.f_type.currentText()
-            account = self.f_account.currentText().strip()
-            to_acc = self.f_to_account.currentText().strip() if "Transfer" in type_name else None
+            account = self.f_account.currentText().strip() or None
+            to_acc = (self.f_to_account.currentText().strip() or None) if "Transfer" in type_name else None
             amount = float(self.f_amount.text())
             cat_name = self.f_category.currentText().strip()
             sub_name = self.f_subcat.currentText().strip()
             name = self.f_name.text().strip() or None
             memo = self.f_memo.text().strip() or None
+            if not cat_name or not sub_name:
+                raise ValueError("choose a category and a sub-category")
+            if not account and not (self.row and to_acc):
+                raise ValueError("choose an account")
 
             cat = self.db.get_category_by_name(cat_name)
             if not cat:
@@ -1172,7 +1185,7 @@ class TransactionDialog(QDialog):
             if self.row:
                 transfer_status = None
                 if "Transfer" in type_name:
-                    is_matched = bool(to_acc) or sub_name == SUB_MATCHED
+                    is_matched = bool(account and to_acc) or sub_name == SUB_MATCHED
                     transfer_status = TRANSFER_MATCHED if is_matched else TRANSFER_UNMATCHED
                 self.db.update_transaction(
                     self.row["id"], year=year, month=month, day=day,

@@ -61,7 +61,7 @@ def parse_ofx(content, account_name=""):
                 year = int(dtposted[0:4])
                 month_num = int(dtposted[4:6])
                 day = int(dtposted[6:8])
-                date_str = f"{year:04d}-{month_num:02d}-{day:02d}"
+                date_str = date(year, month_num, day).isoformat()  # ValueError for impossible dates
             else:
                 continue
 
@@ -507,6 +507,9 @@ class ImportTab(QWidget):
         if not path:
             return
 
+        self.parsed_rows = []
+        self.model.set_rows([])
+        self._current_account = None
         self.lbl_status.setText("📂 Opening file...")
         QApplication.processEvents()
 
@@ -655,6 +658,8 @@ class ImportTab(QWidget):
         rows = parse_ofx(self._ofx_content, account)
 
         if not rows:
+            self.parsed_rows = []
+            self.model.set_rows([])
             self.lbl_status.setText("⚠️  No transactions found. Check format or file.")
             return
 
@@ -985,62 +990,68 @@ class ImportTab(QWidget):
 
         imported = skipped_dup = 0
 
-        for r in self.parsed_rows:
-            # Skip duplicates automatically — no checkbox needed
-            fitid = r.get("fitid") or None
-            is_dup = bool(fitid and self.db.fitid_exists(fitid, account))
-            if is_dup:
-                skipped_dup += 1
-                continue
+        try:
+            with self.db.transaction():
+                for r in self.parsed_rows:
+                    # Skip duplicates automatically — no checkbox needed
+                    fitid = r.get("fitid") or None
+                    is_dup = bool(fitid and self.db.fitid_exists(fitid, account))
+                    if is_dup:
+                        skipped_dup += 1
+                        continue
 
-            type_str = r.get("type", "Expense")
-            is_transfer = "Transfer" in type_str
-            _dp = date.fromisoformat(r["date"])
+                    type_str = r.get("type", "Expense")
+                    is_transfer = "Transfer" in type_str
+                    _dp = date.fromisoformat(r["date"])
 
-            if is_transfer:
-                direction = r.get("direction", "debit")
-                from_acc = account if direction == "debit" else None
-                to_acc = None if direction == "debit" else account
-                tx_name = r.get("name") or None
-                tx_memo = r.get("memorandum") or r.get("memo") or None
-                cat_id, sub_id = self.db.get_transfer_cat_sub(
-                    description=tx_name or tx_memo or "",
-                    from_account=from_acc or "",
-                    to_account=to_acc or "",
-                    matched=False,
-                )
-                tx_id = self.db.add_transaction(
-                    _dp.year, MONTHS_ORDER[_dp.month - 1], _dp.day, type_str,
-                    from_acc, r["amount"], sub_id, cat_id,
-                    name=tx_name, memorandum=tx_memo,
-                    to_account_name=to_acc,
-                    transfer_status=TRANSFER_UNMATCHED,
-                    fitid=fitid,
-                )
-            else:
-                cat = r.get("category")
-                sub = r.get("subcategory")
-                cat_id = cat["id"] if cat else None
-                sub_id = sub["id"] if sub else None
-                if not cat_id:
-                    cat_id, _ = self.db.get_uncategorized_ids()
-                if not sub_id:
-                    _, sub_id = self.db.get_uncategorized_ids()
-                tx_name = r.get("name") or None
-                tx_memo = r.get("memorandum") or r.get("memo") or None
-                tx_id = self.db.add_transaction(
-                    _dp.year, MONTHS_ORDER[_dp.month - 1], _dp.day, type_str,
-                    account, r["amount"], sub_id, cat_id,
-                    name=tx_name, memorandum=tx_memo,
-                    fitid=fitid,
-                )
+                    if is_transfer:
+                        direction = r.get("direction", "debit")
+                        from_acc = account if direction == "debit" else None
+                        to_acc = None if direction == "debit" else account
+                        tx_name = r.get("name") or None
+                        tx_memo = r.get("memorandum") or r.get("memo") or None
+                        cat_id, sub_id = self.db.get_transfer_cat_sub(
+                            description=tx_name or tx_memo or "",
+                            from_account=from_acc or "",
+                            to_account=to_acc or "",
+                            matched=False,
+                        )
+                        tx_id = self.db.add_transaction(
+                            _dp.year, MONTHS_ORDER[_dp.month - 1], _dp.day, type_str,
+                            from_acc, r["amount"], sub_id, cat_id,
+                            name=tx_name, memorandum=tx_memo,
+                            to_account_name=to_acc,
+                            transfer_status=TRANSFER_UNMATCHED,
+                            fitid=fitid,
+                        )
+                    else:
+                        cat = r.get("category")
+                        sub = r.get("subcategory")
+                        cat_id = cat["id"] if cat else None
+                        sub_id = sub["id"] if sub else None
+                        if not cat_id:
+                            cat_id, _ = self.db.get_uncategorized_ids()
+                        if not sub_id:
+                            _, sub_id = self.db.get_uncategorized_ids()
+                        tx_name = r.get("name") or None
+                        tx_memo = r.get("memorandum") or r.get("memo") or None
+                        tx_id = self.db.add_transaction(
+                            _dp.year, MONTHS_ORDER[_dp.month - 1], _dp.day, type_str,
+                            account, r["amount"], sub_id, cat_id,
+                            name=tx_name, memorandum=tx_memo,
+                            fitid=fitid,
+                        )
 
-            # Save pre-import tags
-            tags = r.get("_tags", [])
-            if tags and tx_id:
-                self.db.set_tags_for_transaction(tx_id, [t["id"] for t in tags])
+                    # Save pre-import tags
+                    tags = r.get("_tags", [])
+                    if tags and tx_id:
+                        self.db.set_tags_for_transaction(tx_id, [t["id"] for t in tags])
 
-            imported += 1
+                    imported += 1
+        except Exception as exc:
+            QMessageBox.critical(self, "Import Failed",
+                                 f"Nothing was imported.\n\n{type(exc).__name__}: {exc}")
+            return
 
         msg = f"✅ Imported {imported} transaction{'s' if imported != 1 else ''}."
         if skipped_dup:

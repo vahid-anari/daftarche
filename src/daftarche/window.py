@@ -1,5 +1,4 @@
 import os
-import shutil
 
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QTabWidget, QWidget, QVBoxLayout,
@@ -13,7 +12,7 @@ from sciwidgets.dialogs import show_about_dialog
 
 from daftarche.db import Database
 from daftarche.app_info import APP, APP_NAME
-from daftarche.backup import copy_db, mirror_snapshots, startup_backup
+from daftarche.backup import copy_db, mirror_snapshots, restore_backup, startup_backup
 from daftarche.paths import BACKUP_DIR, DATA_DIR, DB_PATH
 from daftarche.style import build_stylesheet, get_settings, DEFAULTS
 from daftarche.widgets import StepSpinBox, SingleSelectCombo
@@ -186,7 +185,7 @@ class MainWindow(QMainWindow):
         path, _ = QFileDialog.getOpenFileName(
             self,
             "Restore Backup",
-            "",
+            str(BACKUP_DIR),
             "Database (*.db)"
         )
 
@@ -203,18 +202,22 @@ class MainWindow(QMainWindow):
         if reply != QMessageBox.Yes:
             return
 
+        if getattr(self, "_manage_dlg", None) is not None:
+            self._manage_dlg.close()
         try:
-            self.db.conn.close()
-            shutil.copy2(path, self.db_path)
-
-            self.db = Database(self.db_path)
-            self._rebuild_tabs()
-            self._refresh_all()
-
-            QMessageBox.information(self, "Restored", "Backup restored successfully.")
-
+            safety = restore_backup(self.db.conn, path)
         except Exception as exc:
-            QMessageBox.critical(self, "Restore Failed", f"Could not restore backup:\n{exc}")
+            QMessageBox.critical(self, "Restore Failed",
+                                 f"Nothing was changed.\n\n{exc}")
+            return
+
+        self.db.conn.close()
+        self.db = Database(self.db_path)
+        self._rebuild_tabs()
+        self._refresh_all()
+        QMessageBox.information(self, "Restored",
+                                f"Backup restored.\n\nYour data from before the restore was saved as\n{safety.name}\n"
+                                "in the backups folder.")
 
 
 class SettingsDialog(QDialog):

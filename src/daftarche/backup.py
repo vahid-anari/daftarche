@@ -13,7 +13,7 @@ when the folder is not there (a disconnected disk), it is skipped.
 
 import shutil
 import sqlite3
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 from daftarche.paths import BACKUP_DIR
@@ -70,3 +70,41 @@ def startup_backup(conn: sqlite3.Connection, today: date | None = None,
     except OSError as exc:
         print(f"Extra backup to {extra_dir} failed: {exc}")
     return written
+
+
+REQUIRED_TABLES = {"transactions", "accounts", "types", "categories", "subcategories"}
+
+
+def check_backup(path: Path | str) -> None:
+    """Raise ValueError (with a message for the user) unless ``path`` is a sound Daftarche database."""
+    path = Path(path)
+    with open(path, "rb") as f:
+        if f.read(16) != b"SQLite format 3\x00":
+            raise ValueError(f"{path.name} is not a database file.")
+    conn = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
+    try:
+        if conn.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+            raise ValueError(f"{path.name} is damaged (integrity check failed).")
+        tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        missing = REQUIRED_TABLES - tables
+        if missing:
+            raise ValueError(f"{path.name} is not a Daftarche database (missing: {', '.join(sorted(missing))}).")
+    finally:
+        conn.close()
+
+
+def restore_backup(conn: sqlite3.Connection, path: Path | str) -> Path:
+    """Replace the open database with the backup at ``path``; returns the copy of the data it replaced.
+
+    The backup is checked first, and the current data is saved to
+    ``backups/daftarche-before-restore-<time>.db``, so a restore can always be undone.
+    """
+    check_backup(path)
+    safety = BACKUP_DIR / f"daftarche-before-restore-{datetime.now():%Y-%m-%d-%H%M%S}.db"
+    copy_db(conn, safety)
+    source = sqlite3.connect(f"{Path(path).resolve().as_uri()}?mode=ro", uri=True)
+    try:
+        source.backup(conn)
+    finally:
+        source.close()
+    return safety

@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.5.0 — 2026-10-17
+
+Data safety fixes.
+
+- Restore checks the chosen file first (a database, not damaged, a Daftarche database)
+  and keeps a copy of the current data as `backups/daftarche-before-restore-<time>.db`;
+  a wrong file used to replace the database and stop the app from starting.
+- Every change to the database is all-or-nothing: a step that fails undoes the steps
+  before it, instead of leaving them to be saved by the next change.
+- Import is all-or-nothing too: an error part-way imports nothing, and a retry does not
+  duplicate rows. Impossible dates in a statement are skipped.
+- Loading a statement that has no transactions no longer leaves the previous file's
+  rows in the preview, where Import New would have put them in the new account.
+- Editing a transaction no longer changes its category (Uncategorized rows) or its
+  account (closed accounts, incoming transfers) when only other fields were edited.
+
 ## 0.4.0 — 2026-10-17
 
 - Menu bar inside the window (File, Edit, Help), in the app's colours, instead of

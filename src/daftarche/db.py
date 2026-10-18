@@ -1,4 +1,6 @@
 import sqlite3
+from contextlib import contextmanager
+from functools import wraps
 import pandas as pd
 import os
 import re
@@ -48,14 +50,43 @@ def _date_str_to_parts(date_str):
         return None, None, None
 
 
+def atomic(method):
+    """Run a Database method as one transaction: all its writes are kept, or none."""
+    @wraps(method)
+    def wrapper(self, *args, **kwargs):
+        with self.transaction():
+            return method(self, *args, **kwargs)
+    return wrapper
+
+
 class Database:
     def __init__(self, path):
         self.path = path
+        self._tx_depth = 0
         self.conn = sqlite3.connect(path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
         self._create_tables()
         self._migrate()
+
+    @contextmanager
+    def transaction(self):
+        """Group writes: committed together at the end, rolled back together on any error.
+
+        Nested uses (an @atomic method called inside another, or inside an import) join the
+        outer transaction, so nothing is committed until the outermost one finishes.
+        """
+        self._tx_depth += 1
+        try:
+            yield
+        except BaseException:
+            self._tx_depth -= 1
+            if self._tx_depth == 0:
+                self.conn.rollback()
+            raise
+        self._tx_depth -= 1
+        if self._tx_depth == 0:
+            self.conn.commit()
 
     # ── Schema ────────────────────────────────────────────────────
     def _create_tables(self):
@@ -533,21 +564,21 @@ class Database:
         row = self.get_type_by_name(name)
         return row["id"] if row else None
 
+    @atomic
     def add_type(self, name):
         try:
             self.conn.execute("INSERT INTO types(name) VALUES(?)", (name,))
-            self.conn.commit()
             return True
         except sqlite3.IntegrityError:
             return False
 
+    @atomic
     def rename_type(self, old_name, new_name):
         self.conn.execute("UPDATE types SET name=? WHERE name=?", (new_name, old_name))
-        self.conn.commit()
 
+    @atomic
     def delete_type(self, name):
         self.conn.execute("DELETE FROM types WHERE name=?", (name,))
-        self.conn.commit()
 
     # ── Categories ────────────────────────────────────────────────
     def get_categories(self, type_id=None):
@@ -573,15 +604,16 @@ class Database:
             "SELECT c.*, t.name as type_name FROM categories c LEFT JOIN types t ON c.type_id=t.id WHERE c.id=?",
             (id_,)).fetchone()
 
+    @atomic
     def add_category(self, name, type_name=None):
         try:
             type_id = self.get_type_id(type_name) if type_name else None
             self.conn.execute("INSERT INTO categories(name, type_id) VALUES(?,?)", (name, type_id))
-            self.conn.commit()
             return True
         except sqlite3.IntegrityError:
             return False  # already exists under same type
 
+    @atomic
     def rename_category(self, old_name, new_name):
         old = self.get_category_by_name(old_name)
         if not old:
@@ -597,8 +629,8 @@ class Database:
             self.conn.execute("DELETE FROM categories WHERE id=?", (old["id"],))
         else:
             self.conn.execute("UPDATE categories SET name=? WHERE id=?", (new_name, old["id"]))
-        self.conn.commit()
 
+    @atomic
     def delete_category(self, cat_id):
         uncat_cat_id, uncat_sub_id = self.get_uncategorized_ids()
         self.conn.execute("""
@@ -608,7 +640,6 @@ class Database:
                           WHERE category_id = ?
                           """, (uncat_cat_id, uncat_sub_id, cat_id))
         self.conn.execute("DELETE FROM categories WHERE id=?", (cat_id,))
-        self.conn.commit()
 
     # ── Subcategories ─────────────────────────────────────────────
     def get_subcategories(self, category_id=None):
@@ -630,14 +661,15 @@ class Database:
             "SELECT s.*, c.name as cat_name FROM subcategories s JOIN categories c ON s.category_id=c.id WHERE s.id=?",
             (id_,)).fetchone()
 
+    @atomic
     def add_subcategory(self, name, category_id):
         try:
             self.conn.execute("INSERT INTO subcategories(name, category_id) VALUES(?,?)", (name, category_id))
-            self.conn.commit()
             return True
         except sqlite3.IntegrityError:
             return False
 
+    @atomic
     def rename_subcategory(self, subcat_id, new_name, new_category_id=None):
         old = self.get_subcategory_by_id(subcat_id)
         if not old:
@@ -653,8 +685,8 @@ class Database:
             self.conn.execute(
                 "UPDATE subcategories SET name=?, category_id=? WHERE id=?",
                 (new_name, target_cat_id, subcat_id))
-        self.conn.commit()
 
+    @atomic
     def reparent_subcategory(self, subcat_id, new_category_id):
         old = self.get_subcategory_by_id(subcat_id)
         if not old:
@@ -681,8 +713,8 @@ class Database:
                 "UPDATE import_mappings SET category_id=? WHERE subcategory_id=?",
                 (new_category_id, subcat_id))
 
-        self.conn.commit()
 
+    @atomic
     def delete_subcategory(self, subcat_id):
         uncat_cat_id, uncat_sub_id = self.get_uncategorized_ids()
         self.conn.execute("""
@@ -692,7 +724,6 @@ class Database:
                           WHERE subcategory_id = ?
                           """, (uncat_cat_id, uncat_sub_id, subcat_id))
         self.conn.execute("DELETE FROM subcategories WHERE id=?", (subcat_id,))
-        self.conn.commit()
 
     # ── Accounts ──────────────────────────────────────────────────
     def get_accounts(self, active_only=False, visible_only=False):
@@ -736,6 +767,7 @@ class Database:
     def get_account_by_name(self, name):
         return self.conn.execute("SELECT * FROM accounts WHERE name=?", (name,)).fetchone()
 
+    @atomic
     def get_or_create_account(self, name):
         row = self.conn.execute("SELECT id FROM accounts WHERE name=?", (name,)).fetchone()
         if row:
@@ -743,15 +775,15 @@ class Database:
         used = [r["color"] for r in self.conn.execute("SELECT color FROM accounts").fetchall()]
         color = next((c for c in TAB20_COLORS if c not in used), TAB20_COLORS[0])
         cur = self.conn.execute("INSERT INTO accounts(name, color) VALUES(?,?)", (name, color))
-        self.conn.commit()
         return cur.lastrowid
 
+    @atomic
     def update_account(self, account_id, **kwargs):
         sets = ", ".join(f"{k}=?" for k in kwargs)
         self.conn.execute(f"UPDATE accounts SET {sets} WHERE id=?",
                           list(kwargs.values()) + [account_id])
-        self.conn.commit()
 
+    @atomic
     def rename_account(self, old_name, new_name):
         existing = self.get_account_by_name(new_name)
         old = self.get_account_by_name(old_name)
@@ -767,15 +799,14 @@ class Database:
             self.conn.execute("DELETE FROM accounts WHERE id=?", (old["id"],))
         else:
             self.conn.execute("UPDATE accounts SET name=? WHERE name=?", (new_name, old_name))
-        self.conn.commit()
 
+    @atomic
     def delete_account(self, account_id):
         self.conn.execute("UPDATE transactions SET account_id=NULL WHERE account_id=?", (account_id,))
         self.conn.execute("UPDATE transactions SET to_account_id=NULL WHERE to_account_id=?", (account_id,))
         self.conn.execute("UPDATE import_mappings SET account_id=NULL WHERE account_id=?", (account_id,))
         self.conn.execute("DELETE FROM account_ids WHERE account_id=?", (account_id,))
         self.conn.execute("DELETE FROM accounts WHERE id=?", (account_id,))
-        self.conn.commit()
 
     # ── Transactions ──────────────────────────────────────────────
     def get_transactions(self, filters=None):
@@ -910,6 +941,7 @@ class Database:
             result.append(d)
         return result
 
+    @atomic
     def add_transaction(self, year, month, day, type_name, account_name, amount,
                         subcategory_id, category_id, name=None, memorandum=None,
                         description=None, to_account_name=None, transfer_status=None,
@@ -935,9 +967,9 @@ class Database:
                           """, (date_str, type_id, account_id, to_account_id,
                                 amount, subcategory_id, category_id, name, memorandum,
                                 description, fitid, transfer_status))
-        self.conn.commit()
         return self.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
 
+    @atomic
     def update_transaction(self, tx_id, **kwargs):
         # Convert y/m/d -> date if passed separately
         if "year" in kwargs or "month" in kwargs or "day" in kwargs:
@@ -950,7 +982,8 @@ class Database:
         if "type_name" in kwargs:
             kwargs["type_id"] = self.get_type_id(kwargs.pop("type_name"))
         if "account_name" in kwargs:
-            kwargs["account_id"] = self.get_or_create_account(kwargs.pop("account_name"))
+            n = kwargs.pop("account_name")
+            kwargs["account_id"] = self.get_or_create_account(n) if n else None
         if "to_account_name" in kwargs:
             n = kwargs.pop("to_account_name")
             kwargs["to_account_id"] = self.get_or_create_account(n) if n else None
@@ -959,11 +992,10 @@ class Database:
         sets = ", ".join(f"{k}=?" for k in kwargs)
         self.conn.execute(f"UPDATE transactions SET {sets} WHERE id=?",
                           list(kwargs.values()) + [tx_id])
-        self.conn.commit()
 
+    @atomic
     def delete_transaction(self, tx_id):
         self.conn.execute("DELETE FROM transactions WHERE id=?", (tx_id,))
-        self.conn.commit()
 
     def fitid_exists(self, fitid, account_name):
         if not fitid:
@@ -1051,6 +1083,7 @@ class Database:
                                  WHERE ai.acctid = ?
                                  """, (acctid,)).fetchone()
 
+    @atomic
     def save_account_id(self, acctid, account_name, accttype=None, bankid=None):
         acc = self.get_account_by_name(account_name)
         if not acc:
@@ -1063,7 +1096,6 @@ class Database:
                               accttype = excluded.accttype,
                               bankid = excluded.bankid
                           """, (acctid, accttype, bankid, acc["id"]))
-        self.conn.commit()
         return True
 
     def get_all_account_ids(self):
@@ -1075,6 +1107,7 @@ class Database:
                                  """).fetchall()
 
     # ── Transfer matching ─────────────────────────────────────────
+    @atomic
     def match_unmatched_transfers(self):
         rows = self.conn.execute("""
                                  SELECT t.id,
@@ -1180,7 +1213,6 @@ class Database:
             used.add(r2["id"])
             matched += 1
 
-        self.conn.commit()
         return matched
 
     # ── Cascading filter options ───────────────────────────────────
@@ -1306,6 +1338,7 @@ class Database:
         return result
 
     # ── Import Mappings ───────────────────────────────────────────
+    @atomic
     def save_mapping(self, type_name, account_name, name=None, memorandum=None,
                      subcategory_id=None, category_id=None):
         type_id = self.get_type_id(type_name) if type_name else None
@@ -1319,7 +1352,6 @@ class Database:
                               subcategory_id = excluded.subcategory_id,
                               category_id = excluded.category_id
                           """, (type_id, account_id, name, memorandum, subcategory_id, category_id))
-        self.conn.commit()
 
     def lookup_mapping(self, type_name, account_name, name=None, memorandum=None):
         type_id = self.get_type_id(type_name) if type_name else None
@@ -1679,11 +1711,11 @@ class Database:
         ).fetchone()
         return acc, bank
 
+    @atomic
     def delete_account_id_by_account(self, account_id):
         self.conn.execute(
             "DELETE FROM account_ids WHERE account_id=?", (account_id,)
         )
-        self.conn.commit()
 
     def get_account_color_by_id(self, account_id):
         row = self.conn.execute(
@@ -1754,22 +1786,22 @@ class Database:
                                  ORDER BY a.name, m.name, m.memorandum
                                  """, (subcategory_id,)).fetchall()
 
+    @atomic
     def delete_rule(self, rule_id):
         self.conn.execute("DELETE FROM import_mappings WHERE id=?", (rule_id,))
-        self.conn.commit()
 
+    @atomic
     def delete_rule_and_save(self, rule_id, type_name, account_name,
                              name, memorandum, subcategory_id, category_id):
-        with self.conn:
-            self.conn.execute("DELETE FROM import_mappings WHERE id=?", (rule_id,))
-            self.save_mapping(
-                type_name=type_name,
-                account_name=account_name,
-                name=name,
-                memorandum=memorandum,
-                subcategory_id=subcategory_id,
-                category_id=category_id,
-            )
+        self.conn.execute("DELETE FROM import_mappings WHERE id=?", (rule_id,))
+        self.save_mapping(
+            type_name=type_name,
+            account_name=account_name,
+            name=name,
+            memorandum=memorandum,
+            subcategory_id=subcategory_id,
+            category_id=category_id,
+        )
 
     # ── Tags ──────────────────────────────────────────────────────
     def get_tags(self):
@@ -1777,25 +1809,25 @@ class Database:
             "SELECT id, name FROM tags ORDER BY name"
         ).fetchall()
 
+    @atomic
     def add_tag(self, name):
         try:
             self.conn.execute("INSERT INTO tags(name) VALUES(?)", (name,))
-            self.conn.commit()
             return True
         except sqlite3.IntegrityError:
             return False
 
+    @atomic
     def rename_tag(self, tag_id, new_name):
         try:
             self.conn.execute("UPDATE tags SET name=? WHERE id=?", (new_name, tag_id))
-            self.conn.commit()
             return True
         except sqlite3.IntegrityError:
             return False
 
+    @atomic
     def delete_tag(self, tag_id):
         self.conn.execute("DELETE FROM tags WHERE id=?", (tag_id,))
-        self.conn.commit()
 
     def get_tags_for_transaction(self, transaction_id):
         return self.conn.execute("""
@@ -1806,17 +1838,17 @@ class Database:
             ORDER BY t.name
         """, (transaction_id,)).fetchall()
 
+    @atomic
     def set_tags_for_transaction(self, transaction_id, tag_ids):
-        with self.conn:
+        self.conn.execute(
+            "DELETE FROM transaction_tags WHERE transaction_id=?",
+            (transaction_id,)
+        )
+        for tag_id in tag_ids:
             self.conn.execute(
-                "DELETE FROM transaction_tags WHERE transaction_id=?",
-                (transaction_id,)
+                "INSERT OR IGNORE INTO transaction_tags(transaction_id, tag_id) VALUES(?,?)",
+                (transaction_id, tag_id)
             )
-            for tag_id in tag_ids:
-                self.conn.execute(
-                    "INSERT OR IGNORE INTO transaction_tags(transaction_id, tag_id) VALUES(?,?)",
-                    (transaction_id, tag_id)
-                )
 
     def get_transaction_count_for_tag(self, tag_id):
         return self.conn.execute(
