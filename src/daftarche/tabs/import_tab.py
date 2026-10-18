@@ -14,7 +14,7 @@ from PySide6.QtCore import Qt, QAbstractTableModel, QModelIndex
 from PySide6.QtGui import QColor, QBrush, QKeySequence, QShortcut, QAction
 
 from daftarche.style import get_settings
-from daftarche.widgets import EditableTableView, ReadOnlyCopyDelegate, SingleSelectCombo
+from daftarche.widgets import EditableTableView, ReadOnlyCopyDelegate, SingleSelectCombo, add_subcategory_items
 from daftarche.db import (
     MONTHS_ORDER,
     TRANSFER_UNMATCHED,
@@ -191,6 +191,18 @@ COL_FITID = 9
 
 
 # PreviewModel
+
+def _without_category(rows):
+    """Income/expense rows still in the Uncategorized category."""
+    return [r for r in rows if not r.get("is_transfer")
+            and (not r.get("category") or r["category"]["name"] == UNCATEGORIZED_CAT)]
+
+
+def _category_only(row):
+    """A row with a category but sub-category "Uncategorized" (set on purpose, not a warning)."""
+    return (not row.get("is_transfer") and row.get("category") and row.get("subcategory")
+            and row["category"]["name"] != UNCATEGORIZED_CAT and row["subcategory"]["name"] == UNCATEGORIZED_SUB)
+
 class PreviewModel(QAbstractTableModel):
     def __init__(self, rows=None):
         super().__init__()
@@ -330,8 +342,7 @@ class ImportBulkCatDialog(QDialog):
         self.f_subcat.clear()
         cat = self.db.get_category_by_name(cat_name, type_name=self.row_type)
         if cat:
-            for sub in self.db.get_subcategories(cat["id"]):
-                self.f_subcat.addItem(sub["name"])
+            add_subcategory_items(self.f_subcat, self.db, cat["id"])
 
     def _accept(self):
         self.cat_name = self.f_category.currentText().strip()
@@ -343,7 +354,9 @@ class ImportBulkCatDialog(QDialog):
                                 f"There is no category '{self.cat_name}'. Pick one from the list, "
                                 "or add it in Manage first.")
             return
-        if not self.db.get_subcategory_by_name(self.sub_name, cat["id"]):
+        if self.sub_name == UNCATEGORIZED_SUB:  # category known, sub-category later
+            self.db.uncategorized_subcategory(cat["id"])
+        elif not self.db.get_subcategory_by_name(self.sub_name, cat["id"]):
             QMessageBox.warning(self, "Unknown sub-category",
                                 f"'{cat['name']}' has no sub-category '{self.sub_name}'. Pick one from the "
                                 "list, or add it in Manage first.")
@@ -763,7 +776,7 @@ class ImportTab(QWidget):
             if mapping and mapping["subcategory_id"]:
                 sub = self.db.get_subcategory_by_id(mapping["subcategory_id"])
                 cat = self.db.get_category_by_id(mapping["category_id"]) if mapping["category_id"] else None
-                if sub and cat and sub["name"] != UNCATEGORIZED_SUB:
+                if sub and cat and cat["name"] != UNCATEGORIZED_CAT:
                     r["subcategory"] = sub
                     r["category"] = cat
 
@@ -791,9 +804,15 @@ class ImportTab(QWidget):
         dups = sum(1 for r in rows if "Duplicate" in r.get("_status", ""))
         transfers = sum(1 for r in rows if r.get("is_transfer"))
         new_count = len(rows) - dups
+        new_rows = [r for r in rows if "Duplicate" not in r.get("_status", "")]
+        no_category = len(_without_category(new_rows))
+        no_subcategory = sum(1 for r in new_rows if _category_only(r))
+        new_transfers = sum(1 for r in new_rows if r.get("is_transfer"))
 
         parts = [f"{len(rows)} parsed", f"🆕 {new_count} new", f"⏭️ {dups} duplicate"]
-        if transfers: parts.append(f"🔄 {transfers} transfers")
+        if transfers: parts.append(f"🔄 {transfers} transfers ({new_transfers} new, to be matched)")
+        if no_category: parts.append(f"⚠️ {no_category} uncategorized")
+        if no_subcategory: parts.append(f"{no_subcategory} without sub-category")
         skipped = getattr(self, "_skipped", [])
         if skipped:
             parts.append(f"⚠️ {len(skipped)} unreadable (left out)")
@@ -1033,6 +1052,20 @@ class ImportTab(QWidget):
         if not account:
             QMessageBox.warning(self, "No account", "No account detected.")
             return
+        uncategorized = _without_category(
+            [r for r in self.parsed_rows if not (r.get("fitid") and self.db.fitid_exists(r["fitid"], account))])
+        if uncategorized:
+            n = len(uncategorized)
+            box = QMessageBox(QMessageBox.Question, "Uncategorized",
+                              f"{n} transaction{'s have' if n != 1 else ' has'} no category. "
+                              f"Import {'them' if n != 1 else 'it'} as Uncategorized?\n\n"
+                              "You can categorize them later (View → Uncategorized).", parent=self)
+            import_btn = box.addButton("Import", QMessageBox.AcceptRole)
+            box.addButton("Go Back", QMessageBox.RejectRole)
+            box.setDefaultButton(import_btn)
+            box.exec()
+            if box.clickedButton() is not import_btn:
+                return
 
         imported = skipped_dup = 0
 

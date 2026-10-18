@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal, QPoint, QDate, QObject, QEvent
 from PySide6.QtGui import QColor, QPainter, QPolygon, QPen
 from daftarche.style import get_settings, build_stylesheet
-from daftarche.db import MONTHS_ORDER, MONTH_NUM
+from daftarche.db import MONTHS_ORDER, MONTH_NUM, UNCATEGORIZED_SUB
 
 # Global date range bounds — pickers never go outside this window
 PICKER_MIN_YEAR, PICKER_MIN_MONTH = 2023, "August"
@@ -83,6 +83,14 @@ def fit_combo_column(table, col, combo, padding=100):
         max_w = max(max_w, w)
     table.setColumnWidth(col, max_w + padding)
 
+
+
+def add_subcategory_items(combo, db, category_id):
+    """A category's sub-categories into ``combo``, with "Uncategorized" first: picking only the
+    category is enough, and the sub-category can be set later."""
+    names = [s["name"] for s in db.get_subcategories(category_id)]
+    combo.addItem(UNCATEGORIZED_SUB)
+    combo.addItems([n for n in names if n != UNCATEGORIZED_SUB])
 
 class ReadOnlyCopyDelegate(QStyledItemDelegate):
     def createEditor(self, parent, option, index):

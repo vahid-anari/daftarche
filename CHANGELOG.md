@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.9.0 — 2026-10-18
+
+- View → Uncategorized… (⌘U): income and expense transactions still to sort, all time,
+  as a tree: fully uncategorized rows, and categories whose sub-category is still
+  Uncategorized. Double-click a line to see those transactions.
+- View → Unmatched Transfers… (⇧⌘U): transfers whose other side has not been found, per
+  account and direction (Internal and External), with a Match Transfers button.
+- The Dashboard's warning opens these windows.
+- A transaction can have a category with the sub-category left as Uncategorized (offered
+  first in the sub-category lists); an import rule may set only the category.
+- Import: the status bar counts new transfers, uncategorized rows and rows without a
+  sub-category. Importing with uncategorized rows asks first (Import / Go Back); they are
+  saved as Uncategorized.
+
 ## 0.8.2 — 2026-10-18
 
 - Settings → Splash Screen (s): how long the splash screen stays at start-up

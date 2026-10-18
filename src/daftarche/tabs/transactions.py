@@ -11,8 +11,9 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QAbstractTableModel, QModelIndex, QItemSelectionModel, QTimer
 from PySide6.QtGui import QColor, QAction, QBrush, QShortcut, QKeySequence
 
-from daftarche.db import MONTHS_ORDER, MONTH_NUM, TRANSFER_UNMATCHED, TRANSFER_MATCHED, SUB_MATCHED
+from daftarche.db import MONTHS_ORDER, MONTH_NUM, TRANSFER_UNMATCHED, TRANSFER_MATCHED, SUB_MATCHED, UNCATEGORIZED_SUB
 from daftarche.widgets import (
+    add_subcategory_items,
     CheckComboBox, PeriodSelectorWidget, SymbolButton, SingleSelectCombo, ReadOnlyCopyDelegate,
     EditableTableView, DatePicker
 )
@@ -35,6 +36,7 @@ COL_FITID = 9
 
 
 # NullDelegate  — suppresses any editor (nothing happens on double-click)
+
 class NullDelegate(QStyledItemDelegate):
     def createEditor(self, parent, option, index):
         return None
@@ -536,6 +538,29 @@ class TransactionsTab(QWidget):
         s = get_settings()
         color = s.get("income") if net >= 0 else s.get("expense")
         self.lbl_net.setStyleSheet(f"color: {color};")
+
+    def show_matching(self, types=(), accounts=(), categories=(), subcategories=()):
+        """All-time view of the transactions with these types, accounts, categories and
+        sub-categories (empty = any); used by View → Uncategorized / Unmatched Transfers."""
+        self._updating = True
+        try:
+            self.f_search.blockSignals(True)
+            self.f_search.clear()
+            self.f_search.blockSignals(False)
+            for combo in (self.f_type, self.f_account, self.f_category, self.f_subcat, self.f_tags):
+                combo.clear_selection()
+            self._period._select_preset(0, emit=False)  # "All"
+        finally:
+            self._updating = False
+        self.refresh()
+        self._updating = True
+        try:
+            for combo, values in ((self.f_type, types), (self.f_account, accounts),
+                                  (self.f_category, categories), (self.f_subcat, subcategories)):
+                combo.set_selected(list(values))
+        finally:
+            self._updating = False
+        self._on_any_filter_changed()
 
     def reset_filters(self):
         self._updating = True
@@ -1150,8 +1175,7 @@ class TransactionDialog(QDialog):
         self.f_subcat.clear()
         cat = self.db.get_category_by_name(cat_name, type_name=self.f_type.currentText())
         if cat:
-            for s in self.db.get_subcategories(cat["id"]):
-                self.f_subcat.addItem(s["name"])
+            add_subcategory_items(self.f_subcat, self.db, cat["id"])
         if cur_sub and cat and self.f_subcat.findText(cur_sub) < 0 and cat_name == self._preset_cat:
             self.f_subcat.insertItem(0, cur_sub)
         idx = self.f_subcat.findText(cur_sub)
@@ -1279,8 +1303,7 @@ class BulkCatDialog(QDialog):
         self.f_subcat.clear()
         cat = self.db.get_category_by_name(cat_name, type_name=self.row_type)
         if cat:
-            for sub in self.db.get_subcategories(cat["id"]):
-                self.f_subcat.addItem(sub["name"])
+            add_subcategory_items(self.f_subcat, self.db, cat["id"])
 
     def _accept(self):
         self.cat_name = self.f_category.currentText().strip()
@@ -1292,7 +1315,9 @@ class BulkCatDialog(QDialog):
                                 f"There is no category '{self.cat_name}'. Pick one from the list, "
                                 "or add it in Manage first.")
             return
-        if not self.db.get_subcategory_by_name(self.sub_name, cat["id"]):
+        if self.sub_name == UNCATEGORIZED_SUB:  # category known, sub-category later
+            self.db.uncategorized_subcategory(cat["id"])
+        elif not self.db.get_subcategory_by_name(self.sub_name, cat["id"]):
             QMessageBox.warning(self, "Unknown sub-category",
                                 f"'{cat['name']}' has no sub-category '{self.sub_name}'. Pick one from the "
                                 "list, or add it in Manage first.")

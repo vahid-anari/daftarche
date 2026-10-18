@@ -1470,6 +1470,58 @@ class Database:
             "tx_count": row["tx_count"] or 0,
         }
 
+    def uncategorized_subcategory(self, category_id):
+        """The "Uncategorized" sub-category of a category (category known, sub-category not yet),
+        created the first time it is needed."""
+        sub = self.get_subcategory_by_name(UNCATEGORIZED_SUB, category_id)
+        if not sub:
+            self.add_subcategory(UNCATEGORIZED_SUB, category_id)
+            sub = self.get_subcategory_by_name(UNCATEGORIZED_SUB, category_id)
+        return sub
+
+    def get_uncategorized_overview(self):
+        """All-time Income/Expense transactions without a (sub-)category, grouped.
+
+        Returns rows of {kind: "Income"|"Expense", type, category, count, total}; ``category`` is
+        "Uncategorized" for fully uncategorized rows, else the category whose sub-category is
+        "Uncategorized".
+        """
+        rows = self.conn.execute("""
+            SELECT CASE WHEN ty.name LIKE '%Income%' THEN 'Income' ELSE 'Expense' END AS kind,
+                   ty.name AS type, c.name AS category, COUNT(*) AS count, SUM(t.amount) AS total
+            FROM transactions t
+            JOIN types ty ON t.type_id = ty.id
+            JOIN categories c ON t.category_id = c.id
+            LEFT JOIN subcategories s ON t.subcategory_id = s.id
+            WHERE (ty.name LIKE '%Income%' OR ty.name LIKE '%Expense%')
+              AND (c.name = :uncat OR s.name = :uncat OR t.subcategory_id IS NULL)
+            GROUP BY kind, ty.name, c.name
+            ORDER BY kind DESC, c.name <> :uncat, c.name
+        """, {"uncat": UNCATEGORIZED_SUB}).fetchall()
+        return [{**dict(r), "total": round2(r["total"] or 0)} for r in rows]
+
+    def get_unmatched_transfer_overview(self):
+        """All-time transfers still waiting for their other side, per account.
+
+        Returns rows of {account, direction: "Outgoing"|"Incoming", type, category, count, total}.
+        """
+        rows = self.conn.execute("""
+            SELECT COALESCE(a.name, ta.name) AS account,
+                   CASE WHEN t.account_id IS NOT NULL THEN 'Outgoing' ELSE 'Incoming' END AS direction,
+                   ty.name AS type, c.name AS category, COUNT(*) AS count, SUM(t.amount) AS total
+            FROM transactions t
+            JOIN types ty ON t.type_id = ty.id
+            LEFT JOIN categories c ON t.category_id = c.id
+            LEFT JOIN accounts a ON t.account_id = a.id
+            LEFT JOIN accounts ta ON t.to_account_id = ta.id
+            WHERE ty.name LIKE '%Transfer%'
+              AND (t.transfer_status = :unmatched
+                   OR (t.transfer_status IS NULL AND (t.account_id IS NULL OR t.to_account_id IS NULL)))
+            GROUP BY account, direction, ty.name, c.name
+            ORDER BY account, direction DESC, c.name
+        """, {"unmatched": TRANSFER_UNMATCHED}).fetchall()
+        return [{**dict(r), "total": round2(r["total"] or 0)} for r in rows]
+
     def get_uncategorized_count(self, from_year, from_month, to_year, to_month):
         from_str, to_str = self._month_range_dates(from_year, from_month, to_year, to_month)
         cat_id, _ = self.get_uncategorized_ids()

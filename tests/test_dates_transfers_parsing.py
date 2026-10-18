@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest import mock
 
 import pytest
+from conftest import answer_import
 
 QFX = (Path(__file__).parent / "data" / "sample.qfx").read_text(encoding="cp1252")
 
@@ -154,7 +155,8 @@ def test_import_keeps_the_previewed_transfer_category(qapp, db, tmp_path):
          mock.patch.object(tab, "_ask_account", return_value="Person-Bank-Visa"):
         tab._browse_ofx()
     preview = {r["name"]: r["category"]["name"] for r in tab.parsed_rows if r["is_transfer"]}
-    with mock.patch("daftarche.tabs.import_tab.QMessageBox"):
+    with mock.patch("daftarche.tabs.import_tab.QMessageBox") as box:
+        answer_import(box)
         tab.import_all()
     stored = {r["name"]: r["category"] for r in db.get_transactions() if r["type"] == "Transfer"}
     assert stored == preview and stored["PAYMENT THANK YOU"] == "Internal Transfer"

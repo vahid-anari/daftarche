@@ -13,6 +13,7 @@ from sciwidgets.dialogs import show_about_dialog
 from daftarche.db import Database
 from daftarche.app_info import APP, APP_NAME
 from daftarche.backup import copy_db, mirror_snapshots, restore_backup, startup_backup
+from daftarche.overview import UncategorizedDialog, UnmatchedTransfersDialog
 from daftarche.paths import BACKUP_DIR, DATA_DIR, DB_PATH
 from daftarche.style import build_stylesheet, get_settings, DEFAULTS
 from daftarche.widgets import StepSpinBox, SingleSelectCombo
@@ -73,10 +74,24 @@ class MainWindow(QMainWindow):
         add(edit_menu, "Manage…", self._open_manage, QKeySequence("Ctrl+M"))
         add(edit_menu, "Settings…", self.open_settings, QKeySequence("Ctrl+,"))
 
+        view_menu = bar.addMenu("View")
+        add(view_menu, "Uncategorized…", self.show_uncategorized, QKeySequence("Ctrl+U"))
+        add(view_menu, "Unmatched Transfers…", self.show_unmatched_transfers, QKeySequence("Ctrl+Shift+U"))
+
         self.help_menu = bar.addMenu("Help")
         add(self.help_menu, "Show Data Folder", self._show_data_folder)
         self.help_menu.addSeparator()
         add(self.help_menu, f"About {APP_NAME}", self._show_about)
+
+    def show_uncategorized(self):
+        UncategorizedDialog(self.db, self._show_transactions, parent=self).exec()
+
+    def show_unmatched_transfers(self):
+        UnmatchedTransfersDialog(self.db, self._show_transactions, on_change=self._refresh_all, parent=self).exec()
+
+    def _show_transactions(self, **filters):
+        self.tabs.setCurrentWidget(self.transactions_tab)
+        self.transactions_tab.show_matching(**filters)
 
     def _show_data_folder(self):
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(DATA_DIR)))
@@ -107,6 +122,8 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.accounts_tab, "🏦  Accounts")
         self.tabs.addTab(self.import_tab, "📥  Import")
         self.tabs.currentChanged.connect(self._on_tab_changed)
+        self.dashboard_tab.open_overview = (  # the Dashboard's warning opens the same windows
+            lambda uncategorized: self.show_uncategorized() if uncategorized else self.show_unmatched_transfers())
         return self.tabs
 
     def _rebuild_tabs(self):

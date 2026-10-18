@@ -60,6 +60,8 @@ skipped, and saved mappings fill in the categories. Edit what is left in the
 preview, then Import New. Transactions → Match Transfers pairs the two sides of
 a transfer between your accounts. Edit → Manage… edits the types, accounts,
 categories and tags; Edit → Settings… (⌘,) changes the font and colours.
+View → Uncategorized… (⌘U) and View → Unmatched Transfers… (⇧⌘U) show what is
+still left to sort, all time; double-click a line to see those transactions.
 
 ## Your data
 

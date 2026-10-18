@@ -4,6 +4,7 @@ import sqlite3
 from unittest import mock
 
 import pytest
+from conftest import answer_import
 
 from daftarche import backup
 from daftarche.db import Database
@@ -164,7 +165,8 @@ def test_empty_second_file_does_not_import_the_first_one(qapp, db, tmp_path):
          mock.patch.object(tab, "_ask_account", return_value="Savings"):
         tab._browse_ofx()
     assert tab.parsed_rows == []
-    with mock.patch("daftarche.tabs.import_tab.QMessageBox"):
+    with mock.patch("daftarche.tabs.import_tab.QMessageBox") as box:
+        answer_import(box)
         tab.import_all()
     assert rows(db) == {}
 
@@ -183,10 +185,12 @@ def test_failed_import_imports_nothing(qapp, db, tmp_path):
 
     with mock.patch.object(db, "add_transaction", side_effect=flaky), \
          mock.patch("daftarche.tabs.import_tab.QMessageBox") as box:
+        answer_import(box)
         tab.import_all()
     assert box.critical.called
     assert rows(db) == {}
-    with mock.patch("daftarche.tabs.import_tab.QMessageBox"):
+    with mock.patch("daftarche.tabs.import_tab.QMessageBox") as box:
+        answer_import(box)
         tab.import_all()
     assert len(rows(db)) == 3
 

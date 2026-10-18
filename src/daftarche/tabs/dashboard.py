@@ -270,6 +270,7 @@ class DashboardTab(QWidget):
         except Exception:
             unmatched = 0
 
+        self._alert_uncategorized = uncategorized
         if uncategorized == 0 and unmatched == 0:
             self._alert_frame.hide()
             return
@@ -293,7 +294,12 @@ class DashboardTab(QWidget):
         )
         self._alert_frame.show()
 
+    open_overview = None  # set by the window: open_overview(uncategorized: bool)
+
     def _on_alert_clicked(self):
+        if self.open_overview:
+            self.open_overview(self._alert_uncategorized > 0)
+            return
         s = get_settings()
         from_date, to_date = self._get_effective_range()
         from_year  = from_date.year
