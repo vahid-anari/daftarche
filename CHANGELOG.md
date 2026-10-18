@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.11.0 — 2026-10-18
+
+- Charts: a Total line at the end of the category list adds up the ticked categories
+  over the range, and follows the ticks.
+- Charts: hover labels of the line and bar charts also show the month's total of the
+  ticked categories.
+
 ## 0.10.0 — 2026-10-18
 
 - Charts: Donut is a choice in the Chart list. For one month the list is Donut, Bars

@@ -88,8 +88,12 @@ class ChartsTab(QWidget):
         self._last_hover_key = None
         self._stack_overlay_widget = None
         self._refreshing_chart = False
+        self._n_chart_cats = 0
         self._wanted_chart = "Line"  # the last chart picked by hand; a one-month range shows Donut instead of a line
         self._one_month = None
+        self._month_totals = []  # per month of the chart: the ticked categories added up
+        self._total_item = None
+
 
         self._build_ui()
         self.refresh()
@@ -306,6 +310,7 @@ class ChartsTab(QWidget):
         if entry:
             cb, _ = entry
             self._apply_cb_style(cb, name, checked)
+        self._update_total_row()
         if not checked and name == self._highlighted_cat:
             self._clear_highlight()
         self._refresh_chart()
@@ -355,6 +360,7 @@ class ChartsTab(QWidget):
             cb.setChecked(True)
             self._apply_cb_style(cb, name, True)
         self._ignore_cb_changed = False
+        self._update_total_row()
         self._clear_highlight()
         self._refresh_chart()
 
@@ -364,8 +370,19 @@ class ChartsTab(QWidget):
             cb.setChecked(False)
             self._apply_cb_style(cb, name, False)
         self._ignore_cb_changed = False
+        self._update_total_row()
         self._clear_highlight()
         self._refresh_chart()
+
+    def _update_total_row(self):
+        if self._total_item is not None:
+            self._total_item.setText(f"${sum(self._cat_totals.get(n, 0) for n in self._get_selected_cats()):,.0f}")
+
+    def _with_month_total(self, text, period_index):
+        """Adds 'Month total' to a hover label when the chart has more than one category."""
+        if self._n_chart_cats > 1 and 0 <= period_index < len(self._month_totals):
+            text += f"\nMonth total   ${self._month_totals[period_index]:,.2f}"
+        return text
 
     def _get_selected_cats(self):
         return [name for name, (cb, _) in self._cat_cbs.items() if cb.isChecked()]
@@ -536,7 +553,39 @@ class ChartsTab(QWidget):
             self._apply_cb_style(cb, name, checked)
             self._cat_cbs[name] = (cb, amt_item)
 
+        self._add_total_row()
         self._ignore_cb_changed = False
+
+    def _add_total_row(self):
+        """A line, then 'Total': the ticked categories over the whole range."""
+        s = get_settings()
+        self._total_item = None
+        if not self._cat_cbs:
+            return
+        row = self._cat_table.rowCount()
+        self._cat_table.insertRow(row)
+        rule = QFrame()
+        rule.setFixedHeight(1)
+        rule.setStyleSheet(f"background: {s.get('border')};")
+        self._cat_table.setSpan(row, 0, 1, 2)
+        self._cat_table.setCellWidget(row, 0, rule)
+        self._cat_table.setRowHeight(row, 9)
+
+        bold = QFont()
+        bold.setBold(True)
+        row += 1
+        self._cat_table.insertRow(row)
+        label = QTableWidgetItem("Total")
+        label.setFont(bold)
+        label.setForeground(QColor(s.get("text")))
+        self._cat_table.setItem(row, 0, label)
+        self._total_item = QTableWidgetItem()
+        self._total_item.setFont(bold)
+        self._total_item.setForeground(QColor(s.get("text")))
+        self._total_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self._cat_table.setItem(row, 1, self._total_item)
+        self._cat_table.setRowHeight(row, 28)
+        self._update_total_row()
 
     # ── Range helper ──────────────────────────────────────────────────────────
 
@@ -637,6 +686,8 @@ class ChartsTab(QWidget):
         title = (f"Monthly {type_filter} by Category" if selected_cat == "All"
                  else f"Monthly {type_filter} - {selected_cat} (by Sub-Category)")
 
+        self._month_totals = [sum(data[p].get(c, 0) for c in all_cats) for p in all_periods]
+        self._n_chart_cats = len(all_cats)
         one_period = len(all_periods) == 1
         period_label = labels[0] if one_period else f"{labels[0]} – {labels[-1]}"
         if chart_type == "Bars":
@@ -712,7 +763,7 @@ class ChartsTab(QWidget):
                         if state and 0 <= idx < bs.count():
                             month_label = labels_ref[idx] if idx < len(labels_ref) else ""
                             value = bs.at(idx)
-                            text = f"{bs.label()}\n{month_label}   ${value:,.2f}"
+                            text = self._with_month_total(f"{bs.label()}\n{month_label}   ${value:,.2f}", idx)
                             self._active_bar_hover = (text, cat_color)
                             self.chart_view.show_hover(text, self._last_mouse_pos, cat_color)
                             self._highlight_cb(bs.label())
@@ -785,7 +836,7 @@ class ChartsTab(QWidget):
         month_label = labels[pi] if pi < len(labels) else ""
         cat_color = self._cat_colors.get(cat)
         self.chart_view.show_hover(
-            f"{cat}\n{month_label}   ${val:,.2f}",
+            self._with_month_total(f"{cat}\n{month_label}   ${val:,.2f}", pi),
             vp_pos, cat_color,
         )
         self._highlight_cb(cat)
@@ -820,7 +871,7 @@ class ChartsTab(QWidget):
 
             def on_hover(state, idx, c=cat, v=values[cat], col=color, own=i):
                 if state and idx == own:
-                    text = f"{c}\n${v:,.2f}"
+                    text = self._with_month_total(f"{c}\n${v:,.2f}", 0)
                     self._active_bar_hover = (text, col)
                     self.chart_view.show_hover(text, self._last_mouse_pos, col)
                     self._highlight_cb(c)
@@ -965,7 +1016,7 @@ class ChartsTab(QWidget):
                 dot_scene_pos = chart.mapToScene(dot_chart_pos)
                 dot_vp_pos = self.chart_view.mapFromScene(dot_scene_pos)
                 self.chart_view.show_hover(
-                    f"{cat}\n{label}   ${value:,.2f}",
+                    self._with_month_total(f"{cat}\n{label}   ${value:,.2f}", x),
                     dot_vp_pos,
                     self._cat_colors.get(cat),
                 )

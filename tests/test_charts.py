@@ -76,3 +76,22 @@ def test_donut_over_several_months_sums_the_range(charts):
     charts.f_chart_type.setCurrentText("Donut")
     assert charts._current_chart_type == "Donut"
     assert {c: s.value() for c, s in charts._donut_slices.items()} == {"Rent": 1800, "Food": 200}
+
+
+def test_total_row_adds_up_the_ticked_categories(charts):
+    charts._period._select_preset(3)
+    assert charts._total_item.text() == "$2,000"
+    charts._cat_cbs["Food"][0].setChecked(False)
+    assert charts._total_item.text() == "$1,800"
+    charts._select_no_cats()
+    assert charts._total_item.text() == "$0"
+    charts._select_all_cats()
+    assert charts._total_item.text() == "$2,000"
+
+
+def test_hover_label_shows_the_month_total(charts):
+    charts._period._select_preset(3)
+    i = len(charts._month_totals) - 1  # this month: food 120 + rent 900
+    assert charts._with_month_total("Food", i) == "Food\nMonth total   $1,020.00"
+    charts._cat_cbs["Food"][0].setChecked(False)  # one category: its value is the total
+    assert charts._with_month_total("Rent", i) == "Rent"
