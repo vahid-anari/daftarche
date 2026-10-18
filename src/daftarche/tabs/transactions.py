@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
     QScrollArea, QListWidget, QListWidgetItem
 )
 from PySide6.QtCore import Qt, QAbstractTableModel, QModelIndex, QItemSelectionModel, QTimer
-from PySide6.QtGui import QColor, QAction, QBrush, QShortcut, QKeySequence
+from PySide6.QtGui import QColor, QAction, QBrush, QShortcut, QKeySequence, QIcon, QPainter, QPen, QPixmap
 
 from daftarche.db import MONTHS_ORDER, MONTH_NUM, TRANSFER_UNMATCHED, TRANSFER_MATCHED, SUB_MATCHED
 from daftarche.widgets import (
@@ -298,11 +298,9 @@ class TransactionsTab(QWidget):
         self._search_timer.timeout.connect(self._on_any_filter_changed)
         self.f_search.textChanged.connect(lambda *_: self._search_timer.start())
 
-        btn_search_fields = QPushButton()  # "In: Name, Memo +3": what the search looks in
-        btn_search_fields.setProperty("class", "secondary")
-        btn_search_fields.setToolTip("Choose what the search looks in")
-        btn_search_fields.clicked.connect(self._open_search_fields_dialog)
-        self.btn_search_fields = btn_search_fields
+        # inside the search box, at its right end: what the search looks in (takes no room in the row)
+        self.search_fields_action = self.f_search.addAction(_filter_icon(), QLineEdit.TrailingPosition)
+        self.search_fields_action.triggered.connect(self._open_search_fields_dialog)
         self._update_search_fields_label()
 
         for btn in [btn_add, btn_edit_cat, btn_match, btn_sort, btn_resort, btn_cols, btn_exp, btn_refresh]:
@@ -310,9 +308,7 @@ class TransactionsTab(QWidget):
             btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
         title_row.addWidget(self.f_search, 1)
-        self.f_search.setMinimumWidth(200)
         self.f_search.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        title_row.addWidget(btn_search_fields)
         layout.addLayout(title_row)
 
         # ── Period selector ───────────────────────────────────────────────────
@@ -620,16 +616,15 @@ class TransactionsTab(QWidget):
     def _update_search_fields_label(self):
         on = [label for key, label in _SEARCH_FIELD_LABELS.items() if self._search_fields.get(key)]
         if len(on) == len(_SEARCH_FIELD_LABELS):
-            text = "In: all fields"
+            text = "all fields"
         elif not on:  # the search then falls back to name, memo, category and sub-category
-            text = "In: Name, Memo +2"
+            text = "Name, Memo +2"
         else:
-            text = "In: " + ", ".join(on[:2]) + (f" +{len(on) - 2}" if len(on) > 2 else "")
-        self.btn_search_fields.setText(text)
-        fm = self.btn_search_fields.fontMetrics()
-        self.btn_search_fields.setFixedWidth(fm.horizontalAdvance(text) + 36)
-        self.btn_search_fields.setToolTip("The search looks in: " + (", ".join(on) or "Name, Memo, Category, "
-                                          "Sub-Category") + ". Click to change.")
+            text = ", ".join(on[:2]) + (f" +{len(on) - 2}" if len(on) > 2 else "")
+        self.f_search.setPlaceholderText(f"Search in {text}…")
+        tip = "The search looks in: " + (", ".join(on) or "Name, Memo, Category, Sub-Category")
+        self.f_search.setToolTip(tip)
+        self.search_fields_action.setToolTip(tip + ". Click to change.")
 
     def _open_search_fields_dialog(self):
         dlg = SearchFieldsDialog(self._search_fields, self)
@@ -1009,6 +1004,21 @@ class TransactionsTab(QWidget):
             QMessageBox.warning(self, "Export Failed", f"Could not write {path}:\n{exc}")
             return
         QMessageBox.information(self, "Done", f"Exported to {path}")
+
+
+def _filter_icon():
+    """Three shrinking lines (a filter), drawn in the theme's text colour: no emoji or font needed."""
+    size = 32
+    pixmap = QPixmap(size, size)
+    pixmap.fill(Qt.transparent)
+    p = QPainter(pixmap)
+    p.setRenderHint(QPainter.Antialiasing)
+    pen = QPen(QColor(get_settings().get("text_dim") or "#999"), 3.2, Qt.SolidLine, Qt.RoundCap)
+    p.setPen(pen)
+    for i, (y, half) in enumerate(((9, 11), (16, 7), (23, 3))):
+        p.drawLine(size // 2 - half, y, size // 2 + half, y)
+    p.end()
+    return QIcon(pixmap)
 
 
 # ColumnVisibilityDialog

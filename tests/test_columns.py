@@ -72,8 +72,8 @@ def test_search_fields_button_says_where_it_looks(qapp, db, settings):
     tab = keep(T.TransactionsTab(db))
     tab._search_fields = {k: k in ("name", "memo", "note") for k in T._SEARCH_FIELD_LABELS}
     tab._update_search_fields_label()
-    assert tab.btn_search_fields.text() == "In: Name, Memo +1"
+    assert tab.f_search.placeholderText() == "Search in Name, Memo +1…"
     with mock.patch.object(T.SearchFieldsDialog, "exec", return_value=1), \
             mock.patch.object(T.SearchFieldsDialog, "result_map", return_value=dict.fromkeys(T._SEARCH_FIELD_LABELS, True)):
         tab._open_search_fields_dialog()
-    assert tab.btn_search_fields.text() == "In: all fields"
+    assert tab.f_search.placeholderText() == "Search in all fields…"

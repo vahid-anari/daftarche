@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.15.2 — 2026-10-18
+
+- The search fields moved into the search box: it reads "Search in Name, Memo +3…", and
+  the filter icon at its right end chooses the fields. The 0.15.1 button could cover the
+  search box on a narrower window.
+
 ## 0.15.1 — 2026-10-18
 
 - The button next to Search showed an empty square on macOS (its 🔍 did not fit). It now
