@@ -112,3 +112,10 @@ def test_import_notes_shows_first_then_writes(db, shop, tmp_path, monkeypatch):
     assert got[shop[2]] == ("phone case", "Uncategorized", "Uncategorized")
     assert list((tmp_path / "backups").glob("daftarche-before-notes-*.db"))
     check.conn.close()
+
+
+def test_list_categories_tool(db, shop, capsys):
+    tool("list_categories").main([str(db.path), "--totals"])
+    out = capsys.readouterr().out
+    assert "EXPENSE" in out and "  Electronics  (0 tx" in out and "      Cables  (0 tx, $0.00)" in out
+    assert "Uncategorized" in out and "$123.69" in out  # the shop rows are uncategorized
