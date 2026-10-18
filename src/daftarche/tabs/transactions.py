@@ -4,9 +4,9 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLineEdit,
     QPushButton, QLabel, QHeaderView, QAbstractItemView,
     QMenu, QMessageBox, QDialog, QFormLayout, QDialogButtonBox,
-    QCheckBox, QFrame, QGridLayout, QSizePolicy,
+    QCheckBox, QFrame, QSizePolicy,
     QStyledItemDelegate, QStyle, QFileDialog, QApplication, QTextEdit,
-    QScrollArea
+    QScrollArea, QListWidget, QListWidgetItem
 )
 from PySide6.QtCore import Qt, QAbstractTableModel, QModelIndex, QItemSelectionModel, QTimer
 from PySide6.QtGui import QColor, QAction, QBrush, QShortcut, QKeySequence
@@ -35,7 +35,29 @@ COL_TAGS = 6
 COL_NAME = 7
 COL_MEMO = 8
 COL_FITID = 9
-COL_NOTE = 10  # last: saved column and sort settings refer to columns by position
+COL_NOTE = 10  # model positions stay fixed; what you see is ordered by the header (movable)
+COLUMN_KEYS = ["date", "type", "account", "amount", "category", "subcategory", "tags", "name", "memo",
+               "fitid", "note"]  # by model column: settings save columns by these names
+DEFAULT_ORDER = ["date", "type", "account", "amount", "category", "subcategory", "tags", "name", "memo",
+                 "note", "fitid"]
+
+
+def column_settings(saved_visible, saved_order):
+    """(visible {key: bool}, order [keys]) from the saved settings, which before 0.15.0 kept
+    visibility by column position ({"9": false}) and had no order."""
+    visible = {key: True for key in COLUMN_KEYS}
+    for k, v in (saved_visible or {}).items():
+        key = COLUMN_KEYS[int(k)] if str(k).isdigit() and int(k) < len(COLUMN_KEYS) else k
+        if key in visible:
+            visible[key] = bool(v)
+    if saved_order:
+        order = [k for k in saved_order if k in COLUMN_KEYS]
+        order += [k for k in COLUMN_KEYS if k not in order]
+    elif saved_visible:  # an existing table: keep the order it had (Note last)
+        order = list(COLUMN_KEYS)
+    else:
+        order = list(DEFAULT_ORDER)
+    return visible, order
 SORT_KEYS = ["date", "type", "account", "amount", "category", "subcategory", "tags", "name", "memorandum",
              "fitid", "note"]  # by column
 
@@ -221,14 +243,9 @@ class TransactionsTab(QWidget):
             {"col": COL_DATE, "desc": True},
         ]
         saved = get_settings().get("transactions_columns")
-        if saved and isinstance(saved, dict):
-            self._visible_columns = {int(k): v for k, v in saved.items()}
-        else:
-            saved = get_settings().get("transactions_columns")
-        if saved and isinstance(saved, dict):
-            self._visible_columns = {int(k): v for k, v in saved.items()}
-        else:
-            self._visible_columns = {i: True for i in range(len(COLUMNS))}
+        order = get_settings().get("transactions_column_order")
+        self._visible_columns, self._column_order = column_settings(
+            saved if isinstance(saved, dict) else None, order if isinstance(order, list) else None)
         saved_sf = get_settings().get("search_fields")
         if saved_sf and isinstance(saved_sf, dict):
             self._search_fields = {"note": True, **saved_sf}  # Note came later: searched unless turned off
@@ -358,6 +375,8 @@ class TransactionsTab(QWidget):
         header.setStretchLastSection(False)
         header.setSortIndicatorShown(True)
         header.setSortIndicator(COL_DATE, Qt.DescendingOrder)
+        header.setSectionsMovable(True)  # drag a header to move its column
+        header.setFirstSectionMovable(True)
         header.sortIndicatorChanged.connect(self._on_header_sort)
         self.table.verticalHeader().setVisible(False)
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -371,6 +390,8 @@ class TransactionsTab(QWidget):
 
         layout.addWidget(self.table, 1)
         self._apply_column_visibility()
+        self._apply_column_order()
+        header.sectionMoved.connect(self._on_column_moved)
 
         # ── Summary bar ───────────────────────────────────────────────────────
         summary_frame = QFrame()
@@ -603,15 +624,33 @@ class TransactionsTab(QWidget):
 
     # ── Column visibility ─────────────────────────────────────────────────────
     def _apply_column_visibility(self):
-        for col, visible in self._visible_columns.items():
-            self.table.setColumnHidden(col, not visible)
+        for key, visible in self._visible_columns.items():
+            self.table.setColumnHidden(COLUMN_KEYS.index(key), not visible)
+
+    def _apply_column_order(self):
+        header = self.table.horizontalHeader()
+        header.blockSignals(True)
+        for position, key in enumerate(self._column_order):
+            header.moveSection(header.visualIndex(COLUMN_KEYS.index(key)), position)
+        header.blockSignals(False)
+
+    def _visual_columns(self):
+        """Model columns in the order they are shown."""
+        header = self.table.horizontalHeader()
+        return [header.logicalIndex(v) for v in range(header.count())]
+
+    def _on_column_moved(self, *_):
+        self._column_order = [COLUMN_KEYS[c] for c in self._visual_columns()]
+        get_settings().set("transactions_column_order", self._column_order)
 
     def _open_columns_dialog(self):
-        dlg = ColumnVisibilityDialog(self._visible_columns, self)
+        dlg = ColumnVisibilityDialog(self._visible_columns, self._column_order, self)
         if dlg.exec():
-            self._visible_columns = dlg.result_map()
+            self._visible_columns, self._column_order = dlg.result()
             get_settings().set("transactions_columns", self._visible_columns)
+            get_settings().set("transactions_column_order", self._column_order)
             self._apply_column_visibility()
+            self._apply_column_order()
 
     # ── Context menu ──────────────────────────────────────────────────────────
     def _context_menu(self, pos):
@@ -855,7 +894,7 @@ class TransactionsTab(QWidget):
         selected = self._get_selected_row_indices()
         if not selected:
             return
-        visible_cols = [i for i in range(len(COLUMNS)) if not self.table.isColumnHidden(i)]
+        visible_cols = [i for i in self._visual_columns() if not self.table.isColumnHidden(i)]  # as shown
         lines = ["\t".join(COLUMNS[i] for i in visible_cols)]
         for row_idx in selected:
             row = self.model.get_row(row_idx)
@@ -957,70 +996,93 @@ class TransactionsTab(QWidget):
 
 # ColumnVisibilityDialog
 class ColumnVisibilityDialog(QDialog):
-    def __init__(self, visible_map, parent=None):
+    """Which columns show, and in what order (▲ ▼, or drag the table's headers)."""
+
+    def __init__(self, visible, order, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Columns")
-        self.setMinimumWidth(340)
-        self._visible_map = dict(visible_map)
-        self._build()
-
-    def _build(self):
+        self.setMinimumWidth(320)
         layout = QVBoxLayout(self)
-        layout.setSpacing(12)
+        layout.setSpacing(10)
         layout.setContentsMargins(16, 16, 16, 16)
-
-        title = QLabel("Show / Hide Columns")
+        title = QLabel("Show, hide and order the columns")
         title.setStyleSheet("font-weight: bold;")
         layout.addWidget(title)
+        hint = QLabel("Tip: you can also drag a column's header in the table.")
+        hint.setProperty("class", "dim-label")
+        layout.addWidget(hint)
+
+        self.list = QListWidget()
+        self.list.setDragDropMode(QAbstractItemView.InternalMove)
+        for key in order:
+            item = QListWidgetItem(COLUMNS[COLUMN_KEYS.index(key)])
+            item.setData(Qt.UserRole, key)
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable | Qt.ItemIsDragEnabled)
+            item.setCheckState(Qt.Checked if visible.get(key, True) else Qt.Unchecked)
+            self.list.addItem(item)
+        self.list.setCurrentRow(0)
+        self.list.setMinimumHeight(self.list.sizeHintForRow(0) * len(order) + 8)
+
+        st = get_settings()
+        self.list.setStyleSheet(
+            f"QListWidget::indicator {{ width: 14px; height: 14px; border-radius: 3px; "
+            f"border: 1px solid {st.get('border')}; background: {st.get('bg_raised')}; }}"
+            f"QListWidget::indicator:checked {{ background: {st.get('accent')}; border-color: {st.get('accent')}; }}")
+        side = QVBoxLayout()
+        for shape, tip, slot in (("up", "Move up", lambda: self._move(-1)), ("down", "Move down", lambda: self._move(1))):
+            b = SymbolButton(shape, size=32)
+            b.setToolTip(tip)
+            b.clicked.connect(slot)
+            side.addWidget(b)
+        side.addStretch(1)
+        row = QHBoxLayout()
+        row.addWidget(self.list, 1)
+        row.addLayout(side)
+        layout.addLayout(row, 1)
 
         btn_row = QHBoxLayout()
-        btn_all = QPushButton("✓ All")
-        btn_none = QPushButton("✕ None")
-        btn_all.setProperty("class", "secondary")
-        btn_none.setProperty("class", "secondary")
-        btn_all.setMinimumWidth(80)
-        btn_none.setMinimumWidth(80)
-        btn_all.clicked.connect(self._select_all)
-        btn_none.clicked.connect(self._select_none)
-        btn_row.addWidget(btn_all)
-        btn_row.addWidget(btn_none)
-        btn_row.addStretch()
+        for text, slot in (("✓ All", lambda: self._check_all(True)), ("✕ None", lambda: self._check_all(False)),
+                           ("Reset", self._reset)):
+            b = QPushButton(text)
+            b.setProperty("class", "secondary")
+            b.clicked.connect(slot)
+            btn_row.addWidget(b)
+        btn_row.addStretch(1)
         layout.addLayout(btn_row)
-
-        line = QFrame()
-        line.setFrameShape(QFrame.HLine)
-        layout.addWidget(line)
-
-        grid = QGridLayout()
-        grid.setSpacing(8)
-        self._checks = {}
-        half = (len(COLUMNS) + 1) // 2
-        for idx, name in enumerate(COLUMNS):
-            cb = QCheckBox(name)
-            cb.setChecked(self._visible_map.get(idx, True))
-            self._checks[idx] = cb
-            grid.addWidget(cb, idx % half, idx // half)
-        layout.addLayout(grid)
-
-        line2 = QFrame()
-        line2.setFrameShape(QFrame.HLine)
-        layout.addWidget(line2)
 
         btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         btns.accepted.connect(self.accept)
         btns.rejected.connect(self.reject)
         layout.addWidget(btns)
 
-    def _select_all(self):
-        for cb in self._checks.values():
-            cb.setChecked(True)
+    def _move(self, step):
+        row = self.list.currentRow()
+        target = row + step
+        if row < 0 or not 0 <= target < self.list.count():
+            return
+        item = self.list.takeItem(row)
+        self.list.insertItem(target, item)
+        self.list.setCurrentRow(target)
 
-    def _select_none(self):
-        for cb in self._checks.values():
-            cb.setChecked(False)
+    def _check_all(self, checked):
+        for i in range(self.list.count()):
+            self.list.item(i).setCheckState(Qt.Checked if checked else Qt.Unchecked)
 
-    def result_map(self):
-        return {idx: cb.isChecked() for idx, cb in self._checks.items()}
+    def _reset(self):
+        """The default order, every column shown."""
+        items = {self.list.item(i).data(Qt.UserRole): self.list.item(i) for i in range(self.list.count())}
+        while self.list.count():
+            self.list.takeItem(0)
+        for key in DEFAULT_ORDER:
+            items[key].setCheckState(Qt.Checked)
+            self.list.addItem(items[key])
+        self.list.setCurrentRow(0)
+
+    def result(self):
+        """(visible {key: bool}, order [keys])."""
+        items = [self.list.item(i) for i in range(self.list.count())]
+        return ({it.data(Qt.UserRole): it.checkState() == Qt.Checked for it in items},
+                [it.data(Qt.UserRole) for it in items])
 
 
 # TransactionDialog  — Add / Edit single transaction

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.15.0 — 2026-10-18
+
+- Transactions: drag a column's header to move the column; the order is kept. The Columns
+  window (☰) shows the columns in order, with ▲ ▼ to move one and Reset for the default
+  order with every column shown.
+- Copy (Ctrl+C) follows the order on screen. Export to Excel keeps its full layout.
+- Columns are saved by name, not position (your saved choices are converted once), so new
+  columns can go anywhere: a new table shows Note right after Memorandum.
+
 ## 0.14.2 — 2026-10-18
 
 - Update Now right after a release no longer stops with "The update did not finish":
