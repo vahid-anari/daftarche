@@ -156,8 +156,8 @@ class StackedOverlay(QWidget):
                     bar_right = right_vp.x()
                 else:
                     plot = chart.plotArea()
-                    bar_left = plot.left() + plot.width() * 0.25
-                    bar_right = plot.right() - plot.width() * 0.25
+                    bar_left = plot.left() + plot.width() * 0.38
+                    bar_right = plot.right() - plot.width() * 0.38
 
                 rect = QRectF(
                     bar_left,

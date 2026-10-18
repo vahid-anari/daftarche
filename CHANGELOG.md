@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.10.0 — 2026-10-18
+
+- Charts: Donut is a choice in the Chart list. For one month the list is Donut, Bars
+  (one bar per category, largest first) and Stacked Bars; for several months it is
+  Line, Spline, Grouped Bars, Stacked Bars and Donut (each category's total over the range).
+  A line picked for several months comes back when the range does.
+
 ## 0.9.0 — 2026-10-18
 
 - View → Uncategorized… (⌘U): income and expense transactions still to sort, all time,

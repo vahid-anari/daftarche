@@ -61,6 +61,12 @@ def _months_between(first, last):
         year, month = (year + 1, 1) if month == 12 else (year, month + 1)
     return out
 
+
+MULTI_MONTH_CHARTS = ["Line", "Spline", "Grouped Bars", "Stacked Bars", "Donut"]
+ONE_MONTH_CHARTS = ["Donut", "Bars", "Stacked Bars"]
+_SAME_CHART = {"Bars": "Grouped Bars", "Grouped Bars": "Bars"}  # one name per list for the same view
+
+
 class ChartsTab(QWidget):
     def __init__(self, db):
         super().__init__()
@@ -82,6 +88,8 @@ class ChartsTab(QWidget):
         self._last_hover_key = None
         self._stack_overlay_widget = None
         self._refreshing_chart = False
+        self._wanted_chart = "Line"  # the last chart picked by hand; a one-month range shows Donut instead of a line
+        self._one_month = None
 
         self._build_ui()
         self.refresh()
@@ -118,7 +126,7 @@ class ChartsTab(QWidget):
         self.f_type.addItems(["Expense", "Income"])
         self.f_cat_selector = SingleSelectCombo("All")
         self.f_chart_type = SingleSelectCombo()
-        self.f_chart_type.addItems(["Line", "Spline", "Grouped Bars", "Stacked Bars"])
+        self.f_chart_type.addItems(MULTI_MONTH_CHARTS)
         self.chk_custom_y = QCheckBox("Use custom y")
         self.f_y_min = StepSpinBox(value=0, min_val=-999999, max_val=999999, step=100)
         self.f_y_min.setMinimumWidth(100)
@@ -130,7 +138,7 @@ class ChartsTab(QWidget):
 
         self.f_type.currentTextChanged.connect(self._on_type_changed)
         self.f_cat_selector.selectionChanged.connect(lambda *_: self._on_category_pick_changed())
-        self.f_chart_type.currentTextChanged.connect(self._refresh_chart)
+        self.f_chart_type.currentTextChanged.connect(self._on_chart_type_picked)
         self.chk_custom_y.stateChanged.connect(self._on_custom_y_toggle)
         self.f_y_min.valueChanged.connect(self._refresh_chart)
         self.f_y_max.valueChanged.connect(self._refresh_chart)
@@ -239,12 +247,38 @@ class ChartsTab(QWidget):
     # ── Event handlers ────────────────────────────────────────────────────────
 
     def _on_custom_y_toggle(self, state):
-        enabled = state == Qt.Checked.value
-        self.f_y_min.setEnabled(enabled)
-        self.f_y_max.setEnabled(enabled)
+        self._update_custom_y_enabled()
         self._refresh_chart()
 
+    def _update_custom_y_enabled(self):
+        has_y = self.f_chart_type.currentText() != "Donut"
+        self.chk_custom_y.setEnabled(has_y)
+        self.f_y_min.setEnabled(has_y and self.chk_custom_y.isChecked())
+        self.f_y_max.setEnabled(has_y and self.chk_custom_y.isChecked())
+
+    def _on_chart_type_picked(self, text):
+        if text:
+            self._wanted_chart = text
+        self._update_custom_y_enabled()
+        self._refresh_chart()
+
+    def _refresh_chart_choices(self):
+        """One month: Donut, Bars, Stacked Bars. Several: Line, Spline, both bars and Donut."""
+        from_year, from_month, to_year, to_month = self._get_range()
+        one_month = bool(from_year) and (from_year, from_month) == (to_year, to_month)
+        if one_month == self._one_month:
+            return
+        self._one_month = one_month
+        items = ONE_MONTH_CHARTS if one_month else MULTI_MONTH_CHARTS
+        wanted = self._wanted_chart
+        pick = wanted if wanted in items else _SAME_CHART.get(wanted)
+        if pick not in items:
+            pick = "Donut"
+        self.f_chart_type.set_items(items, include_all=False, selected=pick, emit=False)
+        self._update_custom_y_enabled()
+
     def _on_range_or_account_changed(self):
+        self._refresh_chart_choices()
         self._refresh_category_picker()
         self._refresh_cat_list()
         self._refresh_chart()
@@ -395,6 +429,7 @@ class ChartsTab(QWidget):
         self.chart_view.refresh_hover_style()
 
         self._refresh_account_filter()
+        self._refresh_chart_choices()
         self._refresh_category_picker()
         self._refresh_cat_list()
         self._period.refresh_style()
@@ -602,12 +637,25 @@ class ChartsTab(QWidget):
         title = (f"Monthly {type_filter} by Category" if selected_cat == "All"
                  else f"Monthly {type_filter} - {selected_cat} (by Sub-Category)")
 
-        # ── Single period → donut chart ───────────────────────────────────────
-        if len(all_periods) == 1:
-            self._build_donut_chart(
-                data, all_periods[0], all_cats, labels[0], title
-            )
+        one_period = len(all_periods) == 1
+        period_label = labels[0] if one_period else f"{labels[0]} – {labels[-1]}"
+        if chart_type == "Bars":
+            chart_type = "Grouped Bars"
+        if chart_type in ("Line", "Spline") and one_period:  # a line needs two months
+            chart_type = "Donut"
+
+        if chart_type == "Donut":  # the whole range: each category's total
+            totals = {cat: sum(data[p].get(cat, 0) for p in all_periods) for cat in all_cats}
+            if not one_period:
+                title = title.removeprefix("Monthly ")
+            self._build_donut_chart(totals, all_cats, period_label, title)
             return
+
+        if one_period:
+            title = f"{title}  —  {period_label}"
+            if chart_type == "Grouped Bars":
+                self._build_one_month_bars(data[all_periods[0]], all_cats, title)
+                return
 
         chart = make_chart(title, animated=animated)
         chart.legend().setVisible(False)
@@ -625,9 +673,6 @@ class ChartsTab(QWidget):
             max_val = max(all_vals) if all_vals else 0
             ax_y.setRange(0, max(max_val * 1.1, 1))
         chart.addAxis(ax_y, Qt.AlignLeft)
-
-        if chart_type in ("Line", "Spline") and len(all_periods) == 1:
-            chart_type = "Grouped Bars"
 
         self._current_chart_type = chart_type
 
@@ -745,7 +790,55 @@ class ChartsTab(QWidget):
         )
         self._highlight_cb(cat)
 
-    # ── Donut chart (single period) ───────────────────────────────────────────
+    # ── One month as bars: a bar per category, largest first ──────────────────
+
+    def _build_one_month_bars(self, values, all_cats, title):
+        cats = [c for c in sorted(all_cats, key=lambda c: values.get(c, 0), reverse=True) if values.get(c, 0) > 0]
+        if not cats:
+            self._show_empty_chart("No data for selected period", animated=True)
+            return
+        self._current_chart_type = "Grouped Bars"
+        chart = make_chart(title, animated=True)
+        chart.legend().setVisible(False)
+        ax_x = make_x_axis(cats)
+        chart.addAxis(ax_x, Qt.AlignBottom)
+        ax_y = make_y_axis()
+        if self.chk_custom_y.isChecked():
+            ax_y.setRange(self.f_y_min.value(), self.f_y_max.value())
+        else:
+            ax_y.setRange(0, max(values[cats[0]] * 1.1, 1))
+        chart.addAxis(ax_y, Qt.AlignLeft)
+
+        # one set per category, zero everywhere but its own place: every bar keeps its colour and full width
+        series = QStackedBarSeries()
+        for i, cat in enumerate(cats):
+            color = self._cat_colors.get(cat, TAB20_COLORS[i % len(TAB20_COLORS)])
+            bar_set = QBarSet(cat)
+            bar_set.setColor(QColor(color))
+            for j in range(len(cats)):
+                bar_set.append(values[cat] if j == i else 0)
+
+            def on_hover(state, idx, c=cat, v=values[cat], col=color, own=i):
+                if state and idx == own:
+                    text = f"{c}\n${v:,.2f}"
+                    self._active_bar_hover = (text, col)
+                    self.chart_view.show_hover(text, self._last_mouse_pos, col)
+                    self._highlight_cb(c)
+                else:
+                    self._active_bar_hover = None
+                    self.chart_view.hide_hover()
+                    self._highlight_cb(None)
+
+            bar_set.hovered.connect(on_hover)
+            series.append(bar_set)
+        series.setBarWidth(0.6)
+        chart.addSeries(series)
+        series.attachAxis(ax_x)
+        series.attachAxis(ax_y)
+        self.chart_view.setChart(chart)
+        style_chart_view(self.chart_view)
+
+    # ── Donut chart (totals over the range) ───────────────────────────────────
 
     def _donut_center_pos(self):
         chart = self.chart_view.chart()
@@ -786,11 +879,10 @@ class ChartsTab(QWidget):
             self.chart_view.hide_hover()
             self._highlight_cb(None)
 
-    def _build_donut_chart(self, data, period, all_cats, period_label, title):
+    def _build_donut_chart(self, period_data, all_cats, period_label, title):
         s = get_settings()
         self._current_chart_type = "Donut"
 
-        period_data = data.get(period, {})
         all_cats = sorted(
             all_cats,
             key=lambda c: period_data.get(c, 0),
