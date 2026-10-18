@@ -5,12 +5,12 @@ from PySide6.QtWidgets import (
     QToolButton, QListWidget, QListWidgetItem, QWidget,
     QVBoxLayout, QHBoxLayout, QPushButton, QFrame,
     QApplication, QSizePolicy, QLabel, QGridLayout,
-    QLineEdit, QComboBox, QStyledItemDelegate, QTableView
+    QLineEdit, QComboBox, QStyledItemDelegate, QTableView, QMessageBox
 )
 from PySide6.QtCore import Qt, Signal, QPoint, QDate, QObject, QEvent
 from PySide6.QtGui import QColor, QPainter, QPolygon, QPen
 from daftarche.style import get_settings, build_stylesheet
-from daftarche.db import MONTHS_ORDER, MONTH_NUM, UNCATEGORIZED_SUB
+from daftarche.db import MONTHS_ORDER, MONTH_NUM, UNCATEGORIZED_CAT, UNCATEGORIZED_SUB
 
 # Global date range bounds — pickers never go outside this window
 PICKER_MIN_YEAR, PICKER_MIN_MONTH = 2023, "August"
@@ -91,6 +91,60 @@ def add_subcategory_items(combo, db, category_id):
     names = [s["name"] for s in db.get_subcategories(category_id)]
     combo.addItem(UNCATEGORIZED_SUB)
     combo.addItems([n for n in names if n != UNCATEGORIZED_SUB])
+
+
+def _same_name(names, typed):
+    """The existing name written differently ("pets" for "Pets"), else ``typed``."""
+    return next((n for n in names if n.casefold() == typed.casefold()), typed)
+
+
+def confirm_category(parent, db, type_name, cat_name, sub_name):
+    """Check a typed category and sub-category; a new one is added after asking.
+
+    Returns ``(category, sub-category)`` as they are now named in the database (an empty
+    sub-category means Uncategorized), or None when the user goes back to fix the names.
+    """
+    cat_name, sub_name = (cat_name or "").strip(), (sub_name or "").strip() or UNCATEGORIZED_SUB
+    if not cat_name:
+        QMessageBox.warning(parent, "Category", "Choose a category.")
+        return None
+    type_id = db.get_type_id(type_name) if type_name else None
+    if cat_name.casefold() == UNCATEGORIZED_CAT.casefold():
+        cat = db.get_category_by_name(UNCATEGORIZED_CAT)
+    else:
+        own = db.get_categories(type_id) if type_id else db.get_categories()
+        cat_name = _same_name([c["name"] for c in own], cat_name)
+        cat = next((c for c in own if c["name"] == cat_name), None)
+    if cat:
+        cat_name = cat["name"]
+        sub_name = _same_name([x["name"] for x in db.get_subcategories(cat["id"])] + [UNCATEGORIZED_SUB], sub_name)
+    new_sub = sub_name != UNCATEGORIZED_SUB and not (cat and db.get_subcategory_by_name(sub_name, cat["id"]))
+
+    if not cat or new_sub:
+        if not cat:
+            kind = f" to {type_name}" if type_name else ""
+            text = f"Add the category \"{cat_name}\"{kind}"
+            text += f", with the sub-category \"{sub_name}\"?" if new_sub else "?"
+        else:
+            text = f"Add the sub-category \"{sub_name}\" to \"{cat_name}\"?"
+        box = QMessageBox(QMessageBox.Question, "New Category" if not cat else "New Sub-Category", text,
+                          parent=parent)
+        add = box.addButton("Add", QMessageBox.AcceptRole)
+        box.addButton("Go Back", QMessageBox.RejectRole)
+        box.setDefaultButton(add)
+        box.exec()
+        if box.clickedButton() is not add:
+            return None
+
+    with db.transaction():
+        if not cat:
+            db.add_category(cat_name, type_name)
+            cat = db.get_category_by_name(cat_name, type_name=type_name)
+        if sub_name == UNCATEGORIZED_SUB:
+            db.uncategorized_subcategory(cat["id"])
+        elif new_sub:
+            db.add_subcategory(sub_name, cat["id"])
+    return cat_name, sub_name
 
 class ReadOnlyCopyDelegate(QStyledItemDelegate):
     def createEditor(self, parent, option, index):

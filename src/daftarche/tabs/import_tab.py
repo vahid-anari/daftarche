@@ -14,7 +14,7 @@ from PySide6.QtCore import Qt, QAbstractTableModel, QModelIndex
 from PySide6.QtGui import QColor, QBrush, QKeySequence, QShortcut, QAction
 
 from daftarche.style import get_settings
-from daftarche.widgets import EditableTableView, ReadOnlyCopyDelegate, SingleSelectCombo, add_subcategory_items
+from daftarche.widgets import EditableTableView, ReadOnlyCopyDelegate, SingleSelectCombo, add_subcategory_items, confirm_category
 from daftarche.db import (
     MONTHS_ORDER,
     TRANSFER_UNMATCHED,
@@ -345,23 +345,12 @@ class ImportBulkCatDialog(QDialog):
             add_subcategory_items(self.f_subcat, self.db, cat["id"])
 
     def _accept(self):
-        self.cat_name = self.f_category.currentText().strip()
-        self.sub_name = self.f_subcat.currentText().strip()
-        # the combos accept typing: a name that does not exist used to be saved as "no category"
-        cat = self.db.get_category_by_name(self.cat_name, type_name=self.row_type) if self.cat_name else None
-        if not cat:
-            QMessageBox.warning(self, "Unknown category",
-                                f"There is no category '{self.cat_name}'. Pick one from the list, "
-                                "or add it in Manage first.")
-            return
-        if self.sub_name == UNCATEGORIZED_SUB:  # category known, sub-category later
-            self.db.uncategorized_subcategory(cat["id"])
-        elif not self.db.get_subcategory_by_name(self.sub_name, cat["id"]):
-            QMessageBox.warning(self, "Unknown sub-category",
-                                f"'{cat['name']}' has no sub-category '{self.sub_name}'. Pick one from the "
-                                "list, or add it in Manage first.")
-            return
-        self.accept()
+        # the combos accept typing: a new name is added after asking, a typo can go back
+        names = confirm_category(self, self.db, self.row_type,
+                                 self.f_category.currentText(), self.f_subcat.currentText())
+        if names:
+            self.cat_name, self.sub_name = names
+            self.accept()
 
 
 # ImportTagPickerDialog

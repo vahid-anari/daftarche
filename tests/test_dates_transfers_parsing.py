@@ -164,15 +164,42 @@ def test_import_keeps_the_previewed_transfer_category(qapp, db, tmp_path):
 
 # ── typed category names ─────────────────────────────────────────────────────
 
-def test_bulk_edit_refuses_unknown_names(qapp, db):
+def _bulk_dialog_answer(dialog, cat_text, sub_text, add):
+    """Type the names, press OK; a "new category" question is answered Add or Go Back."""
+    dialog.f_category.setCurrentText(cat_text)
+    dialog.f_subcat.setCurrentText(sub_text)
+    with mock.patch("daftarche.widgets.QMessageBox") as box_class, mock.patch.object(dialog, "accept") as accept:
+        box = box_class.return_value
+        box.clickedButton.return_value = box.addButton.return_value if add else None
+        dialog._accept()
+    return accept.called, box_class.called
+
+
+def test_bulk_edit_asks_before_adding_names(qapp, db):
     from daftarche.tabs.transactions import BulkCatDialog
     db.add_category("Food", "Expense")
-    db.add_subcategory("Groceries", db.get_category_by_name("Food", type_name="Expense")["id"])
+    food = db.get_category_by_name("Food", type_name="Expense")["id"]
+    db.add_subcategory("Groceries", food)
     dialog = BulkCatDialog(db, "Expense")
-    for cat_text, sub_text, ok in [("Costco", "x", False), ("Food", "Costco", False), ("Food", "Groceries", True)]:
-        dialog.f_category.setCurrentText(cat_text)
-        dialog.f_subcat.setCurrentText(sub_text)
-        with mock.patch("daftarche.tabs.transactions.QMessageBox.warning") as warning, \
-             mock.patch.object(dialog, "accept") as accept:
-            dialog._accept()
-        assert accept.called is ok and warning.called is not ok
+
+    assert _bulk_dialog_answer(dialog, "Food", "Groceries", add=False) == (True, False)  # known: no question
+    assert _bulk_dialog_answer(dialog, "food", "groceries", add=False) == (True, False)  # same names
+    assert (dialog.cat_name, dialog.sub_name) == ("Food", "Groceries")
+
+    assert _bulk_dialog_answer(dialog, "Pets", "Vet", add=False) == (False, True)  # Go Back: nothing added
+    assert db.get_category_by_name("Pets") is None
+
+    assert _bulk_dialog_answer(dialog, "Pets", "Vet", add=True) == (True, True)
+    pets = db.get_category_by_name("Pets", type_name="Expense")
+    assert pets["type_name"] == "Expense" and db.get_subcategory_by_name("Vet", pets["id"])
+
+    assert _bulk_dialog_answer(dialog, "Food", "Snacks", add=True) == (True, True)
+    assert db.get_subcategory_by_name("Snacks", food)
+
+
+def test_income_category_is_not_an_expense_one(qapp, db):
+    from daftarche.tabs.transactions import BulkCatDialog
+    db.add_category("Other", "Expense")
+    dialog = BulkCatDialog(db, "Income")
+    assert _bulk_dialog_answer(dialog, "Other", "Uncategorized", add=True) == (True, True)  # asked: new for Income
+    assert db.get_category_by_name("Other", type_name="Income")["type_name"] == "Income"

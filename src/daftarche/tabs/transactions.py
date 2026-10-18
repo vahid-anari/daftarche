@@ -11,9 +11,9 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QAbstractTableModel, QModelIndex, QItemSelectionModel, QTimer
 from PySide6.QtGui import QColor, QAction, QBrush, QShortcut, QKeySequence
 
-from daftarche.db import MONTHS_ORDER, MONTH_NUM, TRANSFER_UNMATCHED, TRANSFER_MATCHED, SUB_MATCHED, UNCATEGORIZED_SUB
+from daftarche.db import MONTHS_ORDER, MONTH_NUM, TRANSFER_UNMATCHED, TRANSFER_MATCHED, SUB_MATCHED
 from daftarche.widgets import (
-    add_subcategory_items,
+    add_subcategory_items, confirm_category,
     CheckComboBox, PeriodSelectorWidget, SymbolButton, SingleSelectCombo, ReadOnlyCopyDelegate,
     EditableTableView, DatePicker
 )
@@ -1193,25 +1193,18 @@ class TransactionDialog(QDialog):
             account = self.f_account.currentText().strip() or None
             to_acc = (self.f_to_account.currentText().strip() or None) if "Transfer" in type_name else None
             amount = float(self.f_amount.text())
-            cat_name = self.f_category.currentText().strip()
-            sub_name = self.f_subcat.currentText().strip()
             name = self.f_name.text().strip() or None
             memo = self.f_memo.text().strip() or None
-            if not cat_name or not sub_name:
-                raise ValueError("choose a category and a sub-category")
             if not account and not (self.row and to_acc):
                 raise ValueError("choose an account")
-
+            names = confirm_category(self, self.db, type_name,
+                                     self.f_category.currentText(), self.f_subcat.currentText())
+            if not names:
+                return
+            cat_name, sub_name = names
             cat = self.db.get_category_by_name(cat_name, type_name=type_name)
-            if not cat:
-                self.db.add_category(cat_name, type_name)
-                cat = self.db.get_category_by_name(cat_name, type_name=type_name)
             cat_id = cat["id"]
-
             sub = self.db.get_subcategory_by_name(sub_name, cat_id)
-            if not sub:
-                self.db.add_subcategory(sub_name, cat_id)
-                sub = self.db.get_subcategory_by_name(sub_name, cat_id)
             sub_id = sub["id"] if sub else None
 
             if self.row:
@@ -1306,23 +1299,12 @@ class BulkCatDialog(QDialog):
             add_subcategory_items(self.f_subcat, self.db, cat["id"])
 
     def _accept(self):
-        self.cat_name = self.f_category.currentText().strip()
-        self.sub_name = self.f_subcat.currentText().strip()
-        # the combos accept typing: a name that does not exist used to be saved as "no category"
-        cat = self.db.get_category_by_name(self.cat_name, type_name=self.row_type) if self.cat_name else None
-        if not cat:
-            QMessageBox.warning(self, "Unknown category",
-                                f"There is no category '{self.cat_name}'. Pick one from the list, "
-                                "or add it in Manage first.")
-            return
-        if self.sub_name == UNCATEGORIZED_SUB:  # category known, sub-category later
-            self.db.uncategorized_subcategory(cat["id"])
-        elif not self.db.get_subcategory_by_name(self.sub_name, cat["id"]):
-            QMessageBox.warning(self, "Unknown sub-category",
-                                f"'{cat['name']}' has no sub-category '{self.sub_name}'. Pick one from the "
-                                "list, or add it in Manage first.")
-            return
-        self.accept()
+        # the combos accept typing: a new name is added after asking, a typo can go back
+        names = confirm_category(self, self.db, self.row_type,
+                                 self.f_category.currentText(), self.f_subcat.currentText())
+        if names:
+            self.cat_name, self.sub_name = names
+            self.accept()
 
 
 # TagPickerDialog  — small popup to assign tags to a single transaction

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.12.0 — 2026-10-18
+
+- Edit Category / Sub-Category (Transactions and Import) and Edit Transaction: a new
+  category or sub-category can be typed in; it is added after asking (Add / Go Back),
+  so a typo is not saved as a new name. A name typed in other letter case ("pets") uses
+  the existing one, and a category is only reused from the row's own type.
+
 ## 0.11.0 — 2026-10-18
 
 - Charts: a Total line at the end of the category list adds up the ticked categories
