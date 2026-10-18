@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.13.0 — 2026-10-18
+
+- A new Edit Category / Sub-Category window (Transactions and Import tabs):
+  - both names can be typed (the list narrows to names containing what is typed) or
+    picked; a green "New" marks a name that will be added when you press OK;
+  - below, the rules of the chosen sub-category: account, name and memo can be edited,
+    × removes a rule, and a new rule (account All, the transaction's name and memo to
+    trim) is added with Add;
+  - "Also apply the new rule to N matching uncategorized transactions" categorizes the
+    others the new rule matches (in the Import tab: the rows of the preview);
+  - nothing is saved before OK.
+- The category boxes of Edit Transaction can be typed in too (0.12.0 asked, but the
+  boxes did not take typing); clicking into a box selects its text.
+
 ## 0.12.0 — 2026-10-18
 
 - Edit Category / Sub-Category (Transactions and Import) and Edit Transaction: a new

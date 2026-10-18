@@ -1414,6 +1414,29 @@ class Database:
                 "INSERT INTO import_mappings(type_id, account_id, name, memorandum, subcategory_id, category_id) "
                 "VALUES (?, ?, ?, ?, ?, ?)", (type_id, account_id, name, memorandum, subcategory_id, category_id))
 
+    def get_rule_id(self, type_name, account_name, name=None, memorandum=None):
+        """The id of the rule with exactly this type, account (None = all), name and memo."""
+        type_id = self.get_type_id(type_name) if type_name else None
+        acc = self.get_account_by_name(account_name) if account_name else None
+        row = self.conn.execute(
+            "SELECT id FROM import_mappings WHERE type_id IS ? AND account_id IS ? AND name IS ? AND memorandum IS ?",
+            (type_id, acc["id"] if acc else None, (name or "").strip() or None,
+             (memorandum or "").strip() or None)).fetchone()
+        return row["id"] if row else None
+
+    def get_uncategorized_rows(self, type_name):
+        """Transactions of a type with no category, or with sub-category Uncategorized."""
+        return self.conn.execute(
+            """SELECT t.id, a.name AS account, t.name, t.memorandum
+               FROM transactions t
+                    JOIN types ty ON ty.id = t.type_id
+                    LEFT JOIN accounts a ON a.id = t.account_id
+                    LEFT JOIN categories c ON c.id = t.category_id
+                    LEFT JOIN subcategories s ON s.id = t.subcategory_id
+               WHERE ty.name = ? AND (t.category_id IS NULL OR t.subcategory_id IS NULL
+                                      OR c.name = ? OR s.name = ?)""",
+            (type_name, UNCATEGORIZED_CAT, UNCATEGORIZED_SUB)).fetchall()
+
     def lookup_mapping(self, type_name, account_name, name=None, memorandum=None):
         """The rule for a transaction, or None.
 

@@ -17,6 +17,7 @@ from daftarche.widgets import (
     CheckComboBox, PeriodSelectorWidget, SymbolButton, SingleSelectCombo, ReadOnlyCopyDelegate,
     EditableTableView, DatePicker
 )
+from daftarche.category_dialog import CategoryDialog
 from daftarche.style import get_settings
 
 COLUMNS = [
@@ -659,29 +660,51 @@ class TransactionsTab(QWidget):
             self.table.edit(index)
 
     def _bulk_edit_cat_for_row(self, row_idx):
-        row = self.model.get_row(row_idx)
-        row_type = row["type"] or ""
-        dlg = BulkCatDialog(self.db, row_type, self,
-                            preset_cat=row.get("category"),
-                            preset_sub=row.get("subcategory"))
-        if dlg.exec():
-            cat_name = dlg.cat_name
-            sub_name = dlg.sub_name
-            cat = self.db.get_category_by_name(cat_name, type_name=row_type) if cat_name else None
-            sub = self.db.get_subcategory_by_name(sub_name, cat["id"]) if (cat and sub_name) else None
-            row_id = row["id"]
-            scroll_pos = self.table.verticalScrollBar().value()
-            self.db.update_transaction(
-                row["id"],
-                category_id=cat["id"] if cat else None,
-                subcategory_id=sub["id"] if sub else None,
-            )
-            self._notify_change()
-            self.table.verticalScrollBar().setValue(scroll_pos)
-            for i, r in enumerate(self.model._rows):
-                if r["id"] == row_id:
-                    self.table.selectRow(i)
-                    break
+        self._edit_categories([row_idx])
+
+    def _category_dialog(self, row_type, rows):
+        """Edit Category / Sub-Category for ``rows`` (all of ``row_type``), with the rules."""
+        first = rows[0]
+        if len(rows) == 1:
+            about = "  ·  ".join(x for x in (first.get("name") or first.get("memorandum"), first.get("account"),
+                                             f"${first['amount']:,.2f}" if first.get("amount") is not None else "")
+                                 if x)
+        else:
+            about = f"{len(rows)} transactions"
+        own = {r["id"] for r in rows}
+        candidates = [{"key": c["id"], "account": c["account"], "name": c["name"], "memo": c["memorandum"]}
+                      for c in self.db.get_uncategorized_rows(row_type) if c["id"] not in own]
+        same = len({(r.get("category"), r.get("subcategory")) for r in rows}) == 1
+        return CategoryDialog(
+            self.db, row_type, self,
+            preset_cat=first.get("category") if same else None,
+            preset_sub=first.get("subcategory") if same else None,
+            about=about,
+            default_rule=(first.get("name") or "", first.get("memorandum") or "") if len(rows) == 1 else None,
+            candidates=candidates,
+        )
+
+    def _edit_categories(self, row_indices):
+        rows = [self.model.get_row(i) for i in row_indices]
+        row_type = rows[0]["type"] or ""
+        dlg = self._category_dialog(row_type, rows)
+        if not dlg.exec():
+            return
+        cat = self.db.get_category_by_name(dlg.cat_name, type_name=row_type)
+        sub = self.db.get_subcategory_by_name(dlg.sub_name, cat["id"]) if cat else None
+        ids = [r["id"] for r in rows]
+        scroll_pos = self.table.verticalScrollBar().value()
+        with self.db.transaction():
+            for tx_id in ids + list(dlg.apply_keys):
+                self.db.update_transaction(tx_id, category_id=cat["id"] if cat else None,
+                                           subcategory_id=sub["id"] if sub else None)
+        self._notify_change()
+        self.table.verticalScrollBar().setValue(scroll_pos)
+        self.table.clearSelection()
+        for i, r in enumerate(self.model._rows):
+            if r["id"] in ids:
+                self.table.selectionModel().select(
+                    self.model.index(i, 0), QItemSelectionModel.Select | QItemSelectionModel.Rows)
 
     def _edit_tags_for_row(self, row_idx):
         row = self.model.get_row(row_idx)
@@ -711,31 +734,7 @@ class TransactionsTab(QWidget):
                                 "All selected rows must have the same type (Income/Expense/Transfer).\n"
                                 f"You selected: {', '.join(sorted(types))}")
             return
-        row_type = types.pop()
-        dlg = BulkCatDialog(self.db, row_type, self)
-        if dlg.exec():
-            cat_name = dlg.cat_name
-            sub_name = dlg.sub_name
-            cat = self.db.get_category_by_name(cat_name, type_name=row_type) if cat_name else None
-            sub = self.db.get_subcategory_by_name(sub_name, cat["id"]) if (cat and sub_name) else None
-            scroll_pos = self.table.verticalScrollBar().value()
-            selected_ids = [self.model.get_row(i)["id"] for i in selected]
-            for row_idx in selected:
-                row = self.model.get_row(row_idx)
-                self.db.update_transaction(
-                    row["id"],
-                    category_id=cat["id"] if cat else None,
-                    subcategory_id=sub["id"] if sub else None,
-                )
-            self._notify_change()
-            self.table.verticalScrollBar().setValue(scroll_pos)
-            self.table.clearSelection()
-            for i, r in enumerate(self.model._rows):
-                if r["id"] in selected_ids:
-                    self.table.selectionModel().select(
-                        self.model.index(i, 0),
-                        QItemSelectionModel.Select | QItemSelectionModel.Rows,
-                    )
+        self._edit_categories(selected)
 
     def _add_tags_to_selected(self):
         selected = self._get_selected_row_indices()
@@ -1063,12 +1062,12 @@ class TransactionDialog(QDialog):
         self.f_amount.setPlaceholderText("0.00")
 
         self.f_category = SingleSelectCombo()
-        self.f_category.setEditable(True)
+        self.f_category.allow_typing()
         self.f_category.currentTextChanged.connect(self._refresh_subcats)
         self.f_category.setMaxVisibleItems(15)
 
         self.f_subcat = SingleSelectCombo()
-        self.f_subcat.setEditable(True)
+        self.f_subcat.allow_typing()
         self.f_subcat.setMaxVisibleItems(15)
 
         # populated later by _on_type_changed → _refresh_cats
@@ -1236,75 +1235,6 @@ class TransactionDialog(QDialog):
             self.accept()
         except ValueError as e:
             QMessageBox.warning(self, "Error", f"Invalid input: {e}")
-
-
-# BulkCatDialog  — edit category/sub-category for multiple rows at once
-class BulkCatDialog(QDialog):
-    def __init__(self, db, row_type, parent=None, preset_cat=None, preset_sub=None):
-        super().__init__(parent)
-        self.db = db
-        self.row_type = row_type
-        self.cat_name = ""
-        self.sub_name = ""
-        self._preset_cat = preset_cat
-        self._preset_sub = preset_sub
-        self.setWindowTitle("Edit Category / Sub-Category")
-        self.setMinimumWidth(360)
-        self._build()
-
-    def _build(self):
-        layout = QVBoxLayout(self)
-        layout.setSpacing(12)
-        form = QFormLayout()
-        form.setSpacing(10)
-
-        self.f_category = SingleSelectCombo()
-        self.f_category.setEditable(True)
-        type_filter = (
-            "Income" if "Income" in self.row_type else
-            "Expense" if "Expense" in self.row_type else None
-        )
-        for c in self.db.get_categories():
-            if type_filter is None or (c["type_name"] and type_filter in c["type_name"]):
-                self.f_category.addItem(c["name"])
-        if self._preset_cat:
-            idx = self.f_category.findText(self._preset_cat)
-            if idx >= 0:
-                self.f_category.setCurrentIndex(idx)
-        self.f_category.currentTextChanged.connect(self._refresh_subcats)
-        self.f_category.setMaxVisibleItems(15)
-        form.addRow("Category:", self.f_category)
-
-        self.f_subcat = SingleSelectCombo()
-        self.f_subcat.setEditable(True)
-        self._refresh_subcats(self.f_category.currentText())
-        if self._preset_sub:
-            idx = self.f_subcat.findText(self._preset_sub)
-            if idx >= 0:
-                self.f_subcat.setCurrentIndex(idx)
-        self.f_subcat.setMaxVisibleItems(15)
-        form.addRow("Sub-Category:", self.f_subcat)
-        layout.addLayout(form)
-
-        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        btns.accepted.connect(self._accept)
-        btns.rejected.connect(self.reject)
-        layout.addWidget(btns)
-
-    def _refresh_subcats(self, cat_name=None):
-        cat_name = cat_name or self.f_category.currentText()
-        self.f_subcat.clear()
-        cat = self.db.get_category_by_name(cat_name, type_name=self.row_type)
-        if cat:
-            add_subcategory_items(self.f_subcat, self.db, cat["id"])
-
-    def _accept(self):
-        # the combos accept typing: a new name is added after asking, a typo can go back
-        names = confirm_category(self, self.db, self.row_type,
-                                 self.f_category.currentText(), self.f_subcat.currentText())
-        if names:
-            self.cat_name, self.sub_name = names
-            self.accept()
 
 
 # TagPickerDialog  — small popup to assign tags to a single transaction

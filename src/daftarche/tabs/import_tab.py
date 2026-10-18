@@ -8,13 +8,14 @@ from PySide6.QtWidgets import (
     QAbstractItemView, QHeaderView,
     QMessageBox, QCheckBox, QFileDialog, QDialog, QDialogButtonBox,
     QApplication, QFrame, QScrollArea, QStyledItemDelegate,
-    QMenu, QFormLayout
+    QMenu
 )
 from PySide6.QtCore import Qt, QAbstractTableModel, QModelIndex
 from PySide6.QtGui import QColor, QBrush, QKeySequence, QShortcut, QAction
 
 from daftarche.style import get_settings
-from daftarche.widgets import EditableTableView, ReadOnlyCopyDelegate, SingleSelectCombo, add_subcategory_items, confirm_category
+from daftarche.category_dialog import CategoryDialog
+from daftarche.widgets import EditableTableView, ReadOnlyCopyDelegate, SingleSelectCombo
 from daftarche.db import (
     MONTHS_ORDER,
     TRANSFER_UNMATCHED,
@@ -282,75 +283,6 @@ class PreviewModel(QAbstractTableModel):
 class NullDelegate(QStyledItemDelegate):
     def createEditor(self, parent, option, index):
         return None
-
-
-# ImportBulkCatDialog
-class ImportBulkCatDialog(QDialog):
-    def __init__(self, db, row_type, parent=None, preset_cat=None, preset_sub=None):
-        super().__init__(parent)
-        self.db = db
-        self.row_type = row_type
-        self.cat_name = ""
-        self.sub_name = ""
-        self._preset_cat = preset_cat
-        self._preset_sub = preset_sub
-        self.setWindowTitle("Edit Category / Sub-Category")
-        self.setMinimumWidth(360)
-        self._build()
-
-    def _build(self):
-        layout = QVBoxLayout(self)
-        layout.setSpacing(12)
-        form = QFormLayout()
-        form.setSpacing(10)
-
-        self.f_category = SingleSelectCombo()
-        self.f_category.setEditable(True)
-        type_filter = (
-            "Income" if "Income" in self.row_type else
-            "Expense" if "Expense" in self.row_type else None
-        )
-        for c in self.db.get_categories():
-            if type_filter is None or (c["type_name"] and type_filter in c["type_name"]):
-                self.f_category.addItem(c["name"])
-        if self._preset_cat:
-            idx = self.f_category.findText(self._preset_cat)
-            if idx >= 0:
-                self.f_category.setCurrentIndex(idx)
-        self.f_category.currentTextChanged.connect(self._refresh_subcats)
-        self.f_category.setMaxVisibleItems(15)
-        form.addRow("Category:", self.f_category)
-
-        self.f_subcat = SingleSelectCombo()
-        self.f_subcat.setEditable(True)
-        self._refresh_subcats(self.f_category.currentText())
-        if self._preset_sub:
-            idx = self.f_subcat.findText(self._preset_sub)
-            if idx >= 0:
-                self.f_subcat.setCurrentIndex(idx)
-        self.f_subcat.setMaxVisibleItems(15)
-        form.addRow("Sub-Category:", self.f_subcat)
-        layout.addLayout(form)
-
-        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        btns.accepted.connect(self._accept)
-        btns.rejected.connect(self.reject)
-        layout.addWidget(btns)
-
-    def _refresh_subcats(self, cat_name=None):
-        cat_name = cat_name or self.f_category.currentText()
-        self.f_subcat.clear()
-        cat = self.db.get_category_by_name(cat_name, type_name=self.row_type)
-        if cat:
-            add_subcategory_items(self.f_subcat, self.db, cat["id"])
-
-    def _accept(self):
-        # the combos accept typing: a new name is added after asking, a typo can go back
-        names = confirm_category(self, self.db, self.row_type,
-                                 self.f_category.currentText(), self.f_subcat.currentText())
-        if names:
-            self.cat_name, self.sub_name = names
-            self.accept()
 
 
 # ImportTagPickerDialog
@@ -825,25 +757,45 @@ class ImportTab(QWidget):
         # Status / Date / Amount — no action
 
     def _edit_cat_for_row(self, row_idx):
-        row = self.model.get_row(row_idx)
-        if row.get("is_transfer"):
-            return
-        cat = row.get("category")
-        sub = row.get("subcategory")
-        dlg = ImportBulkCatDialog(
-            self.db, row.get("type", "Expense"), self,
-            preset_cat=cat["name"] if cat else None,
-            preset_sub=sub["name"] if sub else None,
+        if not self.model.get_row(row_idx).get("is_transfer"):
+            self._edit_categories([row_idx], self.model.get_row(row_idx).get("type", "Expense"))
+
+    def _edit_categories(self, row_indices, row_type):
+        """Edit Category / Sub-Category (with the rules) for preview rows; new rules can also
+        categorize other uncategorized rows of the preview."""
+        rows = [self.model.get_row(i) for i in row_indices]
+        first = rows[0]
+        if len(rows) == 1:
+            about = "  ·  ".join(x for x in (first.get("name") or first.get("memorandum"), self._current_account,
+                                             f"${first['amount']:,.2f}") if x)
+        else:
+            about = f"{len(rows)} transactions"
+        names = {(r["category"]["name"] if r.get("category") else None,
+                  r["subcategory"]["name"] if r.get("subcategory") else None) for r in rows}
+        preset_cat, preset_sub = names.pop() if len(names) == 1 else (None, None)
+        candidates = [
+            {"key": i, "account": self._current_account, "name": r.get("name") or r.get("description") or "",
+             "memo": r.get("memorandum") or r.get("memo") or ""}
+            for i, r in enumerate(self.parsed_rows)
+            if i not in row_indices and r.get("type") == row_type and "Duplicate" not in r.get("_status", "")
+            and (_without_category([r]) or _category_only(r))]
+        dlg = CategoryDialog(
+            self.db, row_type, self, preset_cat=preset_cat, preset_sub=preset_sub, about=about,
+            default_rule=(first.get("name") or "", first.get("memorandum") or "") if len(rows) == 1 else None,
+            candidates=candidates,
         )
-        if dlg.exec():
-            new_cat = (self.db.get_category_by_name(dlg.cat_name, type_name=row.get("type"))
-                       if dlg.cat_name else None)
-            new_sub = (self.db.get_subcategory_by_name(dlg.sub_name, new_cat["id"])
-                       if (new_cat and dlg.sub_name) else None)
-            row["category"] = new_cat
-            row["subcategory"] = new_sub
-            self._refresh_status_for_row(row_idx)
-            self._emit_row_changed(row_idx)
+        if not dlg.exec():
+            return
+        cat = self.db.get_category_by_name(dlg.cat_name, type_name=row_type)
+        sub = self.db.get_subcategory_by_name(dlg.sub_name, cat["id"]) if cat else None
+        for i in list(row_indices) + list(dlg.apply_keys):
+            row = self.model.get_row(i)
+            row["category"] = cat
+            row["subcategory"] = sub
+            self._refresh_status_for_row(i)
+        self.model.dataChanged.emit(self.model.index(0, 0),
+                                    self.model.index(self.model.rowCount() - 1, len(PREVIEW_COLS) - 1))
+        self._update_status_bar()
 
     def _edit_tags_for_row(self, row_idx):
         row = self.model.get_row(row_idx)
@@ -910,20 +862,7 @@ class ImportTab(QWidget):
             return
         types = set(self.model.get_row(i)["type"] for i in non_transfer)
         row_type = types.pop() if len(types) == 1 else "Expense"
-        dlg = ImportBulkCatDialog(self.db, row_type, self)
-        if dlg.exec():
-            new_cat = self.db.get_category_by_name(dlg.cat_name, type_name=row_type) if dlg.cat_name else None
-            new_sub = (self.db.get_subcategory_by_name(dlg.sub_name, new_cat["id"])
-                       if (new_cat and dlg.sub_name) else None)
-            for row_idx in non_transfer:
-                row = self.model.get_row(row_idx)
-                row["category"] = new_cat
-                row["subcategory"] = new_sub
-                self._refresh_status_for_row(row_idx)
-            self.model.dataChanged.emit(
-                self.model.index(non_transfer[0], 0),
-                self.model.index(non_transfer[-1], len(PREVIEW_COLS) - 1),
-            )
+        self._edit_categories(non_transfer, row_type)
 
     def _bulk_add_tags(self):
         selected = self._get_selected_row_indices()

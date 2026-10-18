@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
     QApplication, QSizePolicy, QLabel, QGridLayout,
     QLineEdit, QComboBox, QStyledItemDelegate, QTableView, QMessageBox
 )
-from PySide6.QtCore import Qt, Signal, QPoint, QDate, QObject, QEvent
+from PySide6.QtCore import Qt, Signal, QPoint, QDate, QObject, QEvent, QTimer
 from PySide6.QtGui import QColor, QPainter, QPolygon, QPen
 from daftarche.style import get_settings, build_stylesheet
 from daftarche.db import MONTHS_ORDER, MONTH_NUM, UNCATEGORIZED_CAT, UNCATEGORIZED_SUB
@@ -61,6 +61,7 @@ def _setup_combo_editing(combo):
         le.blockSignals(False)
 
     le.selectionChanged.connect(_deselect)
+    combo._deselect = _deselect
 
     class _ClickFilter(QObject):
         def eventFilter(self, obj, event):
@@ -613,6 +614,26 @@ class SingleSelectCombo(QComboBox):
     def current_text(self):
         t = self.currentText().strip()
         return t if t else "All"
+
+    def allow_typing(self, hint="Pick from the list, or type a new name"):
+        """Unlock the text: a name can be typed as well as picked (the ▼ still opens the list)."""
+        le = self.lineEdit()
+        le.setReadOnly(False)
+        le.removeEventFilter(self._click_filter)
+        le.selectionChanged.disconnect(self._deselect)
+        le.setStyleSheet("QLineEdit { padding: 0; margin: 0; }")
+        self.setInsertPolicy(QComboBox.NoInsert)
+        self.setToolTip(hint)
+
+        class _SelectOnFocus(QObject):  # clicking in selects the name, so typing replaces it
+            def eventFilter(self_, obj, event):
+                if event.type() == QEvent.FocusIn:
+                    QTimer.singleShot(0, le.selectAll)
+                return False
+
+        self._select_on_focus = _SelectOnFocus(le)
+        le.installEventFilter(self._select_on_focus)
+        self.installEventFilter(self._select_on_focus)  # focus often arrives at the combo itself
 
     def addItem(self, text, userData=None):
         if userData is not None:

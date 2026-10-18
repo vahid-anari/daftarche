@@ -59,14 +59,12 @@ def test_unmatched_transfer_overview(data):
 
 
 def test_uncategorized_subcategory_is_offered_first(qapp, db):
-    from daftarche.tabs.transactions import BulkCatDialog
+    from daftarche.category_dialog import CategoryDialog
     food = category(db, "Food")
     db.add_subcategory("Groceries", food)
-    dialog = BulkCatDialog(db, "Expense")
+    dialog = CategoryDialog(db, "Expense")
     dialog.f_category.setCurrentText("Food")
-    dialog._refresh_subcats("Food")
     assert [dialog.f_subcat.itemText(i) for i in range(dialog.f_subcat.count())] == [UNCATEGORIZED_SUB, "Groceries"]
-    dialog.f_subcat.setCurrentText(UNCATEGORIZED_SUB)
     with mock.patch.object(dialog, "accept") as accept:
         dialog._accept()
     assert accept.called and db.get_subcategory_by_name(UNCATEGORIZED_SUB, food)
