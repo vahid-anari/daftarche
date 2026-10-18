@@ -156,3 +156,12 @@ def test_transactions_tab_applies_the_new_rule(qapp, db, food, tmp_path):
     cats = {r["name"]: (r["category"], r["subcategory"]) for r in db.get_transactions()}
     assert cats == {"COSTCO #1": ("Food", "Groceries"), "COSTCO #2": ("Food", "Groceries"),
                     "NOFRILLS": ("Uncategorized", "Uncategorized")}
+
+
+def test_switching_names_leaves_no_old_rows_behind(qapp, db, food):
+    from PySide6.QtWidgets import QWidget
+    d = dialog(db, preset_cat="Food", preset_sub="Groceries")
+    for sub in ("Snacks", "Groceries", "Uncategorized", "Groceries"):
+        d.f_subcat.setCurrentText(sub)
+    shown = [w for w in d._grid_host.findChildren(QWidget) if w.parent() is d._grid_host]
+    assert len(shown) == d._grid.count()

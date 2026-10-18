@@ -5,9 +5,8 @@ sub-category (marked "New") is created then, together with the rule changes. Rul
 can also be applied to other uncategorized transactions (the caller's ``candidates``).
 """
 
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QCheckBox, QCompleter, QDialog, QDialogButtonBox, QFormLayout, QFrame, QGridLayout, QHBoxLayout,
+    QCheckBox, QDialog, QDialogButtonBox, QFormLayout, QFrame, QGridLayout, QHBoxLayout,
     QLabel, QLineEdit, QMessageBox, QPushButton, QScrollArea, QVBoxLayout, QWidget,
 )
 
@@ -35,10 +34,6 @@ def _rule_matches(rule, account, name, memo):
 def _typing_combo():
     combo = SingleSelectCombo()
     combo.allow_typing()
-    completer = combo.completer()
-    completer.setFilterMode(Qt.MatchContains)
-    completer.setCaseSensitivity(Qt.CaseInsensitive)
-    completer.setCompletionMode(QCompleter.PopupCompletion)
     return combo
 
 
@@ -233,20 +228,24 @@ class CategoryDialog(QDialog):
         self._shown_key = key if has_rules else None
         while self._grid.count():
             item = self._grid.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
+            widget = item.widget()
+            if widget:  # off the window now: deleteLater alone waits until this dialog closes
+                widget.hide()
+                widget.setParent(None)
+                widget.deleteLater()
+        for r in range(self._grid.rowCount()):
+            self._grid.setRowStretch(r, 0)
         self._rule_rows = []
         if not has_rules:
             return
         self.rules_title.setText(f"Rules for {cat_name} › {sub_name}")
-        for col, title in enumerate(("Account", "Name", "Memo")):
+        entries = [e for e in self._entries_for(key, cat, sub_name) if not e["deleted"]]
+        for col, title in enumerate(("Account", "Name", "Memo") if entries else ()):
             head = QLabel(title)
             head.setProperty("class", "dim-label")
             self._grid.addWidget(head, 0, col)
         row = 1
-        for entry in self._entries_for(key, cat, sub_name):
-            if entry["deleted"]:
-                continue
+        for entry in entries:
             account_v, name_v, memo_v = entry["values"]
             account = self._account_combo(account_v)
             name, memo = QLineEdit(name_v), QLineEdit(memo_v)

@@ -580,6 +580,23 @@ QDialogButtonBox QPushButton {{ min-width: 80px; padding: 7px 16px; }}
 
 
 # Public builder
+def popup_list_stylesheet(s: Settings | None = None) -> str:
+    """A free-standing list popup (e.g. a combo's completer) in the theme's combo-list colours."""
+    v = _style_vars(s or get_settings())
+    return f"""
+QAbstractItemView {{
+    background: {v['raised']};
+    color: {v['txt']};
+    border: 1px solid {v['bdr']};
+    selection-background-color: {v['ac_item']};
+    selection-color: {v['txt']};
+    outline: none;
+}}
+QAbstractItemView::item {{ padding: 6px 10px; min-height: 28px; }}
+QAbstractItemView::item:hover {{ background: {v['ac_item']}; }}
+"""
+
+
 def build_stylesheet(s: Settings | None = None) -> str:
     """Build and return the full application QSS string."""
     if s is None:

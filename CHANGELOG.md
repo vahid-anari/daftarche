@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.13.1 — 2026-10-18
+
+- Edit Category / Sub-Category: the list of suggestions while typing uses the theme's
+  colours (it was white), and switching names no longer leaves the old rule rows
+  painted at the bottom of the window.
+
 ## 0.13.0 — 2026-10-18
 
 - A new Edit Category / Sub-Category window (Transactions and Import tabs):

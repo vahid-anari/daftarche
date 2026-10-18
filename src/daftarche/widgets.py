@@ -5,11 +5,11 @@ from PySide6.QtWidgets import (
     QToolButton, QListWidget, QListWidgetItem, QWidget,
     QVBoxLayout, QHBoxLayout, QPushButton, QFrame,
     QApplication, QSizePolicy, QLabel, QGridLayout,
-    QLineEdit, QComboBox, QStyledItemDelegate, QTableView, QMessageBox
+    QLineEdit, QComboBox, QStyledItemDelegate, QTableView, QMessageBox, QCompleter
 )
 from PySide6.QtCore import Qt, Signal, QPoint, QDate, QObject, QEvent, QTimer
 from PySide6.QtGui import QColor, QPainter, QPolygon, QPen
-from daftarche.style import get_settings, build_stylesheet
+from daftarche.style import get_settings, build_stylesheet, popup_list_stylesheet
 from daftarche.db import MONTHS_ORDER, MONTH_NUM, UNCATEGORIZED_CAT, UNCATEGORIZED_SUB
 
 # Global date range bounds — pickers never go outside this window
@@ -624,6 +624,11 @@ class SingleSelectCombo(QComboBox):
         le.setStyleSheet("QLineEdit { padding: 0; margin: 0; }")
         self.setInsertPolicy(QComboBox.NoInsert)
         self.setToolTip(hint)
+        completer = self.completer()  # suggestions while typing: names containing the text
+        completer.setFilterMode(Qt.MatchContains)
+        completer.setCaseSensitivity(Qt.CaseInsensitive)
+        completer.setCompletionMode(QCompleter.PopupCompletion)
+        completer.popup().setStyleSheet(popup_list_stylesheet())  # a top-level list: not themed by the window
 
         class _SelectOnFocus(QObject):  # clicking in selects the name, so typing replaces it
             def eventFilter(self_, obj, event):
