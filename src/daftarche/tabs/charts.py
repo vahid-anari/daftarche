@@ -631,11 +631,9 @@ class ChartsTab(QWidget):
                      {**base, "categories": [name], "subcategories": [sub]}) for sub, v in items]
             title = f"<b>{name}</b><br>{when}<br>{money(sum(v for _, v in items))}"
         else:
-            filters = {"type": [type_filter], "category": [selected_cat], "subcategory": [name],
-                       "from_day": from_day, "to_day": to_day}
-            if accounts:
-                filters["account"] = list(accounts)
-            txs = self.db.get_transactions(filters)
+            # lines: a split transaction shows here only with its part in this sub-category
+            txs = self.db.get_transaction_lines(type_filter, from_day, to_day, category=selected_cat,
+                                                subcategory=name, account_names=accounts or None)
             open_filters = {**base, "categories": [selected_cat], "subcategories": [name]}
             rows = [(f"{MONTHS_ORDER[int(t['date'][5:7]) - 1][:3]} {int(t['date'][8:10])}",
                      ": ".join(x for x in (t["merchant"], t["note"]) if x) or t["name"] or t["memorandum"] or "",

@@ -177,6 +177,19 @@ class TxModel(QAbstractTableModel):
             row["name"], row["memorandum"], row["fitid"], row.get("note"), row.get("merchant"),
         ]
         val = keys_vals[col]
+        parts = row.get("parts") or []
+        if parts and col in (COL_CAT, COL_SUBCAT):  # split: "Split (n)", the parts on hover
+            shared = len({p["category"] for p in parts}) == 1
+            if role == Qt.DisplayRole:
+                if col == COL_CAT:
+                    return parts[0]["category"] if shared else f"Split ({len(parts)})"
+                return f"Split ({len(parts)})" if shared else "—"
+            if role == Qt.ToolTipRole:
+                return "\n".join(f"{money(p['amount'])}   {p['category']} › {p['subcategory']}"
+                                 + (f"  ·  {p['note']}" if p.get("note") else "") for p in parts)
+            if role == Qt.ForegroundRole:
+                return QBrush(QColor(get_settings().get("accent")))
+            return None
         no_sub = col == COL_SUBCAT and _category_only(row)
 
         if role == Qt.DisplayRole:
@@ -674,8 +687,10 @@ class TransactionsTab(QWidget):
         self._apply_filters()
 
     def _update_summary(self):
-        income = sum(r["amount"] for r in self._current_rows if r["type"] and "Income" in r["type"])
-        expense = sum(r["amount"] for r in self._current_rows if r["type"] and "Expense" in r["type"])
+        # a split row filtered by category counts only its parts in that category
+        income = sum(r.get("shown_amount", r["amount"]) for r in self._current_rows if r["type"] and "Income" in r["type"])
+        expense = sum(r.get("shown_amount", r["amount"]) for r in self._current_rows
+                      if r["type"] and "Expense" in r["type"])
         transfer = sum(r["amount"] for r in self._current_rows if r["type"] and "Transfer" in r["type"])
         net = income - expense
 
@@ -816,6 +831,10 @@ class TransactionsTab(QWidget):
 
         edit_label = "✏️  Edit Merchant / Category" if n == 1 else "✏️  Bulk Edit Merchant / Category"
         menu.addAction(QAction(edit_label, self, triggered=self._bulk_edit_cat))
+        if n == 1:
+            parts = self.model.get_row(selected[0]).get("parts")
+            menu.addAction(QAction("✂️  Change Split…" if parts else "✂️  Split…", self,
+                                   triggered=lambda: self.split_row(selected[0])))
         menu.addAction(QAction("🏷️  Add Tags", self, triggered=self._add_tags_to_selected))
         menu.addSeparator()
         menu.addAction(QAction(f"📋  Copy {n} row{'s' if n > 1 else ''}", self, triggered=self._copy_selected))
@@ -853,12 +872,38 @@ class TransactionsTab(QWidget):
         col = index.column()
         if col in (COL_DATE, COL_TYPE, COL_ACCOUNT, COL_AMOUNT):
             self._edit_row(index)
+        elif col in (COL_CAT, COL_SUBCAT) and self.model.get_row(index.row()).get("parts"):
+            self.split_row(index.row())
+        elif col == COL_MERCHANT and self.model.get_row(index.row()).get("parts"):
+            self._edit_row(index)  # the whole window: it keeps the split
         elif col in (COL_CAT, COL_SUBCAT, COL_MERCHANT):
             self._bulk_edit_cat_for_row(index.row())
         elif col == COL_TAGS:
             self._edit_tags_for_row(index.row())
         elif col in (COL_NAME, COL_MEMO, COL_FITID, COL_NOTE):
             self.table.edit(index)
+
+    def split_row(self, row_idx):
+        """Split (or change the parts of, or join again) the transaction in this row."""
+        row = self.model.get_row(row_idx)
+        if not row["type"] or "Transfer" in row["type"]:
+            QMessageBox.information(self, "Split", "Transfers are not split.")
+            return
+        from daftarche.split_dialog import SplitDialog
+        about = "  ·  ".join(x for x in (row.get("merchant") or row.get("name"), row.get("account"), row["date"]) if x)
+        dlg = SplitDialog(self.db, row["type"], row["amount"], parts=row.get("parts") or (),
+                          category=row.get("category"), subcategory=row.get("subcategory"), about=about,
+                          parent=self)
+        if not dlg.exec() or dlg.result_parts is None:
+            return
+        scroll_pos = self.table.verticalScrollBar().value()
+        try:
+            self.db.set_splits(row["id"], dlg.result_parts)
+        except ValueError as exc:
+            QMessageBox.warning(self, "Split", str(exc))
+            return
+        self._notify_change()
+        self.table.verticalScrollBar().setValue(scroll_pos)
 
     def _save_note(self, row, text):
         with self.db.transaction():
@@ -896,6 +941,12 @@ class TransactionsTab(QWidget):
     def _edit_categories(self, row_indices):
         rows = [self.model.get_row(i) for i in row_indices]
         row_type = rows[0]["type"] or ""
+        split = [r for r in rows if r.get("parts")]
+        if split and QMessageBox.question(
+                self, "Split Transactions",
+                f"{len(split)} of these {'are' if len(split) != 1 else 'is'} split. Giving one category "
+                "joins the parts again. Go on?", QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
+            return
         dlg = self._category_dialog(row_type, rows)
         if not dlg.exec():
             return
@@ -905,6 +956,8 @@ class TransactionsTab(QWidget):
         scroll_pos = self.table.verticalScrollBar().value()
         with self.db.transaction():
             for r in rows:
+                if r.get("parts"):
+                    self.db.set_splits(r["id"], [])  # one category again
                 changes = {"category_id": cat["id"] if cat else None, "subcategory_id": sub["id"] if sub else None}
                 if dlg.merchant_changed:
                     changes["merchant"] = dlg.merchant
@@ -1372,6 +1425,19 @@ class TransactionDialog(QDialog):
         form.addRow("Merchant:", self.f_merchant)
         form.addRow("Category:", self.f_category)
         form.addRow("Sub-Category:", self.f_subcat)
+        self._parts = [(p["category"], p["subcategory"], p["amount"], p.get("note")) for p in
+                       (self.row.get("parts") or [])] if self.row else []
+        self._parts_changed = False
+        split_row = QHBoxLayout()
+        self.lbl_split = QLabel()
+        self.lbl_split.setProperty("class", "dim-label")
+        self.btn_split = QPushButton("✂️ Split…")
+        self.btn_split.setProperty("class", "secondary")
+        self.btn_split.setToolTip("Put parts of this amount in different categories")
+        self.btn_split.clicked.connect(self._split)
+        split_row.addWidget(self.lbl_split, 1)
+        split_row.addWidget(self.btn_split)
+        form.addRow("", split_row)
         form.addRow("Name:", self.f_name)
         form.addRow("Memorandum:", self.f_memo)
         form.addRow("Note:", self.f_note)
@@ -1385,6 +1451,38 @@ class TransactionDialog(QDialog):
         layout.addWidget(btns)
 
         self._on_type_changed(self.f_type.currentText())
+        self._show_split()
+
+    def _show_split(self):
+        n = len(self._parts)
+        self.lbl_split.setText(f"Split into {n} parts: " + ", ".join(f"{p[0]} {money(p[2])}" for p in self._parts)
+                               if n else "")
+        self.lbl_split.setToolTip("\n".join(f"{money(p[2])}   {p[0]} › {p[1]}" for p in self._parts))
+        self.f_category.setEnabled(not n)
+        self.f_subcat.setEnabled(not n)
+        self.btn_split.setText("✂️ Change Split…" if n else "✂️ Split…")
+
+    def _split(self):
+        from daftarche.split_dialog import SplitDialog
+        try:
+            amount = float(self.f_amount.text())
+        except ValueError:
+            QMessageBox.warning(self, "Split", "Write the amount first.")
+            return
+        type_name = self.f_type.currentText()
+        if "Transfer" in type_name:
+            QMessageBox.information(self, "Split", "Transfers are not split.")
+            return
+        parts = [{"category": c, "subcategory": sname, "amount": a, "note": nt} for c, sname, a, nt in self._parts]
+        dlg = SplitDialog(self.db, type_name, amount, parts=parts, category=self.f_category.currentText(),
+                          subcategory=self.f_subcat.currentText(), parent=self)
+        if dlg.exec() and dlg.result_parts is not None:
+            self._parts = [(self.db.get_category_by_id(c)["name"],
+                            (self.db.get_subcategory_by_id(sid) or {"name": UNCATEGORIZED_SUB})["name"], a, nt)
+                           for c, sid, a, nt in dlg.result_parts]
+            self._split_ids = dlg.result_parts
+            self._parts_changed = True
+            self._show_split()
 
     @staticmethod
     def _fill_account_combo(combo, names, current, blank):
@@ -1471,8 +1569,19 @@ class TransactionDialog(QDialog):
                             merchant) or None  # "amazon" is the Amazon already there
             if not account and not (self.row and to_acc):
                 raise ValueError("choose an account")
-            names = confirm_category(self, self.db, type_name,
-                                     self.f_category.currentText(), self.f_subcat.currentText())
+            if self._parts and "Transfer" in type_name:
+                raise ValueError("a transfer is not split: Join Again in Change Split… first")
+            if self._parts and not self._parts_changed and self.row and type_name != self.row["type"]:
+                raise ValueError(f"the parts are in {self.row['type']} categories: change the split "
+                                 "(or Join Again) for the new type too")
+            if self._parts and round(sum(p[2] for p in self._parts), 2) != round(amount, 2):
+                raise ValueError(f"the parts add up to {money(sum(p[2] for p in self._parts))}, not "
+                                 f"{money(amount)}: change the split too")
+            if self._parts:
+                names = self._parts[0][:2]
+            else:
+                names = confirm_category(self, self.db, type_name,
+                                         self.f_category.currentText(), self.f_subcat.currentText())
             if not names:
                 return
             cat_name, sub_name = names
@@ -1481,32 +1590,36 @@ class TransactionDialog(QDialog):
             sub = self.db.get_subcategory_by_name(sub_name, cat_id)
             sub_id = sub["id"] if sub else None
 
-            if self.row:
-                transfer_status = None
-                if "Transfer" in type_name:
-                    is_matched = bool(account and to_acc) or sub_name == SUB_MATCHED
-                    transfer_status = TRANSFER_MATCHED if is_matched else TRANSFER_UNMATCHED
-                self.db.update_transaction(
-                    self.row["id"], year=year, month=month, day=day,
-                    type_name=type_name, account_name=account,
-                    to_account_name=to_acc, amount=amount,
-                    subcategory_id=sub_id, category_id=cat_id,
-                    name=name, memorandum=memo, note=self.f_note.text().strip() or None,
-                    transfer_status=transfer_status, merchant=merchant,
-                )
-                tx_id = self.row["id"]
-            else:
-                tx_id = self.db.add_transaction(year, month, day, type_name, account,
-                                                amount, sub_id, cat_id,
-                                                name=name, memorandum=memo,
-                                                to_account_name=to_acc, merchant=merchant,
-                                                note=self.f_note.text().strip() or None)
+            with self.db.transaction():  # the transaction, its parts and tags: all or nothing
+                if self.row and self._parts_changed:
+                    self.db.set_splits(self.row["id"], [])  # the new parts are set after the new amount
+                if self.row:
+                    transfer_status = None
+                    if "Transfer" in type_name:
+                        is_matched = bool(account and to_acc) or sub_name == SUB_MATCHED
+                        transfer_status = TRANSFER_MATCHED if is_matched else TRANSFER_UNMATCHED
+                    self.db.update_transaction(
+                        self.row["id"], year=year, month=month, day=day,
+                        type_name=type_name, account_name=account,
+                        to_account_name=to_acc, amount=amount,
+                        subcategory_id=sub_id, category_id=cat_id,
+                        name=name, memorandum=memo, note=self.f_note.text().strip() or None,
+                        transfer_status=transfer_status, merchant=merchant,
+                    )
+                    tx_id = self.row["id"]
+                else:
+                    tx_id = self.db.add_transaction(year, month, day, type_name, account,
+                                                    amount, sub_id, cat_id,
+                                                    name=name, memorandum=memo,
+                                                    to_account_name=to_acc, merchant=merchant,
+                                                    note=self.f_note.text().strip() or None)
+                if self._parts_changed:
+                    self.db.set_splits(tx_id, self._split_ids)
 
-            # Save tags
-            selected_names = self.f_tags.get_selected()
-            tag_name_to_id = {t["name"]: t["id"] for t in self.db.get_tags()}
-            selected_tag_ids = [tag_name_to_id[n] for n in selected_names if n in tag_name_to_id]
-            self.db.set_tags_for_transaction(tx_id, selected_tag_ids)
+                selected_names = self.f_tags.get_selected()
+                tag_name_to_id = {t["name"]: t["id"] for t in self.db.get_tags()}
+                self.db.set_tags_for_transaction(
+                    tx_id, [tag_name_to_id[n] for n in selected_names if n in tag_name_to_id])
 
             self.accept()
         except ValueError as e:

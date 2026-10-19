@@ -62,6 +62,7 @@ def test_old_database_gets_the_merchant_columns(tmp_path):
     path = tmp_path / "old.db"
     Database(path).conn.close()
     conn = sqlite3.connect(path)  # as layout 2 left it
+    conn.execute("DROP VIEW tx_lines")
     conn.execute("DROP INDEX idx_tx_merchant")
     conn.execute("ALTER TABLE transactions DROP COLUMN merchant")
     conn.execute("ALTER TABLE import_mappings DROP COLUMN merchant")
@@ -71,7 +72,7 @@ def test_old_database_gets_the_merchant_columns(tmp_path):
     db = Database(path)
     for table in ("transactions", "import_mappings"):
         assert "merchant" in [r[1] for r in db.conn.execute(f"PRAGMA table_info({table})")]
-    assert db.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION == 3
+    assert db.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION == 4
     db.conn.close()
 
 

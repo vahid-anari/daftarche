@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.20.0 — 2026-10-19
+
+- Split a transaction: one bank row in parts, each with its own category, sub-category,
+  amount and note (an $80 Amazon order: $50 Household › Cleaning, $30 Personal Care ›
+  Hair). Right-click → Split…, the Split… button in Edit Transaction, or double-click the
+  Category of a split row. "Left: $0.00" must be reached before OK; Join Again undoes it.
+- The table shows "Split (2)" (or the one category the parts share, with "Split (2)" as
+  the sub-category); the parts show on hover. Filtering by a category or sub-category
+  finds a split row with a part in it.
+- Charts, the Dashboard's categories, To review and the details panel count each part in
+  its own category (the panel lists the part, with its note). Totals of income and
+  expenses are unchanged. Export to Excel writes one line per part ("Split": 1 of 2).
+- Giving a split row one category (Edit Merchant / Category) asks first, then joins it;
+  double-clicking its Merchant opens the whole Edit window, which keeps the split.
+- With a category filter, a split row counts only its parts in that category in the
+  summary bar; a category and a sub-category filter must both match the same part.
+  Search also looks in the parts' notes and categories.
+- A split transaction's amount or type cannot change without its parts (Edit Transaction
+  says so), and parts must be in categories of its type.
+- Merging, moving or deleting a category or sub-category carries the parts along.
+- The database layout is now 4 (adds the parts).
+
 ## 0.19.0 — 2026-10-19
 
 - Import several statements at once: choose several QFX files (⌘-click) or drop several on

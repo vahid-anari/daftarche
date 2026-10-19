@@ -57,13 +57,14 @@ def test_old_database_gets_the_note_column(tmp_path):
     path = tmp_path / "old.db"
     Database(path).conn.close()
     conn = sqlite3.connect(path)  # make it look like layout 1, before notes
+    conn.execute("DROP VIEW tx_lines")
     conn.execute("ALTER TABLE transactions DROP COLUMN note")
     conn.execute("PRAGMA user_version = 1")
     conn.commit()
     conn.close()
     db = Database(path)
     assert "note" in [r[1] for r in db.conn.execute("PRAGMA table_info(transactions)")]
-    assert db.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION == 3
+    assert db.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION == 4
     db.conn.close()
 
 

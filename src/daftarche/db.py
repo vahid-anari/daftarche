@@ -63,7 +63,7 @@ def _date_str_to_parts(date_str):
         return None, None, None
 
 
-SCHEMA_VERSION = 3  # 2: transactions.note; 3: merchant (transactions and rules)
+SCHEMA_VERSION = 4  # 2: transactions.note; 3: merchant (transactions and rules); 4: split transactions
 """Database layout version, stored in the file (PRAGMA user_version). Raise it whenever
 _migrate learns something new, so an older Daftarche refuses a database it cannot read."""
 
@@ -349,6 +349,20 @@ class Database:
 
                                 CREATE INDEX IF NOT EXISTS idx_tx_tags_tx  ON transaction_tags(transaction_id);
                                 CREATE INDEX IF NOT EXISTS idx_tx_tags_tag ON transaction_tags(tag_id);
+
+                                CREATE TABLE IF NOT EXISTS transaction_splits
+                                (
+                                    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                                    transaction_id INTEGER NOT NULL REFERENCES transactions (id) ON DELETE CASCADE,
+                                    category_id    INTEGER REFERENCES categories (id),
+                                    subcategory_id INTEGER REFERENCES subcategories (id),
+                                    amount         REAL NOT NULL,
+                                    note           TEXT,
+                                    position       INTEGER NOT NULL DEFAULT 0
+                                );
+                                CREATE INDEX IF NOT EXISTS idx_splits_tx ON transaction_splits(transaction_id);
+                                CREATE INDEX IF NOT EXISTS idx_splits_cat ON transaction_splits(category_id);
+                                CREATE INDEX IF NOT EXISTS idx_splits_sub ON transaction_splits(subcategory_id);
                                 """)
         self.conn.commit()
 
@@ -519,6 +533,23 @@ class Database:
         for column in ("to_account_id", "subcategory_id", "fitid", "merchant"):
             c.execute(f"CREATE INDEX IF NOT EXISTS idx_tx_{column} ON transactions({column})")
 
+        # what totals and charts read: a transaction, or each part of a split one in its own category.
+        # A future migration that rebuilds `transactions` must DROP VIEW tx_lines and turn foreign
+        # keys off first: dropping the table would delete every part (ON DELETE CASCADE).
+        c.executescript("""
+            DROP VIEW IF EXISTS tx_lines;
+            CREATE VIEW tx_lines AS
+                SELECT t.id, t.date, t.type_id, t.account_id, t.to_account_id, t.amount, t.category_id,
+                       t.subcategory_id, t.merchant, t.note, t.name, t.memorandum, t.transfer_status,
+                       t.description, t.fitid, 0 AS part
+                FROM transactions t
+                WHERE NOT EXISTS (SELECT 1 FROM transaction_splits sp WHERE sp.transaction_id = t.id)
+                UNION ALL
+                SELECT t.id, t.date, t.type_id, t.account_id, t.to_account_id, sp.amount, sp.category_id,
+                       sp.subcategory_id, t.merchant, COALESCE(sp.note, t.note), t.name, t.memorandum,
+                       t.transfer_status, t.description, t.fitid, sp.id
+                FROM transaction_splits sp JOIN transactions t ON t.id = sp.transaction_id;
+        """)
         self._dedupe_rules()
         c.commit()
         self._seed_uncategorized()
@@ -702,12 +733,15 @@ class Database:
             else:
                 self.conn.execute("UPDATE subcategories SET category_id=? WHERE id=?", (target["id"], sub["id"]))
         self.conn.execute("UPDATE transactions SET category_id=? WHERE category_id=?", (target["id"], old["id"]))
+        self.conn.execute("UPDATE transaction_splits SET category_id=? WHERE category_id=?", (target["id"], old["id"]))
         self.conn.execute("UPDATE import_mappings SET category_id=? WHERE category_id=?", (target["id"], old["id"]))
         self.conn.execute("DELETE FROM categories WHERE id=?", (old["id"],))
 
     def _move_subcategory_contents(self, from_sub_id, to_sub_id, to_cat_id):
-        """Transactions and rules of one sub-category over to another (part of a merge)."""
+        """Transactions (and parts of split ones) and rules of one sub-category over to another."""
         self.conn.execute("UPDATE transactions SET subcategory_id=?, category_id=? WHERE subcategory_id=?",
+                          (to_sub_id, to_cat_id, from_sub_id))
+        self.conn.execute("UPDATE transaction_splits SET subcategory_id=?, category_id=? WHERE subcategory_id=?",
                           (to_sub_id, to_cat_id, from_sub_id))
         self.conn.execute("UPDATE import_mappings SET subcategory_id=?, category_id=? WHERE subcategory_id=?",
                           (to_sub_id, to_cat_id, from_sub_id))
@@ -721,6 +755,8 @@ class Database:
                               subcategory_id=?
                           WHERE category_id = ?
                           """, (uncat_cat_id, uncat_sub_id, cat_id))
+        self.conn.execute("UPDATE transaction_splits SET category_id=?, subcategory_id=? WHERE category_id=?",
+                          (uncat_cat_id, uncat_sub_id, cat_id))
         self.conn.execute("DELETE FROM import_mappings WHERE category_id=?", (cat_id,))
         self.conn.execute("DELETE FROM categories WHERE id=?", (cat_id,))
 
@@ -768,6 +804,8 @@ class Database:
                 (new_name, target_cat_id, subcat_id))
             self.conn.execute("UPDATE transactions SET category_id=? WHERE subcategory_id=?",
                               (target_cat_id, subcat_id))
+            self.conn.execute("UPDATE transaction_splits SET category_id=? WHERE subcategory_id=?",
+                              (target_cat_id, subcat_id))
             self.conn.execute("UPDATE import_mappings SET category_id=? WHERE subcategory_id=?",
                               (target_cat_id, subcat_id))
 
@@ -780,12 +818,7 @@ class Database:
         existing = self.get_subcategory_by_name(old["name"], new_category_id)
 
         if existing:
-            self.conn.execute(
-                "UPDATE transactions SET subcategory_id=?, category_id=? WHERE subcategory_id=?",
-                (existing["id"], new_category_id, subcat_id))
-            self.conn.execute(
-                "UPDATE import_mappings SET subcategory_id=?, category_id=? WHERE subcategory_id=?",
-                (existing["id"], new_category_id, subcat_id))
+            self._move_subcategory_contents(subcat_id, existing["id"], new_category_id)
             self.conn.execute("DELETE FROM subcategories WHERE id=?", (subcat_id,))
         else:
             self.conn.execute(
@@ -793,6 +826,9 @@ class Database:
                 (new_category_id, subcat_id))
             self.conn.execute(
                 "UPDATE transactions SET category_id=? WHERE subcategory_id=?",
+                (new_category_id, subcat_id))
+            self.conn.execute(
+                "UPDATE transaction_splits SET category_id=? WHERE subcategory_id=?",
                 (new_category_id, subcat_id))
             self.conn.execute(
                 "UPDATE import_mappings SET category_id=? WHERE subcategory_id=?",
@@ -808,6 +844,8 @@ class Database:
                               subcategory_id=?
                           WHERE subcategory_id = ?
                           """, (uncat_cat_id, uncat_sub_id, subcat_id))
+        self.conn.execute("UPDATE transaction_splits SET category_id=?, subcategory_id=? WHERE subcategory_id=?",
+                          (uncat_cat_id, uncat_sub_id, subcat_id))
         self.conn.execute("DELETE FROM subcategories WHERE id=?", (subcat_id,))
 
     # ── Accounts ──────────────────────────────────────────────────
@@ -938,12 +976,10 @@ class Database:
                 "?" * len(f["account"])) + "))"
             params += f["account"]
             params += f["account"]
-        if f.get("category"):
-            q += " AND c.name IN (" + ",".join("?" * len(f["category"])) + ")"
-            params += f["category"]
-        if f.get("subcategory"):
-            q += " AND s.name IN (" + ",".join("?" * len(f["subcategory"])) + ")"
-            params += f["subcategory"]
+        line_where, line_params = self._line_filter(f)
+        if line_where:  # a split transaction matches by a part with that category and sub-category
+            q += f" AND t.id IN (SELECT l.id FROM tx_lines l {line_where})"
+            params += line_params
         if f.get("merchant"):
             q += " AND t.merchant IN (" + ",".join("?" * len(f["merchant"])) + ")"
             params += f["merchant"]
@@ -992,11 +1028,13 @@ class Database:
                 field_clauses.append("t.memorandum LIKE ?")
                 params.append(kw)
             if sf.get("category"):
-                field_clauses.append("c.name LIKE ?")
-                params.append(kw)
+                field_clauses.append("(c.name LIKE ? OR t.id IN (SELECT sp.transaction_id FROM transaction_splits sp "
+                                     "JOIN categories c3 ON c3.id = sp.category_id WHERE c3.name LIKE ?))")
+                params += [kw, kw]
             if sf.get("subcategory"):
-                field_clauses.append("s.name LIKE ?")
-                params.append(kw)
+                field_clauses.append("(s.name LIKE ? OR t.id IN (SELECT sp.transaction_id FROM transaction_splits sp "
+                                     "JOIN subcategories s3 ON s3.id = sp.subcategory_id WHERE s3.name LIKE ?))")
+                params += [kw, kw]
             if sf.get("tags"):
                 field_clauses.append("""t.id IN (
                     SELECT tt2.transaction_id FROM transaction_tags tt2
@@ -1007,8 +1045,9 @@ class Database:
                 field_clauses.append("t.fitid LIKE ?")
                 params.append(kw)
             if sf.get("note", True):  # on unless turned off (older settings do not know it)
-                field_clauses.append("t.note LIKE ?")
-                params.append(kw)
+                field_clauses.append("(t.note LIKE ? OR t.id IN (SELECT transaction_id FROM transaction_splits "
+                                     "WHERE note LIKE ?))")
+                params += [kw, kw]
             if sf.get("merchant", True):  # the same
                 field_clauses.append("t.merchant LIKE ?")
                 params.append(kw)
@@ -1035,11 +1074,30 @@ class Database:
         tag_map = {}
         for tr in tag_rows:
             tag_map.setdefault(tr["transaction_id"], []).append(tr["name"])
+        part_map = {}
+        for p in self.conn.execute(f"""
+                SELECT sp.transaction_id, sp.amount, sp.note, c.name AS category, s.name AS subcategory
+                FROM transaction_splits sp
+                     LEFT JOIN categories c ON c.id = sp.category_id
+                     LEFT JOIN subcategories s ON s.id = sp.subcategory_id
+                WHERE sp.transaction_id IN ({ph}) ORDER BY sp.position, sp.id""", ids):
+            part_map.setdefault(p["transaction_id"], []).append(dict(p))
+
+        shown = {}  # with a category filter: how much of a split transaction is in it
+        line_where, line_params = self._line_filter(f)
+        if line_where and part_map:
+            split_ids = list(part_map)
+            for r in self.conn.execute(
+                    f"SELECT l.id, SUM(l.amount) FROM tx_lines l {line_where} AND l.id IN "
+                    f"({','.join('?' * len(split_ids))}) GROUP BY l.id", line_params + split_ids):
+                shown[r[0]] = r[1]
 
         result = []
         for r in rows:
             d = dict(r)
             d["tags"] = ", ".join(tag_map.get(r["id"], []))
+            d["parts"] = part_map.get(r["id"], [])
+            d["shown_amount"] = round2(shown[r["id"]]) if r["id"] in shown else d["amount"]
             result.append(d)
         return result
 
@@ -1094,6 +1152,13 @@ class Database:
             kwargs["to_account_id"] = self.get_or_create_account(n) if n else None
         if "amount" in kwargs:
             kwargs["amount"] = round2(kwargs["amount"])
+        if "amount" in kwargs or "type_id" in kwargs:  # a split one: its parts must still fit
+            row = self.conn.execute("SELECT amount, type_id FROM transactions WHERE id=?", (tx_id,)).fetchone()
+            parts = self.conn.execute("SELECT COUNT(*), SUM(amount) FROM transaction_splits WHERE transaction_id=?",
+                                      (tx_id,)).fetchone()
+            if row and parts[0] and (round2(kwargs.get("amount", row["amount"])) != round2(parts[1])
+                                     or kwargs.get("type_id", row["type_id"]) != row["type_id"]):
+                raise ValueError("This transaction is split: change its parts (or join it again) with it.")
         sets = ", ".join(f"{k}=?" for k in kwargs)
         self.conn.execute(f"UPDATE transactions SET {sets} WHERE id=?",
                           list(kwargs.values()) + [tx_id])
@@ -1101,6 +1166,85 @@ class Database:
     @atomic
     def delete_transaction(self, tx_id):
         self.conn.execute("DELETE FROM transactions WHERE id=?", (tx_id,))
+
+    @staticmethod
+    def _line_filter(f):
+        """(WHERE …, params) on tx_lines l for the category and sub-category filters (one part
+        must have both), or ("", [])."""
+        conds, params = [], []
+        if f.get("category"):
+            conds.append("l.category_id IN (SELECT id FROM categories WHERE name IN (%s))"
+                         % ",".join("?" * len(f["category"])))
+            params += list(f["category"])
+        if f.get("subcategory"):
+            conds.append("l.subcategory_id IN (SELECT id FROM subcategories WHERE name IN (%s))"
+                         % ",".join("?" * len(f["subcategory"])))
+            params += list(f["subcategory"])
+        return ("WHERE " + " AND ".join(conds), params) if conds else ("", [])
+
+    # ── Split transactions ────────────────────────────────────────
+    def get_splits(self, tx_id):
+        """The parts of a split transaction, in order (empty when it is not split)."""
+        return [dict(r) for r in self.conn.execute("""
+            SELECT sp.id, sp.amount, sp.note, sp.category_id, sp.subcategory_id,
+                   c.name AS category, s.name AS subcategory
+            FROM transaction_splits sp
+                 LEFT JOIN categories c ON c.id = sp.category_id
+                 LEFT JOIN subcategories s ON s.id = sp.subcategory_id
+            WHERE sp.transaction_id = ? ORDER BY sp.position, sp.id""", (tx_id,))]
+
+    @atomic
+    def set_splits(self, tx_id, parts):
+        """Split a transaction into ``parts`` [(category_id, subcategory_id, amount, note)], or
+        join it again (no parts). Two parts or more, in categories of its type, adding up to its
+        amount. The transaction keeps the first part's category, for places that show one."""
+        self.conn.execute("DELETE FROM transaction_splits WHERE transaction_id=?", (tx_id,))
+        if not parts:
+            return
+        tx = self.conn.execute("SELECT t.amount, t.type_id, ty.name AS type FROM transactions t "
+                               "LEFT JOIN types ty ON ty.id = t.type_id WHERE t.id=?", (tx_id,)).fetchone()
+        if len(parts) < 2:
+            raise ValueError("A split needs at least two parts.")
+        if "Transfer" in (tx["type"] or ""):
+            raise ValueError("A transfer is not split.")
+        for cat_id, *_ in parts:
+            cat = self.get_category_by_id(cat_id)
+            if not cat or cat["type_id"] not in (None, tx["type_id"]):
+                raise ValueError(f"A part's category is not a {tx['type']} category.")
+        if round2(sum(p[2] for p in parts)) != round2(tx["amount"]):
+            raise ValueError(f"The parts add up to {round2(sum(p[2] for p in parts))}, not {round2(tx['amount'])}.")
+        for pos, (cat_id, sub_id, amount, note) in enumerate(parts):
+            self.conn.execute("""INSERT INTO transaction_splits(transaction_id, category_id, subcategory_id,
+                                 amount, note, position) VALUES (?, ?, ?, ?, ?, ?)""",
+                              (tx_id, cat_id, sub_id, round2(amount), (note or "").strip() or None, pos))
+        self.conn.execute("UPDATE transactions SET category_id=?, subcategory_id=? WHERE id=?",
+                          (parts[0][0], parts[0][1], tx_id))
+
+    def get_transaction_lines(self, type_name, from_day, to_day, category=None, subcategory=None,
+                              account_names=None):
+        """Lines of a type in a period (a split transaction gives one line per part, with the
+        part's amount and note): what the Charts details panel lists."""
+        q = """SELECT t.id, t.date, t.amount, t.merchant, t.note, t.name, t.memorandum, t.part,
+                      c.name AS category, s.name AS subcategory
+               FROM tx_lines t
+                    JOIN types ty ON ty.id = t.type_id
+                    LEFT JOIN categories c ON c.id = t.category_id
+                    LEFT JOIN subcategories s ON s.id = t.subcategory_id
+                    LEFT JOIN accounts a ON a.id = t.account_id
+                    LEFT JOIN accounts ta ON ta.id = t.to_account_id
+               WHERE ty.name = ? AND t.date BETWEEN ? AND ?"""
+        params = [type_name, from_day, to_day]
+        if category:
+            q += " AND c.name = ?"
+            params.append(category)
+        if subcategory:
+            q += " AND s.name = ?"
+            params.append(subcategory)
+        if account_names:
+            ph = ",".join("?" * len(account_names))
+            q += f" AND (a.name IN ({ph}) OR ta.name IN ({ph}))"
+            params += list(account_names) * 2
+        return [dict(r) for r in self.conn.execute(q + " ORDER BY t.date DESC, t.id", params)]
 
     def fitid_exists(self, fitid, account_name):
         """Whether the account already has a transaction with this FITID. A matched transfer
@@ -1125,7 +1269,7 @@ class Database:
                                         ty.name as type_name,
                                         t.name,
                                         t.memorandum
-                                 FROM transactions t
+                                 FROM tx_lines t
                                           LEFT JOIN accounts a ON t.account_id = a.id
                                           LEFT JOIN types ty ON t.type_id = ty.id
                                  WHERE t.category_id = ?
@@ -1340,7 +1484,7 @@ class Database:
                        ta.name AS taname,
                        c.name  AS cname,
                        s.name  AS sname
-                FROM transactions t
+                FROM tx_lines t
                          LEFT JOIN types ty ON t.type_id = ty.id
                          LEFT JOIN accounts a ON t.account_id = a.id
                          LEFT JOIN accounts ta ON t.to_account_id = ta.id
@@ -1464,7 +1608,8 @@ class Database:
                     JOIN types ty ON ty.id = t.type_id
                     LEFT JOIN accounts a ON a.id = t.account_id
                     LEFT JOIN categories c ON c.id = t.category_id
-               WHERE ty.name = ? AND (t.category_id IS NULL OR c.name = ?)""",
+               WHERE ty.name = ? AND (t.category_id IS NULL OR c.name = ?)
+                 AND NOT EXISTS (SELECT 1 FROM transaction_splits sp WHERE sp.transaction_id = t.id)""",
             (type_name, UNCATEGORIZED_CAT)).fetchall()
 
     def get_merchants(self):
@@ -1481,7 +1626,7 @@ class Database:
         if not (merchant or "").strip():
             return []
         rows = self.conn.execute("""
-            SELECT c.name, COUNT(*) AS n FROM transactions t
+            SELECT c.name, COUNT(*) AS n FROM tx_lines t
                  JOIN categories c ON c.id = t.category_id
                  JOIN types ty ON ty.id = t.type_id
             WHERE t.merchant = ? COLLATE NOCASE AND ty.name = ? AND c.name <> ?
@@ -1492,7 +1637,7 @@ class Database:
         """Income and expense transactions with no category (all time): the "To review" list."""
         cat_id, _ = self.get_uncategorized_ids()
         return self.conn.execute("""
-            SELECT COUNT(*) FROM transactions t JOIN types ty ON ty.id = t.type_id
+            SELECT COUNT(DISTINCT t.id) FROM tx_lines t JOIN types ty ON ty.id = t.type_id
             WHERE (t.category_id = ? OR t.category_id IS NULL)
               AND (ty.name LIKE '%Income%' OR ty.name LIKE '%Expense%')""", (cat_id,)).fetchone()[0]
 
@@ -1570,8 +1715,8 @@ class Database:
         """
         rows = self.conn.execute("""
             SELECT CASE WHEN ty.name LIKE '%Income%' THEN 'Income' ELSE 'Expense' END AS kind,
-                   ty.name AS type, c.name AS category, COUNT(*) AS count, SUM(t.amount) AS total
-            FROM transactions t
+                   ty.name AS type, c.name AS category, COUNT(DISTINCT t.id) AS count, SUM(t.amount) AS total
+            FROM tx_lines t
             JOIN types ty ON t.type_id = ty.id
             JOIN categories c ON t.category_id = c.id
             LEFT JOIN subcategories s ON t.subcategory_id = s.id
@@ -1608,8 +1753,8 @@ class Database:
         from_str, to_str = self._month_range_dates(from_year, from_month, to_year, to_month)
         cat_id, _ = self.get_uncategorized_ids()
         row = self.conn.execute("""
-                                SELECT COUNT(*) AS cnt
-                                FROM transactions t
+                                SELECT COUNT(DISTINCT t.id) AS cnt
+                                FROM tx_lines t
                                          LEFT JOIN types ty ON t.type_id = ty.id
                                 WHERE t.date BETWEEN ? AND ?
                                   AND t.category_id = ?
@@ -1659,7 +1804,7 @@ class Database:
         from_str, to_str = self._month_range_dates(from_year, from_month, to_year, to_month)
         return self.conn.execute("""
                                  SELECT c.name AS category, ty.name AS type_name, SUM(t.amount) AS total
-                                 FROM transactions t
+                                 FROM tx_lines t
                                           JOIN categories c ON t.category_id = c.id
                                           LEFT JOIN types ty ON t.type_id = ty.id
                                  WHERE t.date BETWEEN ? AND ?
@@ -1701,7 +1846,7 @@ class Database:
             SELECT strftime('%Y', t.date) AS year,
                    strftime('%m', t.date) AS month_num,
                    {key_expr} AS k, SUM(t.amount) AS total
-            FROM transactions t
+            FROM tx_lines t
             LEFT JOIN categories c ON t.category_id = c.id
             LEFT JOIN subcategories s ON t.subcategory_id = s.id
             LEFT JOIN types ty ON t.type_id = ty.id
@@ -1745,7 +1890,7 @@ class Database:
 
         q = f"""
             SELECT {key_expr} AS k, SUM(t.amount) AS total
-            FROM transactions t
+            FROM tx_lines t
             LEFT JOIN categories c ON t.category_id = c.id
             LEFT JOIN subcategories s ON t.subcategory_id = s.id
             LEFT JOIN types ty ON t.type_id = ty.id
@@ -1823,7 +1968,7 @@ class Database:
         from_str, to_str = self._month_range_dates(from_year, from_month, to_year, to_month)
         q = """
             SELECT c.name
-            FROM transactions t
+            FROM tx_lines t
             JOIN categories c ON t.category_id = c.id
             LEFT JOIN types ty ON t.type_id = ty.id
             LEFT JOIN accounts a ON t.account_id = a.id
@@ -1858,9 +2003,20 @@ class Database:
         their on-screen order), or those matching ``filters``."""
         rows = self.get_transactions(filters) if rows is None else rows
         data = []
-        for r in rows:
-            y, m, d = _date_str_to_parts(r["date"])
-            data.append({
+        for whole in rows:
+            parts = (whole["parts"] if "parts" in whole.keys() else None) or [None]
+            for n, part in enumerate(parts, start=1):  # a split transaction: one line per part
+                r = dict(whole)
+                if part:
+                    r.update(amount=part["amount"], category=part["category"], subcategory=part["subcategory"],
+                             note=part["note"] or whole["note"])
+                data.append(self._export_line(r, f"{n} of {len(parts)}" if part else ""))
+        pd.DataFrame(data).to_excel(path, index=False)
+
+    @staticmethod
+    def _export_line(r, split):
+        y, m, d = _date_str_to_parts(r["date"])
+        return {
                 "Date": r["date"],
                 "Year": y, "Month": m, "Day": d,
                 "Type": r["type"],
@@ -1877,8 +2033,8 @@ class Database:
                 "Status": r["transfer_status"] or "",
                 "Tags": r["tags"] if "tags" in r.keys() else "",
                 "FITID": r["fitid"] or "",
-            })
-        pd.DataFrame(data).to_excel(path, index=False)
+                "Split": split,
+            }
 
     # ── Manage dialog helpers ─────────────────────────────────────
     def get_transaction_count_for_account(self, account_id):
@@ -1935,7 +2091,7 @@ class Database:
 
     def get_transaction_count_for_category(self, category_id):
         return self.conn.execute(
-            "SELECT COUNT(*) FROM transactions WHERE category_id=?", (category_id,)
+            "SELECT COUNT(DISTINCT id) FROM tx_lines WHERE category_id=?", (category_id,)
         ).fetchone()[0]
 
     def get_rule_count_for_category(self, category_id):
@@ -1953,7 +2109,7 @@ class Database:
 
     def get_transaction_count_for_subcategory(self, subcategory_id):
         return self.conn.execute(
-            "SELECT COUNT(*) FROM transactions WHERE subcategory_id=?", (subcategory_id,)
+            "SELECT COUNT(DISTINCT id) FROM tx_lines WHERE subcategory_id=?", (subcategory_id,)
         ).fetchone()[0]
 
     def get_rule_count_for_subcategory(self, subcategory_id):

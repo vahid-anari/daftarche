@@ -28,6 +28,7 @@ def old_backup(tmp_path):
     db.add_transaction(2026, "May", 1, "Expense", "Card", 12, us, uc, name="OLD SHOP")
     db.conn.close()
     conn = sqlite3.connect(path)
+    conn.execute("DROP VIEW tx_lines")
     conn.execute("DROP INDEX idx_tx_merchant")
     conn.execute("ALTER TABLE transactions DROP COLUMN merchant")
     conn.execute("ALTER TABLE import_mappings DROP COLUMN merchant")

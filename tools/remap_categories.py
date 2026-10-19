@@ -122,6 +122,12 @@ def plan(db, rows):
         counts = db.conn.execute(
             "SELECT (SELECT COUNT(*) FROM transactions WHERE subcategory_id = :s),"
             "       (SELECT COUNT(*) FROM import_mappings WHERE subcategory_id = :s)", {"s": found["id"]}).fetchone()
+        if new_type != old[0] and db.conn.execute(
+                """SELECT 1 FROM transaction_splits sp WHERE sp.subcategory_id = :s
+                   OR sp.transaction_id IN (SELECT id FROM transactions WHERE subcategory_id = :s)""",
+                {"s": found["id"]}).fetchone():
+            problems.append(f"line {line}: split transactions use it: join them (or move it within its type)")
+            continue
         moves.append({"old": old, "sid": found["id"], "merchant": merchant or None, "new": new,
                       "rules_set": rules_set, "flip": new_type != old[0], "n": counts[0], "rules": counts[1]})
     return moves, problems
@@ -172,6 +178,8 @@ def apply(db, moves):
                                                    (m["sid"],))] for m in moves}
         rules_of = {id(m): c.execute("SELECT * FROM import_mappings WHERE subcategory_id = ?", (m["sid"],)).fetchall()
                     for m in moves}
+        parts_of = {id(m): [r[0] for r in c.execute("SELECT id FROM transaction_splits WHERE subcategory_id = ?",
+                                                     (m["sid"],))] for m in moves}
         for move in moves:
             cat_id, sub_id = targets[move["new"]]
             type_id = db.get_type_id(move["new"][0])
@@ -179,6 +187,8 @@ def apply(db, moves):
             c.executemany("""UPDATE transactions SET category_id = ?, subcategory_id = ?, type_id = ?,
                                     amount = amount * ?, merchant = COALESCE(merchant, ?) WHERE id = ?""",
                           [(cat_id, sub_id, type_id, sign, move["merchant"], tx_id) for tx_id in tx_ids[id(move)]])
+            c.executemany("UPDATE transaction_splits SET category_id = ?, subcategory_id = ? WHERE id = ?",
+                          [(cat_id, sub_id, pid) for pid in parts_of[id(move)]])  # parts go along (same type)
             if move["rules_set"] == RULES_MERCHANT:
                 cat_id, sub_id = db.get_uncategorized_ids()
             for rule in rules_of[id(move)]:
@@ -199,6 +209,7 @@ def apply(db, moves):
         for move in moves:
             sid = move["sid"]
             used = c.execute("SELECT (SELECT COUNT(*) FROM transactions WHERE subcategory_id = :s) +"
+                             " (SELECT COUNT(*) FROM transaction_splits WHERE subcategory_id = :s) +"
                              " (SELECT COUNT(*) FROM import_mappings WHERE subcategory_id = :s)", {"s": sid}).fetchone()[0]
             if not used:
                 c.execute("DELETE FROM subcategories WHERE id = ?", (sid,))
@@ -206,6 +217,7 @@ def apply(db, moves):
         for cat in c.execute("SELECT c.id, c.name, ty.name AS type FROM categories c JOIN types ty ON ty.id = c.type_id "
                              "WHERE ty.name IN ('Income', 'Expense') AND c.name <> ?", (UNCATEGORIZED_CAT,)).fetchall():
             used = c.execute("""SELECT (SELECT COUNT(*) FROM transactions WHERE category_id = :c) +
+                                       (SELECT COUNT(*) FROM transaction_splits WHERE category_id = :c) +
                                        (SELECT COUNT(*) FROM import_mappings WHERE category_id = :c) +
                                        (SELECT COUNT(*) FROM subcategories WHERE category_id = :c AND name <> :u)""",
                              {"c": cat["id"], "u": UNCATEGORIZED_SUB}).fetchone()[0]
