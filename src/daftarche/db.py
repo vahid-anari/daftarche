@@ -10,12 +10,14 @@ from daftarche.style import TAB20_COLORS
 
 TRANSFER_MATCHED = "matched"
 TRANSFER_UNMATCHED = "unmatched"
+TRANSFER_LOAN = "loan"  # a Transfer › Loans row: money lent, borrowed or paid back; never matched
 
 UNCATEGORIZED_CAT = "Uncategorized"
 UNCATEGORIZED_SUB = "Uncategorized"
 
 CAT_INTERNAL_TRANSFER = "Internal Transfer"
 CAT_EXTERNAL_TRANSFER = "External Transfer"
+CAT_LOANS = "Loans"  # under Transfer; the person is the merchant
 SUB_MATCHED = "✅ Matched"
 SUB_UNMATCHED = "⚠️ Unmatched"
 
@@ -63,7 +65,7 @@ def _date_str_to_parts(date_str):
         return None, None, None
 
 
-SCHEMA_VERSION = 4  # 2: transactions.note; 3: merchant (transactions and rules); 4: split transactions
+SCHEMA_VERSION = 5  # 2: transactions.note; 3: merchant (transactions and rules); 4: split transactions; 5: loans
 """Database layout version, stored in the file (PRAGMA user_version). Raise it whenever
 _migrate learns something new, so an older Daftarche refuses a database it cannot read."""
 
@@ -363,6 +365,14 @@ class Database:
                                 CREATE INDEX IF NOT EXISTS idx_splits_tx ON transaction_splits(transaction_id);
                                 CREATE INDEX IF NOT EXISTS idx_splits_cat ON transaction_splits(category_id);
                                 CREATE INDEX IF NOT EXISTS idx_splits_sub ON transaction_splits(subcategory_id);
+
+                                CREATE TABLE IF NOT EXISTS loans
+                                (
+                                    merchant    TEXT PRIMARY KEY COLLATE NOCASE,
+                                    opening     REAL NOT NULL DEFAULT 0,
+                                    written_off REAL NOT NULL DEFAULT 0,
+                                    note        TEXT
+                                );
                                 """)
         self.conn.commit()
 
@@ -550,10 +560,42 @@ class Database:
                        t.transfer_status, t.description, t.fitid, sp.id
                 FROM transaction_splits sp JOIN transactions t ON t.id = sp.transaction_id;
         """)
+        # a Transfer › Loans row is always a loan (kept out of matching); one moved out of Loans
+        # is an ordinary transfer again. Triggers, so every way of changing a category obeys it.
+        is_transfer = "((SELECT name FROM types WHERE id = NEW.type_id) LIKE '%Transfer%')"
+        is_loans = (f"(SELECT 1 FROM categories c JOIN types ty ON ty.id = c.type_id WHERE c.id = NEW.category_id "
+                    f"AND c.name = '{CAT_LOANS}' AND ty.name LIKE '%Transfer%' AND {is_transfer})")
+        body = f"""
+            BEGIN
+                UPDATE transactions SET transfer_status = CASE
+                    WHEN {is_loans} IS NOT NULL THEN '{TRANSFER_LOAN}'
+                    WHEN NEW.transfer_status = '{TRANSFER_LOAN}' THEN
+                        CASE WHEN NOT {is_transfer} THEN NULL
+                             WHEN NEW.account_id IS NOT NULL AND NEW.to_account_id IS NOT NULL THEN '{TRANSFER_MATCHED}'
+                             ELSE '{TRANSFER_UNMATCHED}' END
+                    ELSE NEW.transfer_status END
+                WHERE id = NEW.id;
+            END;"""
+        c.executescript(f"""
+            DROP TRIGGER IF EXISTS trg_loan_status_ins;
+            DROP TRIGGER IF EXISTS trg_loan_status_upd;
+            CREATE TRIGGER trg_loan_status_ins AFTER INSERT ON transactions {body}
+            CREATE TRIGGER trg_loan_status_upd
+                AFTER UPDATE OF category_id, type_id, transfer_status, account_id, to_account_id
+                ON transactions {body}
+        """)
+        # rows already in a Transfer › Loans category before the triggers (an older database)
+        c.execute(f"""UPDATE transactions SET transfer_status = '{TRANSFER_LOAN}'
+                      WHERE IFNULL(transfer_status, '') <> '{TRANSFER_LOAN}'
+                        AND type_id IN (SELECT id FROM types WHERE name LIKE '%Transfer%')
+                        AND category_id IN (SELECT c.id FROM categories c JOIN types ty ON ty.id = c.type_id
+                                            WHERE c.name = '{CAT_LOANS}' AND ty.name LIKE '%Transfer%')""")
         self._dedupe_rules()
         c.commit()
         self._seed_uncategorized()
         self._seed_transfer_categories()
+        self._seed_loans()
+        c.commit()
 
     def _dedupe_rules(self):
         """One rule per (type, account, name, memo): SQLite's UNIQUE never compares empty (NULL)
@@ -576,6 +618,21 @@ class Database:
                 for sub_name in [SUB_MATCHED, SUB_UNMATCHED]:
                     if not self.get_subcategory_by_name(sub_name, cat["id"]):
                         self.add_subcategory(sub_name, cat["id"])
+
+    def _seed_loans(self):
+        if self.get_type_id("Transfer") is None:
+            return
+        cat = self.loans_category()
+        if cat is None:
+            self.add_category(CAT_LOANS, "Transfer")
+            cat = self.loans_category()
+        self.uncategorized_subcategory(cat["id"])
+
+    def loans_category(self):
+        """The Transfer › Loans category (None if it is missing)."""
+        return self.conn.execute(
+            """SELECT c.* FROM categories c JOIN types ty ON ty.id = c.type_id
+               WHERE c.name = ? AND ty.name LIKE '%Transfer%' ORDER BY c.id LIMIT 1""", (CAT_LOANS,)).fetchone()
 
     def _seed_uncategorized(self):
         if not self.get_category_by_name(UNCATEGORIZED_CAT):
@@ -981,8 +1038,12 @@ class Database:
             q += f" AND t.id IN (SELECT l.id FROM tx_lines l {line_where})"
             params += line_params
         if f.get("merchant"):
-            q += " AND t.merchant IN (" + ",".join("?" * len(f["merchant"])) + ")"
-            params += f["merchant"]
+            names = [m for m in f["merchant"] if m]
+            conds = ["t.merchant IN (" + ",".join("?" * len(names)) + ")"] if names else []
+            if len(names) < len(f["merchant"]):  # "": the rows with no merchant
+                conds.append("TRIM(IFNULL(t.merchant, '')) = ''")
+            q += " AND (" + " OR ".join(conds) + ")"
+            params += names
         if f.get("ids") is not None:  # just these (e.g. those just imported)
             if not f["ids"]:
                 return []
@@ -1664,6 +1725,17 @@ class Database:
         target = next((m for m in self.get_merchants() if m.casefold() == new.casefold() and m != old), new)
         for table in ("transactions", "import_mappings"):
             self.conn.execute(f"UPDATE {table} SET merchant=? WHERE merchant=?", (target, old))
+        old_loan = self.conn.execute("SELECT * FROM loans WHERE merchant=?", (old,)).fetchone()
+        if old_loan and old.casefold() != target.casefold():  # merged: the two loans' records add up
+            self.conn.execute("DELETE FROM loans WHERE merchant=?", (old,))
+            self.conn.execute(
+                """INSERT INTO loans(merchant, opening, written_off, note) VALUES (?, ?, ?, ?)
+                   ON CONFLICT(merchant) DO UPDATE SET opening = opening + excluded.opening,
+                       written_off = written_off + excluded.written_off,
+                       note = COALESCE(note, excluded.note)""",
+                (target, old_loan["opening"], old_loan["written_off"], old_loan["note"]))
+        elif old_loan:
+            self.conn.execute("UPDATE loans SET merchant=? WHERE merchant=?", (target, old))
         return target
 
     @atomic
@@ -1677,6 +1749,7 @@ class Database:
             (name, uncat_cat)).rowcount
         for table in ("transactions", "import_mappings"):
             self.conn.execute(f"UPDATE {table} SET merchant=NULL WHERE merchant=?", (name,))
+        self.conn.execute("DELETE FROM loans WHERE merchant=?", (name,))
         return gone
 
     @atomic
@@ -1712,6 +1785,119 @@ class Database:
                       AND NOT EXISTS (SELECT 1 FROM transaction_splits sp WHERE sp.transaction_id = transactions.id)""",
                 params).rowcount
         return n_rules, n_tx
+
+    # ── Loans ─────────────────────────────────────────────────────
+    def get_loans(self):
+        """One entry per person with Transfer › Loans rows or a loan record:
+        {merchant, paid_out, received, opening, written_off, balance, count, last, note}.
+        ``balance`` > 0: they owe you; < 0: you owe them (starting balance + money out − money
+        in − what was marked settled). ``merchant`` is "" for loan rows with no person."""
+        out = {}
+
+        def entry(name):
+            key = (name or "").casefold()
+            if key not in out:
+                out[key] = {"merchant": name or "", "paid_out": 0.0, "received": 0.0, "opening": 0.0,
+                            "written_off": 0.0, "count": 0, "last": None, "note": None}
+            return out[key]
+        for r in self.conn.execute(f"""
+                SELECT TRIM(merchant) AS merchant,
+                       SUM(CASE WHEN account_id IS NOT NULL AND to_account_id IS NULL THEN amount ELSE 0 END) AS paid_out,
+                       SUM(CASE WHEN to_account_id IS NOT NULL AND account_id IS NULL THEN amount ELSE 0 END) AS received,
+                       COUNT(*) AS n, MAX(date) AS last
+                FROM transactions WHERE transfer_status = '{TRANSFER_LOAN}'
+                GROUP BY TRIM(merchant) COLLATE NOCASE"""):
+            e = entry(r["merchant"])
+            e.update(paid_out=r["paid_out"] or 0.0, received=r["received"] or 0.0, count=r["n"], last=r["last"])
+        for r in self.conn.execute("SELECT * FROM loans"):
+            e = entry(r["merchant"])
+            e.update(opening=r["opening"], written_off=r["written_off"], note=r["note"])
+        for e in out.values():
+            e["paid_out"], e["received"] = round2(e["paid_out"]), round2(e["received"])
+            e["balance"] = round2(e["opening"] + e["paid_out"] - e["received"] - e["written_off"]) + 0.0  # no -0.0
+        return sorted(out.values(), key=lambda e: (e["merchant"] == "", e["merchant"].casefold()))
+
+    def get_loan_names(self, person):
+        """The merchant names of a person's loan rows as written ("Sahar", "sahar "): the Loans
+        window counts them as one person. [""] for the rows with no person."""
+        key = (person or "").strip().casefold()
+        if not key:
+            return [""]
+        rows = self.conn.execute(f"SELECT DISTINCT merchant FROM transactions WHERE transfer_status = '{TRANSFER_LOAN}' "
+                                 "AND merchant IS NOT NULL").fetchall()
+        return [r[0] for r in rows if r[0].strip().casefold() == key] or [person]
+
+    def get_loan_totals(self):
+        """(you owe, owed to you), both positive."""
+        loans = self.get_loans()
+        return (round2(-sum(e["balance"] for e in loans if e["balance"] < 0)),
+                round2(sum(e["balance"] for e in loans if e["balance"] > 0)))
+
+    def _loan_row(self, merchant):
+        merchant = (merchant or "").strip()
+        if not merchant:
+            raise ValueError("A loan needs a person (the merchant).")
+        self.conn.execute("INSERT OR IGNORE INTO loans(merchant) VALUES (?)", (merchant,))
+        return merchant
+
+    @atomic
+    def set_loan_opening(self, merchant, opening, note=None):
+        """The balance before your records (> 0: they owed you; < 0: you owed them)."""
+        merchant = self._loan_row(merchant)
+        self.conn.execute("UPDATE loans SET opening=?, note=? WHERE merchant=?",
+                          (round2(opening), (note or "").strip() or None, merchant))
+
+    @atomic
+    def settle_loan(self, merchant, note=None):
+        """Mark a loan settled: what is left of it is written off (no transaction is made).
+        Returns the amount written off."""
+        e = next((e for e in self.get_loans() if e["merchant"].casefold() == (merchant or "").strip().casefold()), None)
+        if e is None or not e["balance"]:
+            return 0.0
+        merchant = self._loan_row(e["merchant"])
+        self.conn.execute("UPDATE loans SET written_off = written_off + ?, note=COALESCE(?, note) WHERE merchant=?",
+                          (e["balance"], note, merchant))
+        return e["balance"]
+
+    @atomic
+    def unsettle_loan(self, merchant):
+        self.conn.execute("UPDATE loans SET written_off = 0 WHERE merchant=?", ((merchant or "").strip(),))
+
+    @atomic
+    def make_loan(self, tx_ids, merchant=None):
+        """Turn income and expense rows into Transfer › Loans rows, keeping the money's direction
+        (an income, or a negative expense, is money in), the account and the amount: account
+        balances do not change. ``merchant``: the person, for rows that have none (or all of
+        them). Split rows and transfers are refused. Returns how many were changed."""
+        cat = self.loans_category()
+        if cat is None:
+            self._seed_loans()
+            cat = self.loans_category()
+        sub_id = self.uncategorized_subcategory(cat["id"])["id"]
+        transfer_id = self.get_type_id("Transfer")
+        rows = [self.conn.execute(
+            """SELECT t.*, ty.name AS type_name FROM transactions t LEFT JOIN types ty ON ty.id = t.type_id
+               WHERE t.id=?""", (i,)).fetchone() for i in tx_ids]
+        for r in rows:
+            if r is None:
+                raise ValueError("A transaction is missing.")
+            if not r["type_name"] or not ("Income" in r["type_name"] or "Expense" in r["type_name"]):
+                raise ValueError("Only income and expense rows can be made loans.")
+            if self.conn.execute("SELECT 1 FROM transaction_splits WHERE transaction_id=?", (r["id"],)).fetchone():
+                raise ValueError("A split transaction can't be a loan: join it again first.")
+            if not r["account_id"]:
+                raise ValueError("A transaction with no account can't be a loan.")
+            if not ((merchant or "").strip() or (r["merchant"] or "").strip()):
+                raise ValueError("Each loan needs a person: give the merchant.")
+        for r in rows:
+            money_in = ("Income" in r["type_name"]) == (r["amount"] >= 0)
+            self.conn.execute(
+                """UPDATE transactions SET type_id=?, category_id=?, subcategory_id=?, amount=?,
+                       account_id=?, to_account_id=?, merchant=? WHERE id=?""",
+                (transfer_id, cat["id"], sub_id, round2(abs(r["amount"])),
+                 None if money_in else r["account_id"], r["account_id"] if money_in else None,
+                 (merchant or "").strip() or r["merchant"], r["id"]))
+        return len(rows)
 
     def get_categories_for_merchant(self, merchant, type_name):
         """The categories this merchant's transactions of ``type_name`` are in, most used first

@@ -1315,7 +1315,8 @@ class ImportTab(QWidget):
                 tx_id = self.db.add_transaction(
                     _dp.year, MONTHS_ORDER[_dp.month - 1], _dp.day, type_str,
                     from_acc, r["amount"], sub_id, cat_id, name=tx_name, memorandum=tx_memo,
-                    to_account_name=to_acc, transfer_status=TRANSFER_UNMATCHED, fitid=fitid)
+                    to_account_name=to_acc, transfer_status=TRANSFER_UNMATCHED, fitid=fitid,
+                    merchant=r.get("merchant"))  # a rule's Transfer › Loans row: the person
             else:
                 uncat_cat, uncat_sub = self.db.get_uncategorized_ids()
                 cat, sub = r.get("category"), r.get("subcategory")

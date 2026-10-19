@@ -13,7 +13,7 @@ from PySide6.QtCharts import (
 
 from daftarche.db import MONTHS_ORDER, MONTH_NUM
 from daftarche.style import get_settings
-from daftarche.widgets import plain_label, PeriodSelectorWidget, ReadOnlyCopyDelegate
+from daftarche.widgets import money, plain_label, PeriodSelectorWidget, ReadOnlyCopyDelegate
 from daftarche.chart_utils import (
     HoverChartView, make_chart, make_x_axis, make_y_axis,
     style_chart_view, StackedOverlay
@@ -225,6 +225,10 @@ class AccountsTab(QWidget):
         acc_outer.addSpacing(4)
         acc_outer.addLayout(btn_row)
         acc_outer.addWidget(self._acc_table, 1)
+        self._loans_lbl = QLabel()  # not in the balances: money lent and borrowed (View → Loans)
+        self._loans_lbl.setProperty("class", "dim-label")
+        self._loans_lbl.setToolTip("View → Loans… (⇧⌘L)")
+        acc_outer.addWidget(self._loans_lbl)
 
         chart_layout = QVBoxLayout()
         chart_layout.addWidget(self.chart_view, 1)
@@ -304,6 +308,10 @@ class AccountsTab(QWidget):
         from_month = MONTHS_ORDER[from_date.month - 1]
         to_year = to_date.year
         to_month = MONTHS_ORDER[to_date.month - 1]
+
+        you_owe, owed = self.db.get_loan_totals()
+        self._loans_lbl.setText(f"Loans\nYou owe {money(you_owe)}\nOwed to you {money(owed)}")
+        self._loans_lbl.setVisible(bool(you_owe or owed))
 
         # Fetch all data
         snapshots, _ = self.db.get_account_monthly_balance()

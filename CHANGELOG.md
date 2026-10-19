@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.21.0 — 2026-10-19
+
+- Loans: money lent to or borrowed from a person is a Transfer › Loans row with the person as
+  merchant, not income or spending. Money that left your account is "Out" (you lent it, or
+  paid a loan back); money that came in is "In" (you borrowed it, or were paid back). Loan
+  rows are never matched with other transfers and are not in the Unmatched list.
+- View → Loans… (⇧⌘L): one line per person with the balance ("You owe $x", "Owes you $x",
+  "Settled"), money paid out and received, the starting balance and the last date. Starting
+  Balance… is for a loan older than your records; Mark Settled writes off a small leftover
+  (no transaction is made; Undo Settled brings it back). Double-click a person to see their
+  loan rows in Transactions, with "← Back to Loans".
+- Right-click income or expense rows in Transactions → Make It a Loan…: they become loan rows
+  for the person you choose, keeping their direction (a refund is money in), so account
+  balances do not change. In Edit Transaction, Transfer › Loans shows one account and Money:
+  In or Out.
+- The Accounts tab shows what you owe and what is owed to you, under the accounts.
+- Renaming or merging a merchant carries its loan along. Transfer › Loans can't be renamed
+  or deleted. A rule that sets a merchant now sets it on imported transfers too.
+- tools/move_loans.py moves old loan categories (Expense › Debt, Income › Personal Loan by
+  default) to Transfer › Loans, the sub-category naming the person, with starting balances
+  (--i-owed, --they-owed) and --settle. It only shows what would change (on a copy: your file
+  is not touched) until --apply, which first backs up the file as it was.
+- The database layout is now 5 (adds the loans).
+
 ## 0.20.1 — 2026-10-19
 
 - Manage has a Merchants tab: each merchant with the category its rules give, how many

@@ -6,14 +6,16 @@ from PySide6.QtWidgets import (
     QMenu, QMessageBox, QDialog, QFormLayout, QDialogButtonBox,
     QCheckBox, QFrame, QSizePolicy,
     QStyledItemDelegate, QStyle, QFileDialog, QApplication, QTextEdit,
-    QListWidget, QListWidgetItem
+    QListWidget, QListWidgetItem, QInputDialog
 )
 from PySide6.QtCore import Qt, QAbstractTableModel, QModelIndex, QItemSelectionModel, QTimer
 from PySide6.QtGui import QColor, QAction, QBrush, QShortcut, QKeySequence, QIcon, QPainter, QPen, QPixmap
 
 from daftarche.db import (
     MONTHS_ORDER, MONTH_NUM, TRANSFER_UNMATCHED, TRANSFER_MATCHED, SUB_MATCHED, UNCATEGORIZED_CAT, UNCATEGORIZED_SUB,
+    CAT_LOANS,
 )
+
 from daftarche.widgets import (
     amount_color_key, money, add_subcategory_items, confirm_category,
     CheckComboBox, PeriodSelectorWidget, SymbolButton, SingleSelectCombo, ReadOnlyCopyDelegate,
@@ -22,6 +24,9 @@ from daftarche.widgets import (
 from daftarche.category_dialog import CategoryDialog
 from daftarche.style import get_settings
 from daftarche.tag_picker import TagsDialog
+
+LOAN_OUT = "Out (I lent, or paid back)"
+LOAN_IN = "In (I borrowed, or was paid back)"
 
 COLUMNS = [
     "Date", "Type", "Account",
@@ -840,6 +845,10 @@ class TransactionsTab(QWidget):
             parts = self.model.get_row(selected[0]).get("parts")
             menu.addAction(QAction("✂️  Change Split…" if parts else "✂️  Split…", self,
                                    triggered=lambda: self.split_row(selected[0])))
+        rows = [self.model.get_row(i) for i in selected]
+        if all(r["type"] and ("Income" in r["type"] or "Expense" in r["type"]) and not r.get("parts") for r in rows):
+            menu.addAction(QAction("🤝  Make It a Loan…" if n == 1 else f"🤝  Make Them Loans ({n})…", self,
+                                   triggered=lambda: self.make_loans(selected)))
         menu.addAction(QAction("🏷️  Add Tags", self, triggered=self._add_tags_to_selected))
         menu.addSeparator()
         menu.addAction(QAction(f"📋  Copy {n} row{'s' if n > 1 else ''}", self, triggered=self._copy_selected))
@@ -847,6 +856,29 @@ class TransactionsTab(QWidget):
         menu.addSeparator()
         menu.addAction(QAction(f"🗑️  Delete {n} row{'s' if n > 1 else ''}", self, triggered=self._delete_selected))
         menu.exec(self.table.viewport().mapToGlobal(pos))
+
+    def make_loans(self, row_indices):
+        """Income and expense rows → Transfer › Loans with a person (money in stays in, out stays out)."""
+        rows = [self.model.get_row(i) for i in row_indices]
+        names = {(r.get("merchant") or "").strip() for r in rows} - {""}
+        merchants = self.db.get_merchants()
+        current = next(iter(names)) if len(names) == 1 else ""
+        items = ([current] if current else []) + [m for m in merchants if m != current]
+        person, ok = QInputDialog.getItem(
+            self, "Make It a Loan",
+            f"{len(rows)} row{'s' if len(rows) > 1 else ''} become Transfer › {CAT_LOANS}: money that "
+            "came in was borrowed or paid back to you, money that went out was lent or paid back.\n\n"
+            "The person (their merchant):", items, 0, True)
+        if not ok:
+            return
+        person = " ".join(person.split())
+        person = next((m for m in merchants if m.casefold() == person.casefold()), person)
+        try:
+            self.db.make_loan([r["id"] for r in rows], person)
+        except ValueError as e:
+            QMessageBox.warning(self, "Make It a Loan", str(e))
+            return
+        self._notify_change()
 
     def _get_selected_row_indices(self):
         return sorted(set(idx.row() for idx in self.table.selectedIndexes()))
@@ -1367,6 +1399,17 @@ class TransactionDialog(QDialog):
                                  blank=bool(self.row) and not self.row["account"])
         self.f_account.setMaxVisibleItems(15)
 
+        # Transfer › Loans: one account, and which way the money went
+        self.lbl_dir = QLabel("Money:")
+        self.f_dir = SingleSelectCombo()
+        self.f_dir.addItems([LOAN_OUT, LOAN_IN])
+        r = self.row
+        money_in = bool(r) and ((not r["account"] and bool(r["to_account"]))
+                                or (bool(r["type"]) and "Income" in r["type"] and (r["amount"] or 0) >= 0)
+                                or (bool(r["type"]) and "Expense" in r["type"] and (r["amount"] or 0) < 0))
+        self.f_dir.setCurrentIndex(1 if money_in else 0)
+        self._loan_shown = False
+
         self.lbl_to = QLabel("To Account:")
         self.f_to_account = SingleSelectCombo()
         self.f_to_account.setEditable(True)
@@ -1425,6 +1468,7 @@ class TransactionDialog(QDialog):
         form.addRow("Date:", self.f_date)
         form.addRow("Type:", self.f_type)
         form.addRow("Account:", self.f_account)
+        form.addRow(self.lbl_dir, self.f_dir)
         form.addRow(self.lbl_to, self.f_to_account)
         form.addRow("Amount:", self.f_amount)
         form.addRow("Merchant:", self.f_merchant)
@@ -1455,6 +1499,7 @@ class TransactionDialog(QDialog):
         btns.rejected.connect(self.reject)
         layout.addWidget(btns)
 
+        self.f_category.currentTextChanged.connect(self._sync_loan_mode)
         self._on_type_changed(self.f_type.currentText())
         self._show_split()
 
@@ -1505,10 +1550,36 @@ class TransactionDialog(QDialog):
             raise ValueError(f"Invalid date: {date_str}")
 
     def _on_type_changed(self, type_name):
-        is_transfer = "Transfer" in type_name
-        self.lbl_to.setVisible(is_transfer)
-        self.f_to_account.setVisible(is_transfer)
         self._refresh_cats(type_name)
+        self._sync_loan_mode()
+
+    def _is_loan(self):
+        return ("Transfer" in self.f_type.currentText()
+                and self.f_category.currentText().strip().casefold() == CAT_LOANS.casefold())
+
+    def _sync_loan_mode(self, *_):
+        """A loan has one account and a direction (Money: out / in) instead of From and To."""
+        if not hasattr(self, "f_dir"):
+            return
+        loan = self._is_loan()
+        is_transfer = "Transfer" in self.f_type.currentText()
+        if loan and not self._loan_shown:
+            text = self.f_amount.text().strip()
+            if text.startswith("-"):  # money back: the direction (Money) already says which way
+                self.f_amount.setText(text[1:])
+            # an incoming one-sided transfer keeps its account in To: show it as the account
+            if not self.f_account.currentText().strip() and self.f_to_account.currentText().strip():
+                self.f_account.setCurrentText(self.f_to_account.currentText())
+                self.f_dir.setCurrentIndex(1)
+            self.f_to_account.setCurrentText("")
+        elif not loan and self._loan_shown and self.f_dir.currentIndex() == 1 and is_transfer:
+            self.f_to_account.setCurrentText(self.f_account.currentText())  # money in: the To side
+            self.f_account.setCurrentText("")
+        self._loan_shown = loan
+        self.lbl_dir.setVisible(loan)
+        self.f_dir.setVisible(loan)
+        self.lbl_to.setVisible(is_transfer and not loan)
+        self.f_to_account.setVisible(is_transfer and not loan)
 
     def _refresh_cats(self, type_name=None):
         type_name = type_name or self.f_type.currentText()
@@ -1572,7 +1643,18 @@ class TransactionDialog(QDialog):
             merchant = self.f_merchant.currentText().strip()
             merchant = next((m for m in self.db.get_merchants() if m.casefold() == merchant.casefold()),
                             merchant) or None  # "amazon" is the Amazon already there
-            if not account and not (self.row and to_acc):
+            if self._is_loan():
+                if amount < 0:
+                    raise ValueError("a loan's amount is positive: Money (In or Out) says which way it went")
+                if not account:
+                    raise ValueError("choose the account the money left or came into")
+                if not merchant:
+                    raise ValueError("a loan needs a person: write it as the merchant")
+                if self.f_dir.currentIndex() == 1:
+                    account, to_acc = None, account
+                else:
+                    to_acc = None
+            elif not account and not to_acc:
                 raise ValueError("choose an account")
             if self._parts and "Transfer" in type_name:
                 raise ValueError("a transfer is not split: Join Again in Change Split… first")

@@ -64,7 +64,7 @@ def test_old_database_gets_the_note_column(tmp_path):
     conn.close()
     db = Database(path)
     assert "note" in [r[1] for r in db.conn.execute("PRAGMA table_info(transactions)")]
-    assert db.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION == 4
+    assert db.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION == 5
     db.conn.close()
 
 

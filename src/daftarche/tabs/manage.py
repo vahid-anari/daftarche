@@ -772,7 +772,7 @@ class CatsRulesPanel(QWidget):
                 self._select_by_name(self.cat_table, name.strip())
 
     def _rename_cat(self):
-        if self._merchant_only_line():
+        if self._merchant_only_line() or self._loans_line():
             return
         data = self._selected_data(self.cat_table)
         if not data:
@@ -788,7 +788,7 @@ class CatsRulesPanel(QWidget):
             self.on_change()
 
     def _delete_cat(self):
-        if self._merchant_only_line():
+        if self._merchant_only_line() or self._loans_line():
             return
         data = self._selected_data(self.cat_table)
         if not data:
@@ -891,6 +891,18 @@ class CatsRulesPanel(QWidget):
             QMessageBox.information(self, "Merchant Only",
                                     "This line holds the rules that only set a merchant (their transactions "
                                     "wait in To review). Add, edit or delete its rules on the right.")
+            return True
+        return False
+
+    def _loans_line(self):
+        """Transfer › Loans is what the Loans window reads: kept, with its name."""
+        from daftarche.db import CAT_LOANS
+        cat = self._selected_data(self.cat_table)
+        loans = self.db.loans_category()
+        if cat and loans and cat["id"] == loans["id"] and cat["name"] == CAT_LOANS:
+            QMessageBox.information(self, "Loans",
+                                    f"Transfer › {CAT_LOANS} holds the loans (View → Loans): it can't be "
+                                    "renamed or deleted. Its sub-categories can.")
             return True
         return False
 

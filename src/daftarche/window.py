@@ -93,6 +93,7 @@ class MainWindow(QMainWindow):
         review = add(view_menu, "To Review", self.show_uncategorized)
         review.setShortcuts([QKeySequence("Ctrl+Shift+R"), QKeySequence("Ctrl+Alt+U")])
         add(view_menu, "Unmatched Transfers…", self.show_unmatched_transfers, QKeySequence("Ctrl+Shift+U"))
+        add(view_menu, "Loans…", self.open_loans, QKeySequence("Ctrl+Shift+L"))
         view_menu.addSeparator()
         add(view_menu, "Refresh", self._refresh_now, QKeySequence("Ctrl+R"))
 
@@ -130,6 +131,31 @@ class MainWindow(QMainWindow):
             self._manage_dlg.tabs.setCurrentWidget(self._manage_dlg.merchants_panel)
         self._show_transactions(came_from=("Manage", back), merchants=[merchant],
                                 text=f"<b>{html.escape(merchant)}</b>: all its transactions")
+
+    def open_loans(self):
+        """View → Loans: a window, like Manage; double-clicking a person shows their loan rows."""
+        from daftarche.loans_dialog import LoansDialog
+        if getattr(self, "_loans_dlg", None) is not None:
+            self._loans_dlg.refresh()
+            self._loans_dlg.raise_()
+            self._loans_dlg.activateWindow()
+            return
+        self._loans_dlg = LoansDialog(self.db, self._refresh_all, self._show_loan, self)
+        self._loans_dlg.finished.connect(lambda: setattr(self, "_loans_dlg", None))
+        self._loans_dlg.show()
+
+    def _show_loan(self, person):
+        """A person's Transfer › Loans rows; Back brings the Loans window to the front."""
+        from daftarche.db import CAT_LOANS
+        text = f"<b>{html.escape(person)}</b>: loan transactions" if person else "Loan transactions with no person"
+        self._show_transactions(came_from=("Loans", self.open_loans), categories=[CAT_LOANS],
+                                merchants=self.db.get_loan_names(person), text=text)
+
+    def _close_windows(self):
+        """Manage and Loans belong to the database on screen."""
+        for name in ("_manage_dlg", "_loans_dlg"):
+            if getattr(self, name, None) is not None:
+                getattr(self, name).close()
 
     def _back_to_tab(self, name, tab):
         """(label, go back) for the Back bar: that tab, as it was left."""
@@ -249,6 +275,8 @@ class MainWindow(QMainWindow):
     # ── Refresh callbacks ─────────────────────────────────────────────────────
     def _refresh_all(self):
         """After a change: refresh the tab on screen now, the others when they are next shown."""
+        if getattr(self, "_loans_dlg", None) is not None:
+            self._loans_dlg.refresh()
         current = self.tabs.currentWidget()
         for tab in (self.dashboard_tab, self.transactions_tab, self.charts_tab, self.accounts_tab):
             if tab is current:
@@ -306,8 +334,7 @@ class MainWindow(QMainWindow):
         self.setAcceptDrops(not viewing)
 
     def _switch_to(self, db):
-        if getattr(self, "_manage_dlg", None) is not None:
-            self._manage_dlg.close()
+        self._close_windows()
         self.db.conn.close()
         self.db = db
         self._rebuild_tabs()
@@ -401,8 +428,7 @@ class MainWindow(QMainWindow):
         if reply != QMessageBox.Yes:
             return
 
-        if getattr(self, "_manage_dlg", None) is not None:
-            self._manage_dlg.close()
+        self._close_windows()
         try:
             safety = restore_backup(self.db.conn, path)
         except Exception as exc:
