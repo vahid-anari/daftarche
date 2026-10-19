@@ -17,6 +17,7 @@ from daftarche.db import MONTHS_ORDER, MONTH_NUM
 from daftarche.style import get_settings, TAB20_COLORS
 from daftarche.widgets import AccountCard, SummaryCard, PeriodSelectorWidget, money
 from daftarche.chart_utils import HoverChartView, make_chart, make_x_axis, make_y_axis, style_chart_view
+from daftarche.icons import emoji_icon
 
 
 class DashboardTab(QWidget):
@@ -614,6 +615,9 @@ class DashboardTab(QWidget):
             # Col 1 — category name
             name_item = QTableWidgetItem(category)
             name_item.setForeground(QColor(s.get("text")))
+            icon = self.db.category_icon(category, "Expense")
+            if icon:
+                name_item.setIcon(emoji_icon(icon))
             self._donut_legend_table.setItem(i, 1, name_item)
 
             # Col 2 — amount

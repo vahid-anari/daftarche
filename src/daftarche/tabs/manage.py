@@ -1,4 +1,5 @@
 import html
+
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QTabWidget, QWidget,
     QPushButton, QLabel, QTableWidget, QTableWidgetItem,
@@ -11,6 +12,7 @@ from PySide6.QtGui import QColor, QBrush, QPalette
 
 from daftarche.style import get_settings
 from daftarche.widgets import SingleSelectCombo
+from daftarche.icons import IconPickerDialog, SuggestIconsDialog, emoji_icon
 
 
 MERCHANT_ONLY = "(merchant only)"
@@ -78,6 +80,12 @@ class ManageDialog(QDialog):
         btn_refresh.clicked.connect(self.refresh)
         btn_row.addWidget(btn_refresh)
 
+        btn_suggest = QPushButton("✨ Suggest Icons…")
+        btn_suggest.setProperty("class", "secondary")
+        btn_suggest.setToolTip("Icons for the categories with none, from their names: you check them first")
+        btn_suggest.clicked.connect(self._suggest_icons)
+        btn_row.addWidget(btn_suggest)
+
         btn_row.addStretch()
 
         btn_close = QPushButton("Close")
@@ -97,6 +105,11 @@ class ManageDialog(QDialog):
     def _changed(self):
         self.refresh()
         self.on_change_cb()
+
+    def _suggest_icons(self):
+        dlg = SuggestIconsDialog(self.db, self)
+        if dlg.exec():
+            self._changed()
 
 
 # AccountsPanel
@@ -406,6 +419,7 @@ class CatsRulesPanel(QWidget):
         cat_col.addLayout(self._make_btns([
             ("＋", self._add_cat),
             ("✏️", self._rename_cat),
+            ("😀", self._set_cat_icon),
             ("🗑️", self._delete_cat),
         ]))
         lists_row.addWidget(cat_w)
@@ -418,6 +432,7 @@ class CatsRulesPanel(QWidget):
         sub_col.addLayout(self._make_btns([
             ("＋", self._add_sub),
             ("✏️", self._rename_sub),
+            ("😀", self._set_sub_icon),
             ("🔀", self._reparent_sub),
             ("🗑️", self._delete_sub),
         ]))
@@ -479,7 +494,9 @@ class CatsRulesPanel(QWidget):
         for label, slot in pairs:
             btn = QPushButton(label)
             btn.setFixedHeight(34)
-            btn.setFixedWidth(58)
+            btn.setFixedWidth(50)
+            if label == "😀":
+                btn.setToolTip("Icon…")
             if "🗑" in label:
                 btn.setProperty("class", "danger")
             elif "＋" not in label:
@@ -585,6 +602,8 @@ class CatsRulesPanel(QWidget):
                 item.setData(Qt.UserRole, c)
                 if col > 0:
                     item.setTextAlignment(Qt.AlignCenter)
+                elif c["icon"]:
+                    item.setIcon(emoji_icon(c["icon"]))
                 self.cat_table.setItem(row, col, item)
 
         self.cat_table.blockSignals(False)
@@ -625,6 +644,8 @@ class CatsRulesPanel(QWidget):
                 item.setData(Qt.UserRole, s)
                 if col > 0:
                     item.setTextAlignment(Qt.AlignCenter)
+                elif s["icon"]:  # its own: the others show their category's elsewhere
+                    item.setIcon(emoji_icon(s["icon"]))
                 self.sub_table.setItem(row, col, item)
 
         self.sub_table.blockSignals(False)
@@ -893,6 +914,34 @@ class CatsRulesPanel(QWidget):
                                     "wait in To review). Add, edit or delete its rules on the right.")
             return True
         return False
+
+    def _set_cat_icon(self):
+        if self._merchant_only_line():
+            return
+        data = self._selected_data(self.cat_table)
+        if not data:
+            QMessageBox.information(self, "Select", "Select a category first.")
+            return
+        dlg = IconPickerDialog(data["icon"], f"Icon for <b>{html.escape(data['name'])}</b>",
+                               "Its sub-categories show it too, unless they have their own.", self)
+        if dlg.exec():
+            self.db.set_category_icon(data["id"], dlg.icon)
+            self.on_change()
+
+    def _set_sub_icon(self):
+        data = self._selected_data(self.sub_table)
+        if _is_merchant_only(data):
+            return
+        if not data:
+            QMessageBox.information(self, "Select", "Select a sub-category first.")
+            return
+        cat = self._selected_data(self.cat_table)
+        hint = (f"No Icon: it shows its category's ({cat['icon']})." if cat and cat["icon"]
+                else "No Icon: it shows its category's, if that has one.")
+        dlg = IconPickerDialog(data["icon"], f"Icon for <b>{html.escape(data['name'])}</b>", hint, self)
+        if dlg.exec():
+            self.db.set_subcategory_icon(data["id"], dlg.icon)
+            self.on_change()
 
     def _loans_line(self):
         """Transfer › Loans is what the Loans window reads: kept, with its name."""
@@ -1435,6 +1484,8 @@ class MerchantCategoryDialog(QDialog):
         self.f_cat.blockSignals(True)
         self.f_cat.clear()
         self.f_cat.addItems([self._uncat] + [c for c in cats if c != self._uncat])
+        from daftarche.icons import set_category_icons
+        set_category_icons(self.f_cat, self.db, type_name)
         current = sorted(self.m["rule_targets"])
         if len(current) == 1 and current[0] != "(merchant only)":
             idx = self.f_cat.findText(current[0].split(" › ")[0])

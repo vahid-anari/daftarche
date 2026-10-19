@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (
     QStyledItemDelegate, QStyle, QFileDialog, QApplication, QTextEdit,
     QListWidget, QListWidgetItem, QInputDialog
 )
-from PySide6.QtCore import Qt, QAbstractTableModel, QModelIndex, QItemSelectionModel, QTimer
+from PySide6.QtCore import Qt, QSize, QAbstractTableModel, QModelIndex, QItemSelectionModel, QTimer
 from PySide6.QtGui import QColor, QAction, QBrush, QShortcut, QKeySequence, QIcon, QPainter, QPen, QPixmap
 
 from daftarche.db import (
@@ -24,6 +24,7 @@ from daftarche.widgets import (
 from daftarche.category_dialog import CategoryDialog
 from daftarche.style import get_settings
 from daftarche.tag_picker import TagsDialog
+from daftarche.icons import emoji_icon, set_category_icons
 
 LOAN_OUT = "Out (I lent, or paid back)"
 LOAN_IN = "In (I borrowed, or was paid back)"
@@ -194,8 +195,17 @@ class TxModel(QAbstractTableModel):
                                  + (f"  ·  {p['note']}" if p.get("note") else "") for p in parts)
             if role == Qt.ForegroundRole:
                 return QBrush(QColor(get_settings().get("accent")))
+            if role == Qt.DecorationRole and col == COL_CAT and shared and self.icons:
+                return emoji_icon(self.icons["cat"].get(parts[0].get("category_id"))) or None
             return None
         no_sub = col == COL_SUBCAT and _category_only(row)
+
+        if role == Qt.DecorationRole:
+            if not self.icons or col not in (COL_CAT, COL_SUBCAT) or no_sub:
+                return None
+            icon = (self.icons["cat"].get(row.get("category_id")) if col == COL_CAT
+                    else self.icons["sub"].get(row.get("subcategory_id")))
+            return emoji_icon(icon) if icon else None
 
         if role == Qt.DisplayRole:
             if col == COL_AMOUNT:
@@ -230,6 +240,7 @@ class TxModel(QAbstractTableModel):
         return None
 
     on_note_edited = None  # set by the tab: (row, text) → save
+    icons = None  # set by the tab: db.get_icons(), the icons beside category names
 
     def setData(self, index, value, role=Qt.EditRole):
         if role != Qt.EditRole or index.column() != COL_NOTE or not self.on_note_edited:
@@ -422,6 +433,7 @@ class TransactionsTab(QWidget):
         # ── Table ─────────────────────────────────────────────────────────────
         self.model = TxModel()
         self.table = EditableTableView()
+        self.table.setIconSize(QSize(18, 18))  # the category icons
         self.table.setModel(self.model)
         self.table.setItemDelegate(NullDelegate(self.table))
         self.table.setItemDelegateForColumn(COL_ACCOUNT, AccountDelegate(self.model, self.table))
@@ -636,6 +648,7 @@ class TransactionsTab(QWidget):
         self._update_review_button()
         rows = self.db.get_transactions(self._get_filters())
         self._current_rows = list(rows)
+        self.model.icons = self.db.get_icons()
         self.model.set_rows(self._current_rows)
         self._update_rows_info()
         self._update_summary()
@@ -1603,6 +1616,7 @@ class TransactionDialog(QDialog):
         idx = self.f_category.findText(cur_cat)
         if idx >= 0:
             self.f_category.setCurrentIndex(idx)
+        set_category_icons(self.f_category, self.db, type_filter)
         self.f_category.blockSignals(False)
 
         self._refresh_subcats(self.f_category.currentText())

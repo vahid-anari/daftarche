@@ -237,6 +237,8 @@ class CategoryDialog(QDialog):
         self.f_category.blockSignals(True)
         self.f_category.clear()
         self.f_category.addItems(order)
+        from daftarche.icons import set_category_icons
+        set_category_icons(self.f_category, self.db, self.row_type)
         self.f_category.setCurrentText(current)
         self.f_category.blockSignals(False)
         merchant = self.f_merchant.currentText().strip()

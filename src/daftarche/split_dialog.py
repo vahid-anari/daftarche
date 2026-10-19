@@ -103,6 +103,8 @@ class SplitDialog(QDialog):
         cat = SingleSelectCombo()
         cat.allow_typing()
         cat.addItems(self._categories)
+        from daftarche.icons import set_category_icons
+        set_category_icons(cat, self.db, self.type_name)
         cat.setCurrentText(category or "")
         cat.lineEdit().setPlaceholderText(UNCATEGORIZED_CAT)
         sub = SingleSelectCombo()

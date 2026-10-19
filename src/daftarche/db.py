@@ -22,6 +22,27 @@ SUB_MATCHED = "✅ Matched"
 SUB_UNMATCHED = "⚠️ Unmatched"
 
 
+def clean_icon(text):
+    """One emoji from ``text`` ("" for none). Raises ValueError for anything else (letters,
+    digits, several emoji): an icon is drawn in a small square beside a name."""
+    text = "".join((text or "").split())
+    if not text:
+        return ""
+    joiners = {0x200D, 0xFE0E, 0xFE0F, 0x20E3}
+    end = 1
+    while end < len(text):
+        cp = ord(text[end])
+        if (cp in joiners or 0x1F3FB <= cp <= 0x1F3FF or 0xE0020 <= cp <= 0xE007F
+                or ord(text[end - 1]) == 0x200D
+                or (0x1F1E6 <= cp <= 0x1F1FF and end == 1 and 0x1F1E6 <= ord(text[0]) <= 0x1F1FF)):
+            end += 1  # part of the same emoji: a skin tone, a flag's second letter, a joined one
+        else:
+            break
+    if end < len(text) or any(ch.isalnum() for ch in text if ord(ch) < 0x2000):
+        raise ValueError("An icon is one emoji (no letters or numbers).")
+    return text
+
+
 def round2(value):
     """Round to 2 decimal places using standard rounding (0.5 rounds up)."""
     return float(Decimal(str(value)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))
@@ -65,7 +86,7 @@ def _date_str_to_parts(date_str):
         return None, None, None
 
 
-SCHEMA_VERSION = 5  # 2: transactions.note; 3: merchant (transactions and rules); 4: split transactions; 5: loans
+SCHEMA_VERSION = 6  # 2: note; 3: merchant; 4: split transactions; 5: loans; 6: category and sub-category icons
 """Database layout version, stored in the file (PRAGMA user_version). Raise it whenever
 _migrate learns something new, so an older Daftarche refuses a database it cannot read."""
 
@@ -116,6 +137,7 @@ class Database:
             self._tx_depth -= 1
             if self._tx_depth == 0:
                 self.conn.rollback()
+                self._data_version += 1  # nothing cached from inside it is kept
             raise
         self._tx_depth -= 1
         if self._tx_depth == 0:
@@ -537,6 +559,9 @@ class Database:
             c.commit()
             c.execute("PRAGMA foreign_keys = ON")
 
+        add_col_if_missing("categories", "icon", "TEXT")  # an emoji shown before the name (layout 6)
+        add_col_if_missing("subcategories", "icon", "TEXT")  # its own, else its category's (layout 6)
+
         # Tags tables — ensure indices exist for older DBs
         c.execute("CREATE INDEX IF NOT EXISTS idx_tx_tags_tx  ON transaction_tags(transaction_id)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_tx_tags_tag ON transaction_tags(tag_id)")
@@ -792,10 +817,14 @@ class Database:
         self.conn.execute("UPDATE transactions SET category_id=? WHERE category_id=?", (target["id"], old["id"]))
         self.conn.execute("UPDATE transaction_splits SET category_id=? WHERE category_id=?", (target["id"], old["id"]))
         self.conn.execute("UPDATE import_mappings SET category_id=? WHERE category_id=?", (target["id"], old["id"]))
+        self.conn.execute("UPDATE categories SET icon = COALESCE(icon, ?) WHERE id=?", (old["icon"], target["id"]))
         self.conn.execute("DELETE FROM categories WHERE id=?", (old["id"],))
 
     def _move_subcategory_contents(self, from_sub_id, to_sub_id, to_cat_id):
-        """Transactions (and parts of split ones) and rules of one sub-category over to another."""
+        """Transactions (and parts of split ones) and rules of one sub-category over to another;
+        its icon too, when the other has none."""
+        self.conn.execute("""UPDATE subcategories SET icon = COALESCE(icon, (SELECT icon FROM subcategories WHERE id=?))
+                             WHERE id=?""", (from_sub_id, to_sub_id))
         self.conn.execute("UPDATE transactions SET subcategory_id=?, category_id=? WHERE subcategory_id=?",
                           (to_sub_id, to_cat_id, from_sub_id))
         self.conn.execute("UPDATE transaction_splits SET subcategory_id=?, category_id=? WHERE subcategory_id=?",
@@ -818,6 +847,46 @@ class Database:
         self.conn.execute("DELETE FROM categories WHERE id=?", (cat_id,))
 
     # ── Subcategories ─────────────────────────────────────────────
+    # ── Icons ─────────────────────────────────────────────────────
+    @atomic
+    def set_category_icon(self, category_id, icon):
+        self.conn.execute("UPDATE categories SET icon=? WHERE id=?", (clean_icon(icon) or None, category_id))
+
+    @atomic
+    def set_subcategory_icon(self, subcategory_id, icon):
+        """A sub-category's own icon; none (None or "") shows its category's."""
+        self.conn.execute("UPDATE subcategories SET icon=? WHERE id=?", (clean_icon(icon) or None, subcategory_id))
+
+    def get_icons(self):
+        """What to show before category names, kept until the next change:
+        {"cat": {category id: icon}, "sub": {sub-category id: own icon or its category's},
+         "sub_own": {sub-category id: own icon}, "cat_name": {(type name, name): icon},
+         "sub_name": {(category id, name): icon}}. Ids and names without an icon are left out."""
+        cached = self._cache.get("icons")
+        if cached and cached[0] == self._data_version:
+            return cached[1]
+        icons = {"cat": {}, "sub": {}, "sub_own": {}, "cat_name": {}, "sub_name": {}}
+        for r in self.conn.execute("SELECT c.id, c.name, c.icon, t.name AS type_name FROM categories c "
+                                   "LEFT JOIN types t ON t.id = c.type_id WHERE c.icon IS NOT NULL"):
+            icons["cat"][r["id"]] = r["icon"]
+            icons["cat_name"][(r["type_name"] or "", r["name"])] = r["icon"]
+        for r in self.conn.execute("SELECT id, name, icon, category_id FROM subcategories"):
+            icon = r["icon"] or icons["cat"].get(r["category_id"])
+            if r["icon"]:
+                icons["sub_own"][r["id"]] = r["icon"]
+            if icon:
+                icons["sub"][r["id"]] = icon
+                icons["sub_name"][(r["category_id"], r["name"])] = icon
+        self._cache["icons"] = (self._data_version, icons)
+        return icons
+
+    def category_icon(self, name, type_name=None):
+        """The icon of the category ``name`` (of a type whose name contains ``type_name``), or ""."""
+        for (t, n), icon in self.get_icons()["cat_name"].items():
+            if n == name and (not type_name or type_name in t):
+                return icon
+        return ""
+
     def get_subcategories(self, category_id=None):
         if category_id:
             return self.conn.execute(
@@ -1137,7 +1206,8 @@ class Database:
             tag_map.setdefault(tr["transaction_id"], []).append(tr["name"])
         part_map = {}
         for p in self.conn.execute(f"""
-                SELECT sp.transaction_id, sp.amount, sp.note, c.name AS category, s.name AS subcategory
+                SELECT sp.transaction_id, sp.amount, sp.note, c.name AS category, s.name AS subcategory,
+                       sp.category_id, sp.subcategory_id
                 FROM transaction_splits sp
                      LEFT JOIN categories c ON c.id = sp.category_id
                      LEFT JOIN subcategories s ON s.id = sp.subcategory_id

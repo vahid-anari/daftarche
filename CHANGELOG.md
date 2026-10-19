@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.22.0 — 2026-10-19
+
+- Category icons: each category can have an emoji, shown before its name in Transactions,
+  the Charts list, the Dashboard's categories and every category picker. Names don't change
+  (search, filters and rules are as before), and the charts themselves stay without icons.
+- A sub-category can have its own icon (Transport › Gas ⛽); without one it shows its
+  category's.
+- Edit → Manage → Categories & Rules: the 😀 button sets the icon of the selected category or
+  sub-category (a grid of icons, or type any one emoji; No Icon takes it off).
+- ✨ Suggest Icons… (at the bottom of Manage) suggests icons for the categories with none,
+  from their names, and for sub-categories only where a different icon fits better than
+  their category's. Untick a line or change its icon, then Save.
+- Merging two categories or sub-categories keeps an icon.
+- The database layout is now 6 (adds the icons): an older Daftarche can't open it.
+
 ## 0.21.0 — 2026-10-19
 
 - Loans: money lent to or borrowed from a person is a Transfer › Loans row with the person as

@@ -14,6 +14,7 @@ from daftarche.db import MONTH_NUM, MONTHS_ORDER
 from daftarche.widgets import money, plain_label, PeriodSelectorWidget, StepSpinBox, CheckComboBox, SingleSelectCombo
 from daftarche.style import get_settings, TAB20_COLORS
 from daftarche.tabs.chart_detail import DetailPanel
+from daftarche.icons import emoji_icon
 from daftarche.chart_utils import HoverChartView, StackedOverlay, make_chart, make_x_axis, make_y_axis, style_chart_view
 
 
@@ -536,6 +537,7 @@ class ChartsTab(QWidget):
                         self._highlight_cb(None)
                 return False
 
+        sub_icons = {} if selected_cat == "All" else self._sub_icons(selected_cat, type_filter)
         for row, name in enumerate(items):
             checked = old_states.get(name, True)
             total = self._cat_totals.get(name, 0)
@@ -543,6 +545,10 @@ class ChartsTab(QWidget):
             self._cat_table.insertRow(row)
 
             cb = QCheckBox(plain_label(name))
+            icon = (self.db.category_icon(name, type_filter) if selected_cat == "All"
+                    else sub_icons.get(name, ""))
+            if icon:
+                cb.setIcon(emoji_icon(icon))
             cb.setChecked(checked)
             cb.toggled.connect(lambda chk, n=name: self._on_cb_toggled(n, chk))
             cb.clicked.connect(lambda _=None, n=name: self._on_cb_clicked(n))
@@ -567,6 +573,14 @@ class ChartsTab(QWidget):
 
         self._add_total_row()
         self._ignore_cb_changed = False
+
+    def _sub_icons(self, cat_name, type_filter):
+        """{sub-category name: icon} of a category, for the list: its own, else its category's."""
+        cat = next((c for c in self.db.get_categories() if c["name"] == cat_name
+                    and type_filter in (c["type_name"] or "")), None)
+        if not cat:
+            return {}
+        return {n: icon for (cid, n), icon in self.db.get_icons()["sub_name"].items() if cid == cat["id"]}
 
     def _add_total_row(self):
         """A line, then 'Total': the ticked categories over the whole range."""

@@ -72,7 +72,7 @@ def test_old_database_gets_the_merchant_columns(tmp_path):
     db = Database(path)
     for table in ("transactions", "import_mappings"):
         assert "merchant" in [r[1] for r in db.conn.execute(f"PRAGMA table_info({table})")]
-    assert db.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION == 5
+    assert db.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION == 6
     db.conn.close()
 
 
