@@ -1,4 +1,6 @@
 import os
+import shutil
+from pathlib import Path
 
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QTabWidget, QWidget, QVBoxLayout,
@@ -12,7 +14,7 @@ from sciwidgets.dialogs import show_about_dialog
 
 from daftarche.db import Database
 from daftarche.app_info import APP, APP_NAME
-from daftarche.backup import copy_db, mirror_snapshots, restore_backup, startup_backup
+from daftarche.backup import copy_db, copy_for_viewing, mirror_snapshots, restore_backup, startup_backup
 from daftarche.overview import UncategorizedDialog, UnmatchedTransfersDialog
 from daftarche.paths import BACKUP_DIR, DATA_DIR, DB_PATH
 from daftarche.style import build_stylesheet, get_settings, DEFAULTS
@@ -35,6 +37,8 @@ class MainWindow(QMainWindow):
 
         self.db_path = DB_PATH
         self.db = Database(self.db_path)
+        self.viewing = None  # the file shown by Open Database… (a temporary copy of it is open)
+        self._view_copy = None
         self.settings = get_settings()
 
         self._auto_backup()
@@ -44,6 +48,7 @@ class MainWindow(QMainWindow):
         self.main_layout = QVBoxLayout(central)
         self.main_layout.setContentsMargins(0, 0, 0, 0)
         self.main_layout.setSpacing(0)
+        self.main_layout.addWidget(self._build_view_bar())
         self.main_layout.addWidget(self._build_tabs(), 1)
         self.setCentralWidget(central)
         self._build_menus()
@@ -63,8 +68,11 @@ class MainWindow(QMainWindow):
             return action
 
         file_menu = bar.addMenu("File")
-        add(file_menu, "Back Up Database…", self._save_backup)
-        add(file_menu, "Restore Backup…", self._restore_backup)
+        add(file_menu, "Open Database…", self.open_database, QKeySequence("Ctrl+O"))
+        self.back_action = add(file_menu, "Back to My Database", self.back_to_my_database)
+        file_menu.addSeparator()
+        self.backup_action = add(file_menu, "Back Up Database…", self._save_backup)
+        self.restore_action = add(file_menu, "Restore Backup…", self._restore_backup)
         file_menu.addSeparator()
         add(file_menu, "Show Data Folder", self._show_data_folder)
         file_menu.addSeparator()
@@ -82,6 +90,7 @@ class MainWindow(QMainWindow):
         add(self.help_menu, "Show Data Folder", self._show_data_folder)
         self.help_menu.addSeparator()
         add(self.help_menu, f"About {APP_NAME}", self._show_about)
+        self._update_view_state()
 
     def show_uncategorized(self):
         UncategorizedDialog(self.db, self._show_transactions, parent=self).exec()
@@ -131,6 +140,7 @@ class MainWindow(QMainWindow):
         old_tabs = self.tabs
         self.tabs = self._build_tabs()
         self.main_layout.replaceWidget(old_tabs, self.tabs)
+        old_tabs.hide()  # out of sight now: deleteLater waits for the event loop
         old_tabs.deleteLater()
 
     # ── Styling ───────────────────────────────────────────────────────────────
@@ -183,6 +193,77 @@ class MainWindow(QMainWindow):
         self._manage_dlg.finished.connect(lambda: setattr(self, "_manage_dlg", None))
         self._manage_dlg.show()
 
+    # ── Open another database (to look at) ────────────────────────────────────
+    def _build_view_bar(self):
+        self.view_bar = QFrame()
+        self.view_bar.setStyleSheet("QFrame { background: #6b5a1e; } QLabel { color: #fff3c4; }")
+        row = QHBoxLayout(self.view_bar)
+        row.setContentsMargins(16, 6, 16, 6)
+        self.view_label = QLabel()
+        back = QPushButton("Back to my database")
+        back.clicked.connect(self.back_to_my_database)
+        row.addWidget(self.view_label, 1)
+        row.addWidget(back)
+        self.view_bar.hide()
+        return self.view_bar
+
+    def _update_view_state(self):
+        viewing = self.viewing is not None
+        self.view_bar.setVisible(viewing)
+        if viewing:
+            self.view_label.setText(f"Viewing a copy of <b>{self.viewing.name}</b> — changes are not kept")
+            self.view_label.setToolTip(str(self.viewing))
+        self.setWindowTitle(f"{APP_NAME} — {self.viewing.name} (copy)" if viewing else APP_NAME)
+        self.back_action.setEnabled(viewing)
+        for action in (self.backup_action, self.restore_action):  # they are about your own database
+            action.setEnabled(not viewing)
+
+    def _switch_to(self, db):
+        if getattr(self, "_manage_dlg", None) is not None:
+            self._manage_dlg.close()
+        self.db.conn.close()
+        self.db = db
+        self._rebuild_tabs()
+        self._refresh_all()
+        self._update_view_state()
+
+    def open_database(self):
+        """Look at another database (a backup, say) without changing it or your own: a temporary
+        copy of it is opened, and dropped on Back to My Database (or at quit)."""
+        path, _ = QFileDialog.getOpenFileName(self, "Open Database (a copy, to look at)", str(BACKUP_DIR),
+                                              "Database (*.db)")
+        if not path:
+            return
+        try:
+            copy = copy_for_viewing(path)
+            db = Database(copy)
+        except Exception as exc:
+            QMessageBox.critical(self, "Open Database", f"Could not open {os.path.basename(path)}:\n\n{exc}")
+            return
+        old_copy = self._view_copy
+        self.viewing, self._view_copy = Path(path), copy
+        self._switch_to(db)
+        self._drop_view_copy(old_copy)
+
+    def back_to_my_database(self):
+        if self.viewing is None:
+            return
+        old_copy = self._view_copy
+        self.viewing = self._view_copy = None
+        self._switch_to(Database(self.db_path))
+        self._drop_view_copy(old_copy)
+
+    @staticmethod
+    def _drop_view_copy(copy):
+        if copy is not None:
+            shutil.rmtree(copy.parent, ignore_errors=True)
+
+    def closeEvent(self, event):
+        if self.viewing is not None:
+            self.db.conn.close()
+            self._drop_view_copy(self._view_copy)
+        super().closeEvent(event)
+
     # ── Backup / restore ──────────────────────────────────────────────────────
     def _backup_db_to(self, destination_path):
         if destination_path:
@@ -225,7 +306,8 @@ class MainWindow(QMainWindow):
         reply = QMessageBox.question(
             self,
             "Restore",
-            "This will replace your current data with the selected backup.\n\nAre you sure?",
+            "This will replace your current data with the selected backup.\n\n"
+            "To only look at a backup, use File → Open Database… instead.\n\nReplace your data?",
             QMessageBox.Yes | QMessageBox.No
         )
 

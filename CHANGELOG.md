@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.17.1 — 2026-10-19
+
+- File → Open Database… (Ctrl+O) shows another database, a backup say, without changing
+  it or yours: a temporary copy of it is opened (an older one is upgraded only in the
+  copy), and a bar on top says so. Back to my database (on the bar or in File) returns to
+  your own; the copy is dropped. Back Up and Restore are off meanwhile.
+- Restore Backup's question says it replaces your data, and points to Open Database… for
+  only looking.
+- Transactions: the Review button moved to the right end of the period row, so the
+  toolbar buttons are not cut on a narrower window.
+
 ## 0.17.0 — 2026-10-18
 
 - A Merchant for every transaction: the shop or person (Amazon, Zahra). A new column in

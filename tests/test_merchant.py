@@ -162,7 +162,7 @@ def test_transactions_tab_shows_minus_dash_and_to_review(qapp, db):
     i = next(i for i in range(tab.model.rowCount()) if tab.model.get_row(i)["name"] == "REFUND")
     assert tab.model.index(i, COL_AMOUNT).data() == "-$40.00"
     assert tab.model.index(i, COL_SUBCAT).data() == "—" and tab.model.index(i, COL_MERCHANT).data() == "Gap"
-    assert tab.btn_review.text() == "📝 To review (1)" and not tab.btn_review.isHidden()
+    assert tab.btn_review.text() == "📝 Review (1)" and not tab.btn_review.isHidden()
     tab.show_to_review()
     assert [tab.model.get_row(r)["name"] for r in range(tab.model.rowCount())] == ["AMAZON"]
 

@@ -13,6 +13,7 @@ when the folder is not there (a disconnected disk), it is skipped.
 
 import shutil
 import sqlite3
+import tempfile
 from datetime import date, datetime
 from pathlib import Path
 
@@ -95,6 +96,23 @@ def check_backup(path: Path | str) -> None:
             raise ValueError(f"{path.name} was saved by a newer version of Daftarche; update Daftarche first.")
     finally:
         conn.close()
+
+
+def copy_for_viewing(path: Path | str) -> Path:
+    """A copy of the database at ``path`` in a new temporary folder, to open without changing
+    ``path`` itself (opening upgrades an older layout, and the copy takes that). The caller
+    deletes the folder (``copy.parent``) when done."""
+    check_backup(path)
+    folder = Path(tempfile.mkdtemp(prefix="daftarche-view-"))
+    copy = folder / Path(path).name
+    source = sqlite3.connect(f"{Path(path).resolve().as_uri()}?mode=ro", uri=True)
+    try:
+        with sqlite3.connect(copy) as target:
+            source.backup(target)
+        target.close()
+    finally:
+        source.close()
+    return copy
 
 
 def restore_backup(conn: sqlite3.Connection, path: Path | str) -> Path:

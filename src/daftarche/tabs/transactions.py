@@ -327,8 +327,7 @@ class TransactionsTab(QWidget):
         self.search_fields_action.triggered.connect(self._open_search_fields_dialog)
         self._update_search_fields_label()
 
-        for btn in [btn_add, btn_edit_cat, self.btn_review, btn_match, btn_sort, btn_resort, btn_cols, btn_exp,
-                    btn_refresh]:
+        for btn in [btn_add, btn_edit_cat, btn_match, btn_sort, btn_resort, btn_cols, btn_exp, btn_refresh]:
             title_row.addWidget(btn)
             btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
@@ -343,6 +342,7 @@ class TransactionsTab(QWidget):
         self._period.rangeChanged.connect(lambda *_: self._on_any_filter_changed())
         row1.addWidget(self._period)
         row1.addStretch()
+        row1.addWidget(self.btn_review)  # in the free space of the period row: it sets the filters
         layout.addLayout(row1)
 
         # ── Filter combos ─────────────────────────────────────────────────────
@@ -581,7 +581,7 @@ class TransactionsTab(QWidget):
 
     def _update_review_button(self):
         n = self.db.get_to_review_count()
-        self.btn_review.setText(f"📝 To review ({n})")
+        self.btn_review.setText(f"📝 Review ({n})")
         self.btn_review.setVisible(n > 0)
 
     def show_to_review(self):

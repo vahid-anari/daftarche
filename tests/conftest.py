@@ -47,3 +47,25 @@ def _delete_kept_windows():
                 pass
         QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
         _kept.clear()
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _tidy_qt_at_the_end():
+    """After the last test, delete the windows still open (dialogs a test made inside a tab,
+    combo popups) while Python is still whole: left to PySide's own clean-up at exit, one of
+    them now and then crashed the interpreter after every test had passed."""
+    yield
+    from PySide6.QtCore import QCoreApplication, QEvent
+    from PySide6.QtWidgets import QApplication
+    app = QApplication.instance()
+    if app is None:
+        return
+    for widget in app.topLevelWidgets():
+        try:
+            widget.close()
+            widget.deleteLater()
+        except RuntimeError:
+            pass
+    QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+    import gc
+    gc.collect()
