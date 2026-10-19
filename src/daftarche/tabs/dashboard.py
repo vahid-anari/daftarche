@@ -15,7 +15,7 @@ from PySide6.QtCharts import (
 
 from daftarche.db import MONTHS_ORDER, MONTH_NUM
 from daftarche.style import get_settings, TAB20_COLORS
-from daftarche.widgets import AccountCard, SummaryCard, PeriodSelectorWidget
+from daftarche.widgets import AccountCard, SummaryCard, PeriodSelectorWidget, money
 from daftarche.chart_utils import HoverChartView, make_chart, make_x_axis, make_y_axis, style_chart_view
 
 
@@ -338,7 +338,7 @@ class DashboardTab(QWidget):
             lines = []
             for r in uncat_rows:
                 name = r["name"] or r["memorandum"] or ""
-                lines.append(f"{r['date']}  {(r['account'] or ''):<25}  ${r['amount']:>10,.2f}  {name}")
+                lines.append(f"{r['date']}  {(r['account'] or ''):<25}  {money(r['amount']):>11}  {name}")
             txt.setPlainText("\n".join(lines))
             lay.addWidget(txt, 1)
 
@@ -353,7 +353,7 @@ class DashboardTab(QWidget):
             for r in unmatched_rows:
                 acc = r["account"] or r["to_account"] or "?"
                 name = r["name"] or r["memorandum"] or ""
-                lines2.append(f"{r['date']}  {acc:<25}  ${r['amount']:>10,.2f}  {name}")
+                lines2.append(f"{r['date']}  {acc:<25}  {money(r['amount']):>11}  {name}")
             txt2.setPlainText("\n".join(lines2))
             lay.addWidget(txt2, 1)
 
@@ -617,7 +617,7 @@ class DashboardTab(QWidget):
             self._donut_legend_table.setItem(i, 1, name_item)
 
             # Col 2 — amount
-            amt_item = QTableWidgetItem(f"${r['total']:,.2f}")
+            amt_item = QTableWidgetItem(money(r['total']))
             amt_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
             amt_item.setForeground(QColor(s.get("text_dim")))
             self._donut_legend_table.setItem(i, 2, amt_item)

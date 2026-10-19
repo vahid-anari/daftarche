@@ -412,7 +412,7 @@ class CatsRulesPanel(QWidget):
         lists_row.addWidget(sub_w)
         lists_row.addWidget(self._vline())
 
-        self.map_table, map_col, map_w = self._make_table_col("Rules", ["Account", "Name", "Memo"])
+        self.map_table, map_col, map_w = self._make_table_col("Rules", ["Account", "Name", "Memo", "Merchant"])
         self.map_table.setSelectionMode(QTableWidget.ExtendedSelection)
         self.map_table.cellDoubleClicked.connect(lambda r, c: self._edit_map())
         map_col.addLayout(self._make_btns([
@@ -600,6 +600,7 @@ class CatsRulesPanel(QWidget):
                 m["account_name"] or "All",
                 m["name"] or "—",
                 m["memorandum"] or "—",
+                m["merchant"] or "—",
             ]):
                 item = QTableWidgetItem(val)
                 item.setData(Qt.UserRole, dict(m))
@@ -844,7 +845,7 @@ class CatsRulesPanel(QWidget):
             return
         dlg = RuleEditDialog(self.db, type_data, cat_data, sub_data, parent=self)
         if dlg.exec():
-            acc_name, name, memo = dlg.get_values()
+            acc_name, name, memo, merchant = dlg.get_values()
             try:
                 self.db.save_mapping(
                     type_name=type_data["name"] if type_data else None,
@@ -853,6 +854,7 @@ class CatsRulesPanel(QWidget):
                     memorandum=memo or None,
                     subcategory_id=sub_data["id"],
                     category_id=cat_data["id"] if cat_data else None,
+                    merchant=merchant,
                 )
                 self.on_change()
             except Exception as e:
@@ -867,7 +869,7 @@ class CatsRulesPanel(QWidget):
         dlg = RuleEditDialog(self.db, type_data, cat_data, sub_data, existing=map_data, parent=self)
         if not dlg.exec():
             return
-        acc_name, name, memo = dlg.get_values()
+        acc_name, name, memo, merchant = dlg.get_values()
         try:
             self.db.delete_rule_and_save(
                 rule_id=map_data["id"],
@@ -877,6 +879,7 @@ class CatsRulesPanel(QWidget):
                 memorandum=memo or None,
                 subcategory_id=sub_data["id"],
                 category_id=cat_data["id"] if cat_data else None,
+                merchant=merchant,
             )
             self.on_change()
         except Exception as e:
@@ -954,6 +957,12 @@ class RuleEditDialog(QDialog):
         hint_memo.setProperty("class", "dim-label")
         form.addRow("", hint_memo)
 
+        self.edit_merchant = QLineEdit()
+        self.edit_merchant.setPlaceholderText("The merchant it sets (optional, e.g. Amazon)")
+        if existing:
+            self.edit_merchant.setText(existing.get("merchant") or "")
+        form.addRow("Merchant:", self.edit_merchant)
+
         layout.addLayout(form)
 
         btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
@@ -975,6 +984,7 @@ class RuleEditDialog(QDialog):
             acc if acc != "All" else None,
             self.edit_name.text().strip() or None,
             self.edit_memo.text().strip() or None,
+            self.edit_merchant.text().strip() or None,
         )
 
 

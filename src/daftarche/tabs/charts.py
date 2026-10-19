@@ -11,7 +11,7 @@ from PySide6.QtCharts import (
     QPieSeries, QPieSlice
 )
 from daftarche.db import MONTH_NUM, MONTHS_ORDER
-from daftarche.widgets import plain_label, PeriodSelectorWidget, StepSpinBox, CheckComboBox, SingleSelectCombo
+from daftarche.widgets import money, plain_label, PeriodSelectorWidget, StepSpinBox, CheckComboBox, SingleSelectCombo
 from daftarche.style import get_settings, TAB20_COLORS
 from daftarche.tabs.chart_detail import DetailPanel
 from daftarche.chart_utils import HoverChartView, StackedOverlay, make_chart, make_x_axis, make_y_axis, style_chart_view
@@ -638,10 +638,11 @@ class ChartsTab(QWidget):
             txs = self.db.get_transactions(filters)
             open_filters = {**base, "categories": [selected_cat], "subcategories": [name]}
             rows = [(f"{MONTHS_ORDER[int(t['date'][5:7]) - 1][:3]} {int(t['date'][8:10])}",
-                     t["note"] or t["name"] or t["memorandum"] or "", t["amount"], open_filters) for t in txs]
+                     ": ".join(x for x in (t["merchant"], t["note"]) if x) or t["name"] or t["memorandum"] or "",
+                     t["amount"], open_filters) for t in txs]
             n = len(rows)
             title = (f"<b>{selected_cat} › {name}</b><br>{when}<br>{n} transaction{'s' if n != 1 else ''}"
-                     f"  ·  ${sum(r[2] for r in rows):,.2f}")
+                     f"  ·  {money(sum(r[2] for r in rows))}")
         self.detail.show_rows(key, title, rows)
 
     # ── Range helper ──────────────────────────────────────────────────────────
@@ -780,7 +781,8 @@ class ChartsTab(QWidget):
             else:
                 all_vals = [data[p].get(cat, 0) for p in all_periods for cat in all_cats]
             max_val = max(all_vals) if all_vals else 0
-            ax_y.setRange(0, max(max_val * 1.1, 1))
+            min_val = min(all_vals + [0])  # below 0 only when money back is more than spending
+            ax_y.setRange(min_val * 1.1, max(max_val * 1.1, 1))
         chart.addAxis(ax_y, Qt.AlignLeft)
 
         self._current_chart_type = chart_type
@@ -917,7 +919,7 @@ class ChartsTab(QWidget):
         if self.chk_custom_y.isChecked():
             ax_y.setRange(self.f_y_min.value(), self.f_y_max.value())
         else:
-            ax_y.setRange(0, max(values[cats[0]] * 1.1, 1))
+            ax_y.setRange(min(min(values.values(), default=0), 0) * 1.1, max(values[cats[0]] * 1.1, 1))
         chart.addAxis(ax_y, Qt.AlignLeft)
 
         # one set per category, zero everywhere but its own place: every bar keeps its colour and full width
@@ -1000,7 +1002,8 @@ class ChartsTab(QWidget):
             key=lambda c: period_data.get(c, 0),
             reverse=True
         )
-        total = sum(period_data.get(cat, 0) for cat in all_cats)
+        # a category with more money back than spent (net negative) has no slice
+        total = sum(max(period_data.get(cat, 0), 0) for cat in all_cats)
         if not total:
             self._show_empty_chart("No data for selected period")
             return

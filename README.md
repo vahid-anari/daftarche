@@ -99,7 +99,10 @@ writes the Amazon and AliExpress transactions (only those, and only the columns 
 `shop_charges.csv`; `python tools/import_notes.py notes.csv` shows the notes and categories a
 filled-in copy would write, and `--apply` writes them after backing up the database.
 `python tools/list_categories.py` prints every category and sub-category with its number of
-transactions and rules (`--totals` adds amounts).
+transactions and rules (`--totals` adds amounts). `python tools/remap_categories.py export`
+writes one line per sub-category to `mapping.csv`, to say where each goes (merchant, new
+category, money back); `apply mapping.csv` shows the moves and `--apply` makes them after
+backing up the database.
 Pushing a tag `vX.Y.Z` publishes a GitHub Release with that version's section of
 [`CHANGELOG.md`](CHANGELOG.md); `python -m build && twine upload dist/*` puts it on PyPI.
 

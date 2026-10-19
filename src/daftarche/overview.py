@@ -18,7 +18,7 @@ ShowTransactions = Callable[..., None]
 
 
 def _money(value):
-    return f"${value:,.2f}"
+    return f"-${-value:,.2f}" if value < 0 else f"${value:,.2f}"
 
 
 def _summary(parts):

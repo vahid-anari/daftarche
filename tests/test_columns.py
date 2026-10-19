@@ -24,7 +24,8 @@ def test_old_settings_by_position_become_names():
     from daftarche.tabs.transactions import COLUMN_KEYS, DEFAULT_ORDER, column_settings
     visible, order = column_settings({"9": False, "6": False}, None)  # 0.14: FITID and Tags hidden
     assert visible["fitid"] is False and visible["tags"] is False and visible["note"] is True
-    assert order == COLUMN_KEYS  # an existing table keeps its order
+    # an existing table keeps its order; Merchant (new in 0.17) comes after Amount
+    assert order == ["date", "type", "account", "amount", "merchant"] + COLUMN_KEYS[4:11]
     visible, order = column_settings(None, None)
     assert all(visible.values()) and order == DEFAULT_ORDER and order.index("note") == order.index("memo") + 1
     _, order = column_settings({"fitid": False}, ["note", "date", "bogus"])
@@ -41,7 +42,7 @@ def test_moving_a_header_is_saved_and_copied_as_shown(qapp, db, settings):
     header = tab.table.horizontalHeader()
     header.moveSection(header.visualIndex(COL_AMOUNT), 0)  # drag Amount to the front
     assert settings.get("transactions_column_order")[:2] == ["amount", "date"]
-    for key in ("type", "account", "category", "subcategory", "tags", "name", "memo", "fitid"):
+    for key in ("type", "account", "category", "subcategory", "tags", "name", "memo", "fitid", "merchant"):
         tab._visible_columns[key] = False
     tab._apply_column_visibility()
     tab.table.selectRow(0)

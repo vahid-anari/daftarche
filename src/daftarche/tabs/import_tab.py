@@ -15,7 +15,9 @@ from PySide6.QtGui import QColor, QBrush, QKeySequence, QShortcut, QAction
 
 from daftarche.style import get_settings
 from daftarche.category_dialog import CategoryDialog
-from daftarche.widgets import plain_label, EditableTableView, ReadOnlyCopyDelegate, SingleSelectCombo
+from daftarche.widgets import (
+    amount_color_key, money, plain_label, EditableTableView, ReadOnlyCopyDelegate, SingleSelectCombo,
+)
 from daftarche.db import (
     MONTHS_ORDER,
     TRANSFER_UNMATCHED,
@@ -175,7 +177,7 @@ def parse_qfx_header(content):
 
 # Column definitions
 PREVIEW_COLS = [
-    "Status", "Date", "Type", "Amount",
+    "Status", "Date", "Type", "Amount", "Merchant",
     "Category", "Sub-Category", "Tags",
     "Name", "Memo", "FITID",
 ]
@@ -183,12 +185,31 @@ COL_STATUS = 0
 COL_DATE = 1
 COL_TYPE = 2
 COL_AMT = 3
-COL_CAT = 4
-COL_SUB = 5
-COL_TAGS = 6
-COL_NAME = 7
-COL_MEMO = 8
-COL_FITID = 9
+COL_MERCHANT = 4
+COL_CAT = 5
+COL_SUB = 6
+COL_TAGS = 7
+COL_NAME = 8
+COL_MEMO = 9
+COL_FITID = 10
+
+OPPOSITE = {"Income": "Expense", "Expense": "Income"}
+
+
+def find_rule(db, type_name, account, name, memo):
+    """(rule, type, money back) for a transaction from the bank.
+
+    The rule of its own type wins. A credit with only an expense rule (Amazon paying back) is
+    money back of that expense: a negative Expense in the same category, and the other way
+    round for a debit with only an income rule. (None, type_name, False) when nothing matches.
+    """
+    rule = db.lookup_mapping(type_name=type_name, account_name=account, name=name or None,
+                             memorandum=memo or None)
+    if rule or type_name not in OPPOSITE:
+        return rule, type_name, False
+    other = OPPOSITE[type_name]
+    rule = db.lookup_mapping(type_name=other, account_name=account, name=name or None, memorandum=memo or None)
+    return (rule, other, True) if rule else (None, type_name, False)
 
 
 # PreviewModel
@@ -232,8 +253,9 @@ class PreviewModel(QAbstractTableModel):
             if col == COL_DATE:   return row.get("date", "")
             if col == COL_TYPE:   return row.get("type", "")
             if col == COL_AMT:
-                amt = row.get("amount")
-                return f"${amt:,.2f}" if amt is not None else ""
+                return money(row.get("amount"))
+            if col == COL_MERCHANT:
+                return row.get("merchant") or ""
             if col == COL_CAT:
                 cat = row.get("category")
                 return cat["name"] if cat else UNCATEGORIZED_CAT
@@ -256,10 +278,9 @@ class PreviewModel(QAbstractTableModel):
                 if "Duplicate" in status: return QBrush(QColor(s.get("text_dim")))
                 if "New" in status: return QBrush(QColor(s.get("income")))
             if col in (COL_TYPE, COL_AMT):
-                t = row.get("type", "")
-                if "Income" in t: return QBrush(QColor(s.get("income")))
-                if "Expense" in t: return QBrush(QColor(s.get("expense")))
-                if "Transfer" in t: return QBrush(QColor(s.get("transfer")))
+                key = amount_color_key(row.get("type", ""), row.get("amount") if col == COL_AMT else 0)
+                if key:
+                    return QBrush(QColor(s.get(key)))
 
         if role == Qt.TextAlignmentRole:
             if col in (COL_DATE, COL_AMT):
@@ -655,6 +676,7 @@ class ImportTab(QWidget):
         for r in rows:
             r["subcategory"] = None
             r["category"] = None
+            r["merchant"] = None
             r["is_transfer"] = False
             r["_tags"] = []  # tags to assign on import
 
@@ -687,13 +709,13 @@ class ImportTab(QWidget):
                     r["_status"] = "⏭️ Duplicate" if (fitid_t and self.db.fitid_exists(fitid_t, account)) else "🆕 New"
                     continue
 
-            # Step 3 — Normal income/expense mapping
-            mapping = self.db.lookup_mapping(
-                type_name=r["type"],
-                account_name=account,
-                name=name or None,
-                memorandum=memorandum or None,
-            )
+            # Step 3 — Normal income/expense mapping (a credit that only an expense rule knows is
+            # money back of that expense: a negative Expense)
+            mapping, rule_type, back = find_rule(self.db, r["type"], account, name, memorandum)
+            if back:
+                r["type"], r["amount"] = rule_type, -r["amount"]
+            if mapping:
+                r["merchant"] = mapping["merchant"]
             if mapping and mapping["subcategory_id"]:
                 sub = self.db.get_subcategory_by_id(mapping["subcategory_id"])
                 cat = self.db.get_category_by_id(mapping["category_id"]) if mapping["category_id"] else None
@@ -767,7 +789,7 @@ class ImportTab(QWidget):
         first = rows[0]
         if len(rows) == 1:
             about = "  ·  ".join(x for x in (first.get("name") or first.get("memorandum"), self._current_account,
-                                             f"${first['amount']:,.2f}") if x)
+                                             money(first['amount'])) if x)
         else:
             about = f"{len(rows)} transactions"
         names = {(r["category"]["name"] if r.get("category") else None,
@@ -778,20 +800,32 @@ class ImportTab(QWidget):
              "memo": r.get("memorandum") or r.get("memo") or ""}
             for i, r in enumerate(self.parsed_rows)
             if i not in row_indices and r.get("type") == row_type and "Duplicate" not in r.get("_status", "")
-            and (_without_category([r]) or _category_only(r))]
+            and _without_category([r])]
+        merchants = {(r.get("merchant") or "") for r in rows}
         dlg = CategoryDialog(
             self.db, row_type, self, preset_cat=preset_cat, preset_sub=preset_sub, about=about,
             default_rule=(first.get("name") or "", first.get("memorandum") or "") if len(rows) == 1 else None,
             candidates=candidates,
+            preset_merchant=merchants.pop() if len(merchants) == 1 else None,
+            merchant_mixed=len(merchants) > 1,
+            can_flip=True,
         )
         if not dlg.exec():
             return
-        cat = self.db.get_category_by_name(dlg.cat_name, type_name=row_type)
+        cat = self.db.get_category_by_name(dlg.cat_name, type_name=dlg.row_type)
         sub = self.db.get_subcategory_by_name(dlg.sub_name, cat["id"]) if cat else None
         for i in list(row_indices) + list(dlg.apply_keys):
             row = self.model.get_row(i)
             row["category"] = cat
             row["subcategory"] = sub
+            if i in dlg.apply_merchants:
+                row["merchant"] = dlg.apply_merchants[i] or row.get("merchant")
+            elif dlg.merchant_changed:
+                row["merchant"] = dlg.merchant
+            if dlg.flipped and i in row_indices and row["type"] != dlg.row_type:  # money back of the other type
+                row["type"], row["amount"] = dlg.row_type, -row["amount"]
+            if i in row_indices:
+                row["_manual"] = True  # chosen by hand: Re-apply leaves it as it is
             self._refresh_status_for_row(i)
         self.model.dataChanged.emit(self.model.index(0, 0),
                                     self.model.index(self.model.rowCount() - 1, len(PREVIEW_COLS) - 1))
@@ -861,8 +895,12 @@ class ImportTab(QWidget):
             QMessageBox.information(self, "Info", "All selected rows are transfers — category is fixed.")
             return
         types = set(self.model.get_row(i)["type"] for i in non_transfer)
-        row_type = types.pop() if len(types) == 1 else "Expense"
-        self._edit_categories(non_transfer, row_type)
+        if len(types) > 1:
+            QMessageBox.warning(self, "Mixed Types",
+                                "All selected rows must have the same type (Income or Expense).\n"
+                                f"You selected: {', '.join(sorted(types))}")
+            return
+        self._edit_categories(non_transfer, types.pop())
 
     def _bulk_add_tags(self):
         selected = self._get_selected_row_indices()
@@ -901,7 +939,8 @@ class ImportTab(QWidget):
                 row.get("_status", ""),
                 row.get("date", ""),
                 row.get("type", ""),
-                f"${row['amount']:,.2f}" if row.get("amount") is not None else "",
+                money(row.get("amount")),
+                row.get("merchant") or "",
                 cat["name"] if cat else "",
                 sub["name"] if sub else "",
                 ", ".join(t["name"] for t in tags),
@@ -924,7 +963,7 @@ class ImportTab(QWidget):
 
         updated = 0
         for i, r in enumerate(self.parsed_rows):
-            if r.get("is_transfer"):
+            if r.get("is_transfer") or r.get("_manual"):
                 continue
             sub = r.get("subcategory")
             if sub and sub["id"] != uncat_sub_id:
@@ -932,24 +971,22 @@ class ImportTab(QWidget):
 
             name = r.get("name") or r.get("description") or ""
             memorandum = r.get("memorandum") or r.get("memo") or ""
-            mapping = self.db.lookup_mapping(
-                type_name=r["type"],
-                account_name=account,
-                name=name or None,
-                memorandum=memorandum or None,
-            )
-            if not mapping or not mapping["subcategory_id"]:
+            # its type as the bank gave it, so a rule added since can still make it money back
+            bank_type = r["type"] if r.get("amount", 0) >= 0 else OPPOSITE.get(r["type"], r["type"])
+            mapping, rule_type, back = find_rule(self.db, bank_type, account, name, memorandum)
+            if not mapping:
                 continue
-
-            new_sub = self.db.get_subcategory_by_id(mapping["subcategory_id"])
+            before = (r["type"], r["amount"], r.get("merchant"), r.get("category"), r.get("subcategory"))
+            r["type"], r["amount"] = rule_type, -abs(r["amount"]) if back else abs(r["amount"])
+            r["merchant"] = mapping["merchant"] or r.get("merchant")
+            new_sub = self.db.get_subcategory_by_id(mapping["subcategory_id"]) if mapping["subcategory_id"] else None
             new_cat = self.db.get_category_by_id(mapping["category_id"]) if mapping["category_id"] else None
-            if not new_sub or not new_cat or new_sub["name"] == "Uncategorized":
-                continue
-
-            r["subcategory"] = new_sub
-            r["category"] = new_cat
-            self._refresh_status_for_row(i)
-            updated += 1
+            if new_sub and new_cat and new_cat["name"] != UNCATEGORIZED_CAT:
+                r["subcategory"] = new_sub
+                r["category"] = new_cat
+            if (r["type"], r["amount"], r.get("merchant"), r.get("category"), r.get("subcategory")) != before:
+                self._refresh_status_for_row(i)
+                updated += 1
 
         if updated:
             self.model.dataChanged.emit(
@@ -1049,7 +1086,7 @@ class ImportTab(QWidget):
                             _dp.year, MONTHS_ORDER[_dp.month - 1], _dp.day, type_str,
                             account, r["amount"], sub_id, cat_id,
                             name=tx_name, memorandum=tx_memo,
-                            fitid=fitid,
+                            fitid=fitid, merchant=r.get("merchant"),
                         )
 
                     # Save pre-import tags

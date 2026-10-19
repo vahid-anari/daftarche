@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
 )
 
 from daftarche.style import get_settings
+from daftarche.widgets import money
 
 HINT = "Hover a category to see what's inside; click the chart (or Pin) to keep it."
 
@@ -97,11 +98,13 @@ class DetailPanel(QFrame):
         for first, label, amount, row_filters in rows:
             r = self.table.rowCount()
             self.table.insertRow(r)
-            cells = (QTableWidgetItem(first), QTableWidgetItem(label), QTableWidgetItem(f"${amount:,.2f}"))
+            cells = (QTableWidgetItem(first), QTableWidgetItem(label), QTableWidgetItem(money(amount)))
             cells[0].setForeground(dim)
             cells[1].setForeground(text)
             cells[1].setToolTip(label)
             cells[2].setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            if amount < 0:  # money back
+                cells[2].setForeground(QColor(s.get("income") or "#2ecc71"))
             cells[0].setData(Qt.UserRole, row_filters or filters)
             for c, item in enumerate(cells):
                 self.table.setItem(r, c, item)

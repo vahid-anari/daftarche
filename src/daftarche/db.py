@@ -63,7 +63,7 @@ def _date_str_to_parts(date_str):
         return None, None, None
 
 
-SCHEMA_VERSION = 2  # 2: transactions.note
+SCHEMA_VERSION = 3  # 2: transactions.note; 3: merchant (transactions and rules)
 """Database layout version, stored in the file (PRAGMA user_version). Raise it whenever
 _migrate learns something new, so an older Daftarche refuses a database it cannot read."""
 
@@ -418,6 +418,8 @@ class Database:
         elif "date" not in tx_cols:
             add_col_if_missing("transactions", "date", "TEXT NOT NULL DEFAULT '2026-01-01'")
         add_col_if_missing("transactions", "note", "TEXT")  # your own words: what it was (layout 2)
+        add_col_if_missing("transactions", "merchant", "TEXT")  # the shop or person (layout 3)
+        add_col_if_missing("import_mappings", "merchant", "TEXT")  # what a rule sets as merchant (layout 3)
 
         # Ensure date index exists (safe to run every time)
         c.execute("CREATE INDEX IF NOT EXISTS idx_tx_date ON transactions(date)")
@@ -514,7 +516,7 @@ class Database:
         # Tags tables — ensure indices exist for older DBs
         c.execute("CREATE INDEX IF NOT EXISTS idx_tx_tags_tx  ON transaction_tags(transaction_id)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_tx_tags_tag ON transaction_tags(tag_id)")
-        for column in ("to_account_id", "subcategory_id", "fitid"):
+        for column in ("to_account_id", "subcategory_id", "fitid", "merchant"):
             c.execute(f"CREATE INDEX IF NOT EXISTS idx_tx_{column} ON transactions({column})")
 
         self._dedupe_rules()
@@ -908,6 +910,7 @@ class Database:
                    t.name,
                    t.memorandum,
                    t.note,
+                   t.merchant,
                    t.description,
                    t.fitid,
                    t.transfer_status,
@@ -941,6 +944,9 @@ class Database:
         if f.get("subcategory"):
             q += " AND s.name IN (" + ",".join("?" * len(f["subcategory"])) + ")"
             params += f["subcategory"]
+        if f.get("merchant"):
+            q += " AND t.merchant IN (" + ",".join("?" * len(f["merchant"])) + ")"
+            params += f["merchant"]
         if f.get("tags"):
             ph = ",".join("?" * len(f["tags"]))
             tag_id_rows = self.conn.execute(f"""
@@ -998,6 +1004,9 @@ class Database:
             if sf.get("note", True):  # on unless turned off (older settings do not know it)
                 field_clauses.append("t.note LIKE ?")
                 params.append(kw)
+            if sf.get("merchant", True):  # the same
+                field_clauses.append("t.merchant LIKE ?")
+                params.append(kw)
             if field_clauses:
                 q += " AND (" + " OR ".join(field_clauses) + ")"
 
@@ -1033,7 +1042,9 @@ class Database:
     def add_transaction(self, year, month, day, type_name, account_name, amount,
                         subcategory_id, category_id, name=None, memorandum=None,
                         description=None, to_account_name=None, transfer_status=None,
-                        fitid=None):
+                        fitid=None, merchant=None, note=None):
+        """``amount`` is positive, or negative for money back of that type (a refund is a
+        negative Expense, in the category it was spent in)."""
         amount = round2(amount)
         type_id = self.get_type_id(type_name)
         account_id = self.get_or_create_account(account_name) if account_name else None
@@ -1050,11 +1061,12 @@ class Database:
         self.conn.execute("""
                           INSERT INTO transactions(date, type_id, account_id, to_account_id,
                                                    amount, subcategory_id, category_id, name, memorandum,
-                                                   description, fitid, transfer_status)
-                          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                                   description, fitid, transfer_status, merchant, note)
+                          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                           """, (date_str, type_id, account_id, to_account_id,
                                 amount, subcategory_id, category_id, name, memorandum,
-                                description, fitid, transfer_status))
+                                description, fitid, transfer_status,
+                                (merchant or "").strip() or None, (note or "").strip() or None))
         return self.conn.execute("SELECT last_insert_rowid()").fetchone()[0]
 
     @atomic
@@ -1307,9 +1319,11 @@ class Database:
                         OR t.memorandum LIKE ?
                         OR t.description LIKE ?
                         OR t.fitid LIKE ?
+                        OR t.merchant LIKE ?
+                        OR t.note LIKE ?
                     )
                 """
-                params += [kw, kw, kw, kw, kw, kw, kw, kw]
+                params += [kw] * 10
             return q, params
 
         def build_base(exclude_key):
@@ -1401,8 +1415,12 @@ class Database:
     # ── Import Mappings ───────────────────────────────────────────
     @atomic
     def save_mapping(self, type_name, account_name, name=None, memorandum=None,
-                     subcategory_id=None, category_id=None):
-        """Add a rule, or change the rule with the same type, account, name and memo."""
+                     subcategory_id=None, category_id=None, merchant=None):
+        """Add a rule, or change the rule with the same type, account, name and memo.
+
+        A rule sets the merchant and the category; one in Uncategorized sets only the merchant
+        (the category is then chosen by hand: Amazon, a friend who pays back)."""
+        merchant = (merchant or "").strip() or None
         type_id = self.get_type_id(type_name) if type_name else None
         acc = self.get_account_by_name(account_name) if account_name else None
         account_id = acc["id"] if acc else None
@@ -1412,12 +1430,13 @@ class Database:
             "SELECT id FROM import_mappings WHERE type_id IS ? AND account_id IS ? AND name IS ? AND memorandum IS ?",
             (type_id, account_id, name, memorandum)).fetchone()
         if same:
-            self.conn.execute("UPDATE import_mappings SET subcategory_id=?, category_id=? WHERE id=?",
-                              (subcategory_id, category_id, same["id"]))
+            self.conn.execute("UPDATE import_mappings SET subcategory_id=?, category_id=?, merchant=? WHERE id=?",
+                              (subcategory_id, category_id, merchant, same["id"]))
         else:
             self.conn.execute(
-                "INSERT INTO import_mappings(type_id, account_id, name, memorandum, subcategory_id, category_id) "
-                "VALUES (?, ?, ?, ?, ?, ?)", (type_id, account_id, name, memorandum, subcategory_id, category_id))
+                "INSERT INTO import_mappings(type_id, account_id, name, memorandum, subcategory_id, category_id, "
+                "merchant) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (type_id, account_id, name, memorandum, subcategory_id, category_id, merchant))
 
     def get_rule_id(self, type_name, account_name, name=None, memorandum=None):
         """The id of the rule with exactly this type, account (None = all), name and memo."""
@@ -1430,17 +1449,45 @@ class Database:
         return row["id"] if row else None
 
     def get_uncategorized_rows(self, type_name):
-        """Transactions of a type with no category, or with sub-category Uncategorized."""
+        """Transactions of a type with no category (To review). One with a category but no
+        sub-category is not missing anything, so a new rule never changes it."""
         return self.conn.execute(
             """SELECT t.id, a.name AS account, t.name, t.memorandum
                FROM transactions t
                     JOIN types ty ON ty.id = t.type_id
                     LEFT JOIN accounts a ON a.id = t.account_id
                     LEFT JOIN categories c ON c.id = t.category_id
-                    LEFT JOIN subcategories s ON s.id = t.subcategory_id
-               WHERE ty.name = ? AND (t.category_id IS NULL OR t.subcategory_id IS NULL
-                                      OR c.name = ? OR s.name = ?)""",
-            (type_name, UNCATEGORIZED_CAT, UNCATEGORIZED_SUB)).fetchall()
+               WHERE ty.name = ? AND (t.category_id IS NULL OR c.name = ?)""",
+            (type_name, UNCATEGORIZED_CAT)).fetchall()
+
+    def get_merchants(self):
+        """Every merchant name in use (transactions and rules), A to Z."""
+        rows = self.conn.execute("""
+            SELECT merchant FROM transactions WHERE merchant IS NOT NULL AND TRIM(merchant) <> ''
+            UNION SELECT merchant FROM import_mappings WHERE merchant IS NOT NULL AND TRIM(merchant) <> ''
+        """).fetchall()
+        return sorted({r[0] for r in rows}, key=str.casefold)
+
+    def get_categories_for_merchant(self, merchant, type_name):
+        """The categories this merchant's transactions of ``type_name`` are in, most used first
+        (Uncategorized left out): suggested first when choosing a category."""
+        if not (merchant or "").strip():
+            return []
+        rows = self.conn.execute("""
+            SELECT c.name, COUNT(*) AS n FROM transactions t
+                 JOIN categories c ON c.id = t.category_id
+                 JOIN types ty ON ty.id = t.type_id
+            WHERE t.merchant = ? COLLATE NOCASE AND ty.name = ? AND c.name <> ?
+            GROUP BY c.name ORDER BY n DESC, c.name""", (merchant.strip(), type_name, UNCATEGORIZED_CAT)).fetchall()
+        return [r["name"] for r in rows]
+
+    def get_to_review_count(self):
+        """Income and expense transactions with no category (all time): the "To review" list."""
+        cat_id, _ = self.get_uncategorized_ids()
+        return self.conn.execute("""
+            SELECT COUNT(*) FROM transactions t JOIN types ty ON ty.id = t.type_id
+            WHERE (t.category_id = ? OR t.category_id IS NULL)
+              AND (ty.name LIKE '%Income%' OR ty.name LIKE '%Expense%')""", (cat_id,)).fetchone()[0]
 
     def lookup_mapping(self, type_name, account_name, name=None, memorandum=None):
         """The rule for a transaction, or None.
@@ -1813,6 +1860,7 @@ class Database:
                 "Account": r["account"],
                 "To Account": r["to_account"] or "",
                 "Amount": r["amount"],
+                "Merchant": (r["merchant"] if "merchant" in r.keys() else "") or "",
                 "Sub-Category": r["subcategory"],
                 "Category": r["category"],
                 "Name": r["name"] or "",
@@ -1915,7 +1963,8 @@ class Database:
                                         m.account_id,
                                         m.type_id,
                                         m.subcategory_id,
-                                        m.category_id
+                                        m.category_id,
+                                        m.merchant
                                  FROM import_mappings m
                                           LEFT JOIN accounts a ON m.account_id = a.id
                                  WHERE m.subcategory_id = ?
@@ -1928,7 +1977,7 @@ class Database:
 
     @atomic
     def delete_rule_and_save(self, rule_id, type_name, account_name,
-                             name, memorandum, subcategory_id, category_id):
+                             name, memorandum, subcategory_id, category_id, merchant=None):
         self.conn.execute("DELETE FROM import_mappings WHERE id=?", (rule_id,))
         self.save_mapping(
             type_name=type_name,
@@ -1937,6 +1986,7 @@ class Database:
             memorandum=memorandum,
             subcategory_id=subcategory_id,
             category_id=category_id,
+            merchant=merchant,
         )
 
     # ── Tags ──────────────────────────────────────────────────────

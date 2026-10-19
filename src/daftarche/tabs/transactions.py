@@ -11,9 +11,11 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QAbstractTableModel, QModelIndex, QItemSelectionModel, QTimer
 from PySide6.QtGui import QColor, QAction, QBrush, QShortcut, QKeySequence, QIcon, QPainter, QPen, QPixmap
 
-from daftarche.db import MONTHS_ORDER, MONTH_NUM, TRANSFER_UNMATCHED, TRANSFER_MATCHED, SUB_MATCHED
+from daftarche.db import (
+    MONTHS_ORDER, MONTH_NUM, TRANSFER_UNMATCHED, TRANSFER_MATCHED, SUB_MATCHED, UNCATEGORIZED_CAT, UNCATEGORIZED_SUB,
+)
 from daftarche.widgets import (
-    plain_label,
+    amount_color_key, money, plain_label,
     add_subcategory_items, confirm_category,
     CheckComboBox, PeriodSelectorWidget, SymbolButton, SingleSelectCombo, ReadOnlyCopyDelegate,
     EditableTableView, DatePicker
@@ -23,7 +25,7 @@ from daftarche.style import get_settings
 
 COLUMNS = [
     "Date", "Type", "Account",
-    "Amount", "Category", "Sub-Category", "Tags", "Name", "Memorandum", "FITID", "Note",
+    "Amount", "Category", "Sub-Category", "Tags", "Name", "Memorandum", "FITID", "Note", "Merchant",
 ]
 COL_DATE = 0
 COL_TYPE = 1
@@ -36,10 +38,11 @@ COL_NAME = 7
 COL_MEMO = 8
 COL_FITID = 9
 COL_NOTE = 10  # model positions stay fixed; what you see is ordered by the header (movable)
+COL_MERCHANT = 11
 COLUMN_KEYS = ["date", "type", "account", "amount", "category", "subcategory", "tags", "name", "memo",
-               "fitid", "note"]  # by model column: settings save columns by these names
-DEFAULT_ORDER = ["date", "type", "account", "amount", "category", "subcategory", "tags", "name", "memo",
-                 "note", "fitid"]
+               "fitid", "note", "merchant"]  # by model column: settings save columns by these names
+DEFAULT_ORDER = ["date", "type", "account", "amount", "merchant", "category", "subcategory", "tags", "name",
+                 "memo", "note", "fitid"]
 
 
 def column_settings(saved_visible, saved_order):
@@ -52,14 +55,17 @@ def column_settings(saved_visible, saved_order):
             visible[key] = bool(v)
     if saved_order:
         order = [k for k in saved_order if k in COLUMN_KEYS]
-        order += [k for k in COLUMN_KEYS if k not in order]
     elif saved_visible:  # an existing table: keep the order it had (Note last)
-        order = list(COLUMN_KEYS)
+        order = [k for k in COLUMN_KEYS if k != "merchant"]
     else:
         order = list(DEFAULT_ORDER)
+    for key in DEFAULT_ORDER:  # a column added since (Merchant): where it goes by default
+        if key not in order:
+            before = DEFAULT_ORDER[:DEFAULT_ORDER.index(key)]
+            order.insert(max((order.index(k) + 1 for k in before if k in order), default=0), key)
     return visible, order
 SORT_KEYS = ["date", "type", "account", "amount", "category", "subcategory", "tags", "name", "memorandum",
-             "fitid", "note"]  # by column
+             "fitid", "note", "merchant"]  # by column
 
 
 # NullDelegate  — suppresses any editor (nothing happens on double-click)
@@ -119,6 +125,11 @@ class AccountDelegate(QStyledItemDelegate):
         painter.restore()
 
 
+def _category_only(row):
+    """A category chosen without a sub-category (its sub-category is "Uncategorized")."""
+    return row.get("subcategory") == UNCATEGORIZED_SUB and row.get("category") not in (None, UNCATEGORIZED_CAT)
+
+
 # TxModel  — QAbstractTableModel backed by a list of transaction dicts
 class TxModel(QAbstractTableModel):
     def __init__(self, rows=None):
@@ -163,22 +174,30 @@ class TxModel(QAbstractTableModel):
             row["type"], account_str, row["amount"],
             row["category"], row["subcategory"],
             row.get("tags") or "",
-            row["name"], row["memorandum"], row["fitid"], row.get("note"),
+            row["name"], row["memorandum"], row["fitid"], row.get("note"), row.get("merchant"),
         ]
         val = keys_vals[col]
+        no_sub = col == COL_SUBCAT and _category_only(row)
 
         if role == Qt.DisplayRole:
             if col == COL_AMOUNT:
-                return f"${val:,.2f}" if val is not None else ""
+                return money(val)
+            if no_sub:
+                return "—"  # a category without a sub-category: nothing missing
             return str(val) if val is not None else ""
+
+        if role == Qt.ToolTipRole and no_sub:
+            return "No sub-category (that is fine: it counts in its category)"
 
         if role == Qt.ForegroundRole:
             s = get_settings()
             type_ = row["type"] or ""
+            if no_sub:
+                return QBrush(QColor(s.get("text_dim")))
             if col == COL_AMOUNT or col == COL_TYPE:
-                if "Income" in type_: return QBrush(QColor(s.get("income")))
-                if "Expense" in type_: return QBrush(QColor(s.get("expense")))
-                if "Transfer" in type_: return QBrush(QColor(s.get("transfer")))
+                key = amount_color_key(type_, row["amount"] if col == COL_AMOUNT else 0)
+                if key:
+                    return QBrush(QColor(s.get(key)))
             if col == COL_ACCOUNT and row["to_account"]:
                 return QBrush(QColor(s.get("transfer")))
             if col == COL_ACCOUNT and row["account_color"]:
@@ -248,10 +267,11 @@ class TransactionsTab(QWidget):
             saved if isinstance(saved, dict) else None, order if isinstance(order, list) else None)
         saved_sf = get_settings().get("search_fields")
         if saved_sf and isinstance(saved_sf, dict):
-            self._search_fields = {"note": True, **saved_sf}  # Note came later: searched unless turned off
+            # Note and Merchant came later: searched unless turned off
+            self._search_fields = {"note": True, "merchant": True, **saved_sf}
         else:
             self._search_fields = {"name": True, "memo": True, "category": True, "subcategory": True, "tags": False,
-                                   "fitid": False, "note": True}
+                                   "fitid": False, "note": True, "merchant": True}
         self._build_ui()
         self.refresh()
 
@@ -272,6 +292,10 @@ class TransactionsTab(QWidget):
         btn_cols = QPushButton("📋 Columns")
         btn_exp = QPushButton("💾 Export")
         btn_refresh = QPushButton("Refresh")
+        self.btn_review = QPushButton()
+        self.btn_review.setToolTip("Income and expenses with no category yet (e.g. a merchant-only rule "
+                                   "matched them): click to show them")
+        self.btn_review.clicked.connect(self.show_to_review)
         self.f_search = QLineEdit()
         self.f_search.setPlaceholderText("🔍  Search...")
 
@@ -303,7 +327,8 @@ class TransactionsTab(QWidget):
         self.search_fields_action.triggered.connect(self._open_search_fields_dialog)
         self._update_search_fields_label()
 
-        for btn in [btn_add, btn_edit_cat, btn_match, btn_sort, btn_resort, btn_cols, btn_exp, btn_refresh]:
+        for btn in [btn_add, btn_edit_cat, self.btn_review, btn_match, btn_sort, btn_resort, btn_cols, btn_exp,
+                    btn_refresh]:
             title_row.addWidget(btn)
             btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
@@ -444,7 +469,7 @@ class TransactionsTab(QWidget):
                 s = get_settings()
                 color = s.get("income") if sel_sum >= 0 else s.get("expense")
                 sign = "+" if sel_sum > 0 else ""
-                self.lbl_selected_sum.setText(f"Sum: {sign}${sel_sum:,.2f}")
+                self.lbl_selected_sum.setText(f"Sum: {sign}{money(sel_sum)}")
                 self.lbl_selected_sum.setStyleSheet(f"color: {color}; font-weight: bold;")
             else:
                 self.lbl_selected_sum.setText("")
@@ -554,7 +579,17 @@ class TransactionsTab(QWidget):
             self._updating = False
         self._apply_filters()
 
+    def _update_review_button(self):
+        n = self.db.get_to_review_count()
+        self.btn_review.setText(f"📝 To review ({n})")
+        self.btn_review.setVisible(n > 0)
+
+    def show_to_review(self):
+        """Every income and expense without a category, to give each one."""
+        self.show_matching(categories=[UNCATEGORIZED_CAT])
+
     def _apply_filters(self):
+        self._update_review_button()
         rows = self.db.get_transactions(self._get_filters())
         self._current_rows = list(rows)
         self.model.set_rows(self._current_rows)
@@ -568,10 +603,10 @@ class TransactionsTab(QWidget):
         transfer = sum(r["amount"] for r in self._current_rows if r["type"] and "Transfer" in r["type"])
         net = income - expense
 
-        self.lbl_income.setText(f"Income: ${income:,.2f}")
-        self.lbl_expense.setText(f"Expense: ${expense:,.2f}")
-        self.lbl_transfer.setText(f"Transfer: ${transfer:,.2f}")
-        self.lbl_net.setText(f"Net: ${net:,.2f}")
+        self.lbl_income.setText(f"Income: {money(income)}")
+        self.lbl_expense.setText(f"Expense: {money(expense)}")
+        self.lbl_transfer.setText(f"Transfer: {money(transfer)}")
+        self.lbl_net.setText(f"Net: {money(net)}")
 
         s = get_settings()
         color = s.get("income") if net >= 0 else s.get("expense")
@@ -682,7 +717,7 @@ class TransactionsTab(QWidget):
                 triggered=lambda: self._edit_row(self.model.index(row_idx, 0))
             ))
 
-        edit_label = "✏️  Edit Category/Sub-Cat" if n == 1 else "✏️  Bulk Edit Category/Sub-Cat"
+        edit_label = "✏️  Edit Merchant / Category" if n == 1 else "✏️  Bulk Edit Merchant / Category"
         menu.addAction(QAction(edit_label, self, triggered=self._bulk_edit_cat))
         menu.addAction(QAction("🏷️  Add Tags", self, triggered=self._add_tags_to_selected))
         menu.addSeparator()
@@ -721,7 +756,7 @@ class TransactionsTab(QWidget):
         col = index.column()
         if col in (COL_DATE, COL_TYPE, COL_ACCOUNT, COL_AMOUNT):
             self._edit_row(index)
-        elif col in (COL_CAT, COL_SUBCAT):
+        elif col in (COL_CAT, COL_SUBCAT, COL_MERCHANT):
             self._bulk_edit_cat_for_row(index.row())
         elif col == COL_TAGS:
             self._edit_tags_for_row(index.row())
@@ -740,7 +775,7 @@ class TransactionsTab(QWidget):
         first = rows[0]
         if len(rows) == 1:
             about = "  ·  ".join(x for x in (first.get("name") or first.get("memorandum"), first.get("account"),
-                                             f"${first['amount']:,.2f}" if first.get("amount") is not None else "")
+                                             money(first.get("amount")))
                                  if x)
         else:
             about = f"{len(rows)} transactions"
@@ -748,6 +783,7 @@ class TransactionsTab(QWidget):
         candidates = [{"key": c["id"], "account": c["account"], "name": c["name"], "memo": c["memorandum"]}
                       for c in self.db.get_uncategorized_rows(row_type) if c["id"] not in own]
         same = len({(r.get("category"), r.get("subcategory")) for r in rows}) == 1
+        merchants = {(r.get("merchant") or "") for r in rows}
         return CategoryDialog(
             self.db, row_type, self,
             preset_cat=first.get("category") if same else None,
@@ -755,6 +791,9 @@ class TransactionsTab(QWidget):
             about=about,
             default_rule=(first.get("name") or "", first.get("memorandum") or "") if len(rows) == 1 else None,
             candidates=candidates,
+            preset_merchant=merchants.pop() if len(merchants) == 1 else None,
+            merchant_mixed=len(merchants) > 1,
+            can_flip=True,
         )
 
     def _edit_categories(self, row_indices):
@@ -763,14 +802,24 @@ class TransactionsTab(QWidget):
         dlg = self._category_dialog(row_type, rows)
         if not dlg.exec():
             return
-        cat = self.db.get_category_by_name(dlg.cat_name, type_name=row_type)
+        cat = self.db.get_category_by_name(dlg.cat_name, type_name=dlg.row_type)
         sub = self.db.get_subcategory_by_name(dlg.sub_name, cat["id"]) if cat else None
         ids = [r["id"] for r in rows]
         scroll_pos = self.table.verticalScrollBar().value()
         with self.db.transaction():
-            for tx_id in ids + list(dlg.apply_keys):
-                self.db.update_transaction(tx_id, category_id=cat["id"] if cat else None,
-                                           subcategory_id=sub["id"] if sub else None)
+            for r in rows:
+                changes = {"category_id": cat["id"] if cat else None, "subcategory_id": sub["id"] if sub else None}
+                if dlg.merchant_changed:
+                    changes["merchant"] = dlg.merchant
+                if dlg.flipped and r["type"] != dlg.row_type:  # money back of the other type: same amount, negative
+                    changes["type_name"] = dlg.row_type
+                    changes["amount"] = -(r["amount"] or 0)
+                self.db.update_transaction(r["id"], **changes)
+            for tx_id in dlg.apply_keys:
+                changes = {"category_id": cat["id"] if cat else None, "subcategory_id": sub["id"] if sub else None}
+                if dlg.apply_merchants.get(tx_id):
+                    changes["merchant"] = dlg.apply_merchants[tx_id]
+                self.db.update_transaction(tx_id, **changes)
         self._notify_change()
         self.table.verticalScrollBar().setValue(scroll_pos)
         self.table.clearSelection()
@@ -927,7 +976,7 @@ class TransactionsTab(QWidget):
                 date_str,
                 str(row["type"] or ""),
                 account_str,
-                f"${row['amount']:,.2f}" if row["amount"] is not None else "",
+                money(row["amount"]),
                 str(row["category"] or ""),
                 str(row["subcategory"] or ""),
                 str(row.get("tags") or ""),
@@ -935,6 +984,7 @@ class TransactionsTab(QWidget):
                 str(row["memorandum"] or ""),
                 str(row["fitid"] or ""),
                 str(row.get("note") or ""),
+                str(row.get("merchant") or ""),
             ]
             lines.append("\t".join(all_values[i] for i in visible_cols))
         QApplication.clipboard().setText("\n".join(lines))
@@ -1170,7 +1220,16 @@ class TransactionDialog(QDialog):
         self.f_to_account.setMaxVisibleItems(15)
 
         self.f_amount = QLineEdit(str(self.row["amount"]) if self.row and self.row["amount"] is not None else "")
-        self.f_amount.setPlaceholderText("0.00")
+        self.f_amount.setPlaceholderText("0.00 (money back, e.g. a refund: -30.00)")
+        self.f_amount.setToolTip("Money back of this type is negative: a refund is a negative Expense in the "
+                                 "category it was spent in, and is taken off that category's total.")
+
+        self.f_merchant = SingleSelectCombo()
+        self.f_merchant.allow_typing()
+        self.f_merchant.addItems(self.db.get_merchants())
+        self.f_merchant.setCurrentText((self.row.get("merchant") or "") if self.row else "")
+        self.f_merchant.lineEdit().setPlaceholderText("The shop or person (e.g. Amazon, Zahra)")
+        self.f_merchant.setMaxVisibleItems(15)
 
         self.f_category = SingleSelectCombo()
         self.f_category.allow_typing()
@@ -1186,7 +1245,7 @@ class TransactionDialog(QDialog):
         self._preset_sub = self.row["subcategory"] if self.row else None
 
         self.f_name = QLineEdit((self.row["name"] or "") if self.row else "")
-        self.f_name.setPlaceholderText("Merchant name (from bank)")
+        self.f_name.setPlaceholderText("Name (from the bank)")
 
         self.f_memo = QLineEdit((self.row["memorandum"] or "") if self.row else "")
         self.f_memo.setPlaceholderText("Bank memorandum (e.g. location)")
@@ -1213,6 +1272,7 @@ class TransactionDialog(QDialog):
         form.addRow("Account:", self.f_account)
         form.addRow(self.lbl_to, self.f_to_account)
         form.addRow("Amount:", self.f_amount)
+        form.addRow("Merchant:", self.f_merchant)
         form.addRow("Category:", self.f_category)
         form.addRow("Sub-Category:", self.f_subcat)
         form.addRow("Name:", self.f_name)
@@ -1309,6 +1369,9 @@ class TransactionDialog(QDialog):
             amount = float(self.f_amount.text())
             name = self.f_name.text().strip() or None
             memo = self.f_memo.text().strip() or None
+            merchant = self.f_merchant.currentText().strip()
+            merchant = next((m for m in self.db.get_merchants() if m.casefold() == merchant.casefold()),
+                            merchant) or None  # "amazon" is the Amazon already there
             if not account and not (self.row and to_acc):
                 raise ValueError("choose an account")
             names = confirm_category(self, self.db, type_name,
@@ -1332,15 +1395,15 @@ class TransactionDialog(QDialog):
                     to_account_name=to_acc, amount=amount,
                     subcategory_id=sub_id, category_id=cat_id,
                     name=name, memorandum=memo, note=self.f_note.text().strip() or None,
-                    transfer_status=transfer_status,
+                    transfer_status=transfer_status, merchant=merchant,
                 )
                 tx_id = self.row["id"]
             else:
                 tx_id = self.db.add_transaction(year, month, day, type_name, account,
                                                 amount, sub_id, cat_id,
                                                 name=name, memorandum=memo,
-                                                to_account_name=to_acc)
-                self.db.update_transaction(tx_id, note=self.f_note.text().strip() or None)
+                                                to_account_name=to_acc, merchant=merchant,
+                                                note=self.f_note.text().strip() or None)
 
             # Save tags
             selected_names = self.f_tags.get_selected()
@@ -1504,6 +1567,7 @@ _SEARCH_FIELD_LABELS = {
     "tags": "Tags",
     "fitid": "FITID",
     "note": "Note",
+    "merchant": "Merchant",
 }
 
 
@@ -1550,7 +1614,7 @@ class SearchFieldsDialog(QDialog):
 
 # SortDialog
 SORT_COLUMNS = [
-    "Date", "Type", "Account", "Amount",
+    "Date", "Type", "Account", "Amount", "Merchant",
     "Category", "Sub-Category", "Name", "Memorandum", "Note", "FITID", "Tags",
 ]
 
@@ -1562,6 +1626,7 @@ _SORT_ORDERS = {
     "Category": [("Z → A", True), ("A → Z", False)],
     "Sub-Category": [("Z → A", True), ("A → Z", False)],
     "Name": [("Z → A", True), ("A → Z", False)],
+    "Merchant": [("Z → A", True), ("A → Z", False)],
     "Memorandum": [("Z → A", True), ("A → Z", False)],
     "FITID": [("Z → A", True), ("A → Z", False)],
     "Tags": [("Z → A", True), ("A → Z", False)],

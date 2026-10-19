@@ -1,4 +1,4 @@
-"""Edit Category / Sub-Category: typed names, "New", and the rules of the chosen sub-category."""
+"""Edit Merchant / Category: typed names, "New", and the rules of the chosen sub-category."""
 
 from unittest import mock
 
@@ -91,17 +91,17 @@ def test_rules_of_the_chosen_subcategory(qapp, db, food):
     db.save_mapping("Expense", None, name="COSTCO", subcategory_id=groceries, category_id=food)
     db.save_mapping("Expense", "Card", name="FRESHCO", subcategory_id=groceries, category_id=food)
     d = dialog(db, preset_cat="Food", preset_sub="Groceries")
-    assert [(e["values"]) for e, *_ in d._rule_rows] == [(None, "COSTCO", ""), ("Card", "FRESHCO", "")]
+    assert [(e["values"]) for e, *_ in d._rule_rows] == [(None, "COSTCO", "", ""), ("Card", "FRESHCO", "", "")]
     assert d.rules_title.text() == "Rules for Food › Groceries"
 
-    entry, account, name, memo = d._rule_rows[0]
+    entry, account, name, memo, merchant = d._rule_rows[0]
     name.setText("COSTCO|GAS")  # edit one
     d._remove_rule(d._rule_rows[1][0])  # remove one
     d.new_name.setText("LOBLAWS")
     d._add_rule()  # add one
     d.f_subcat.setCurrentText(UNCAT := "Uncategorized")  # switching away and back keeps the edits
     d.f_subcat.setCurrentText("Groceries")
-    assert [e["values"] for e, *_ in d._rule_rows] == [(None, "COSTCO|GAS", ""), (None, "LOBLAWS", "")]
+    assert [e["values"] for e, *_ in d._rule_rows] == [(None, "COSTCO|GAS", "", ""), (None, "LOBLAWS", "", "")]
     assert UNCAT
     assert press_ok(d) == (True, False)
     rules = {(r["account_name"], r["name"]) for r in db.get_rules_for_subcategory(groceries)}

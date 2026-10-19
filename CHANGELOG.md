@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.17.0 — 2026-10-18
+
+- A Merchant for every transaction: the shop or person (Amazon, Zahra). A new column in
+  Transactions and in the Import preview, a field in Edit Transaction, searched like the
+  other fields, and written to the Excel export.
+- Money back is a negative amount of the same type, in the category it was spent in: a
+  refund shows as a green "-$30.00" and is taken off that category's total, so income and
+  expenses are no longer both inflated. On import, a credit that only an expense rule knows
+  (an Amazon refund) becomes such a refund by itself. Edit Merchant / Category has "Counts
+  as" to turn an income into money back of an expense (and back).
+- Rules set the merchant too. A rule with no category sets only the merchant: for a shop
+  whose purchases go to different categories, or a friend who pays back; those
+  transactions wait in "To review" for a category. Leave the category empty to make one.
+- Transactions: "To review (N)" lists the income and expenses with no category. A category
+  without a sub-category shows "—": nothing is missing.
+- When choosing a category, the ones used before for that merchant come first.
+- `tools/remap_categories.py` moves existing categories to this way (sub-category names
+  become merchants; refunds become negative expenses), from a CSV you check first.
+- The database layout is now 3 (adds the merchant): older Daftarche versions will ask to
+  be updated before opening it.
+
 ## 0.16.0 — 2026-10-18
 
 - Charts: a details panel to the right of the category list shows what is inside the

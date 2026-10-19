@@ -92,6 +92,27 @@ def plain_label(text):
     return (text or "").replace("&", "&&")
 
 
+def money(value):
+    """$1,234.50, or -$30.00 for money back (a refund is a negative expense)."""
+    if value is None:
+        return ""
+    return f"-${-value:,.2f}" if value < 0 else f"${value:,.2f}"
+
+
+def amount_color_key(type_name, amount):
+    """The theme colour for an amount: income green and expense red, the other way round when
+    the money went back (a refund shows green, money returned from an income red)."""
+    type_name = type_name or ""
+    back = (amount or 0) < 0
+    if "Income" in type_name:
+        return "expense" if back else "income"
+    if "Expense" in type_name:
+        return "income" if back else "expense"
+    if "Transfer" in type_name:
+        return "transfer"
+    return None
+
+
 def add_subcategory_items(combo, db, category_id):
     """A category's sub-categories into ``combo``, with "Uncategorized" first: picking only the
     category is enough, and the sub-category can be set later."""
@@ -112,6 +133,8 @@ def confirm_category(parent, db, type_name, cat_name, sub_name):
     sub-category means Uncategorized), or None when the user goes back to fix the names.
     """
     cat_name, sub_name = (cat_name or "").strip(), (sub_name or "").strip() or UNCATEGORIZED_SUB
+    if not cat_name and type_name and ("Income" in type_name or "Expense" in type_name):
+        cat_name = UNCATEGORIZED_CAT  # chosen later: it waits in To review
     if not cat_name:
         QMessageBox.warning(parent, "Category", "Choose a category.")
         return None
