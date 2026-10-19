@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QAbstractItemView, QHeaderView,
     QMessageBox, QCheckBox, QFileDialog, QDialog, QDialogButtonBox,
-    QApplication, QFrame, QScrollArea, QStyledItemDelegate,
+    QApplication, QStyledItemDelegate,
     QMenu, QListWidget, QFormLayout
 )
 from PySide6.QtCore import Qt, QAbstractTableModel, QModelIndex
@@ -15,8 +15,9 @@ from PySide6.QtGui import QColor, QBrush, QKeySequence, QShortcut, QAction
 
 from daftarche.style import get_settings
 from daftarche.category_dialog import CategoryDialog
+from daftarche.tag_picker import TagsDialog
 from daftarche.widgets import (
-    amount_color_key, money, plain_label, EditableTableView, ReadOnlyCopyDelegate, SingleSelectCombo,
+    amount_color_key, money, EditableTableView, ReadOnlyCopyDelegate, SingleSelectCombo,
 )
 from daftarche.db import (
     MONTHS_ORDER,
@@ -359,69 +360,9 @@ class NullDelegate(QStyledItemDelegate):
 
 
 # ImportTagPickerDialog
-class ImportTagPickerDialog(QDialog):
+class ImportTagPickerDialog(TagsDialog):
     def __init__(self, db, current_tags=None, parent=None):
-        super().__init__(parent)
-        self.db = db
-        self.setWindowTitle("Edit Tags")
-        self.setMinimumWidth(300)
-        self._checks = {}
-        self._current_ids = {t["id"] for t in (current_tags or [])}
-        self._build()
-
-    def _build(self):
-        layout = QVBoxLayout(self)
-        layout.setSpacing(10)
-        layout.setContentsMargins(16, 16, 16, 16)
-
-        btn_row = QHBoxLayout()
-        btn_all = QPushButton("✓ All")
-        btn_none = QPushButton("✕ None")
-        btn_all.setProperty("class", "secondary")
-        btn_none.setProperty("class", "secondary")
-        btn_all.setFixedHeight(28)
-        btn_none.setFixedHeight(28)
-        btn_all.clicked.connect(lambda: self._set_all(True))
-        btn_none.clicked.connect(lambda: self._set_all(False))
-        btn_row.addWidget(btn_all)
-        btn_row.addWidget(btn_none)
-        btn_row.addStretch()
-        layout.addLayout(btn_row)
-
-        all_tags = self.db.get_tags()
-
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-
-        container = QWidget()
-        container_layout = QVBoxLayout(container)
-        container_layout.setSpacing(4)
-        container_layout.setContentsMargins(4, 4, 4, 4)
-
-        for tag in all_tags:
-            cb = QCheckBox(plain_label(tag["name"]))
-            cb.setChecked(tag["id"] in self._current_ids)
-            self._checks[tag["id"]] = cb
-            container_layout.addWidget(cb)
-
-        container_layout.addStretch()
-        scroll.setWidget(container)
-        scroll.setMinimumHeight(min(len(all_tags) * 28 + 16, 240))
-        layout.addWidget(scroll, 1)
-
-        btns = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
-        btns.accepted.connect(self.accept)
-        btns.rejected.connect(self.reject)
-        layout.addWidget(btns)
-
-    def _set_all(self, checked):
-        for cb in self._checks.values():
-            cb.setChecked(checked)
-
-    def get_selected_ids(self):
-        return [tid for tid, cb in self._checks.items() if cb.isChecked()]
+        super().__init__(db, [t["name"] for t in (current_tags or [])], "Edit Tags", parent=parent)
 
 
 # ImportTab

@@ -1,3 +1,4 @@
+import html
 import os
 import shutil
 from pathlib import Path
@@ -121,6 +122,14 @@ class MainWindow(QMainWindow):
     def _show_transactions(self, came_from=None, **filters):
         self.tabs.setCurrentWidget(self.transactions_tab)
         self.transactions_tab.show_matching(came_from=came_from, **filters)
+
+    def _show_merchant(self, merchant):
+        """Manage → Merchants: that merchant's transactions; Back brings Manage to the front."""
+        def back():
+            self._open_manage()
+            self._manage_dlg.tabs.setCurrentWidget(self._manage_dlg.merchants_panel)
+        self._show_transactions(came_from=("Manage", back), merchants=[merchant],
+                                text=f"<b>{html.escape(merchant)}</b>: all its transactions")
 
     def _back_to_tab(self, name, tab):
         """(label, go back) for the Back bar: that tab, as it was left."""
@@ -266,7 +275,7 @@ class MainWindow(QMainWindow):
             self._manage_dlg.raise_()
             self._manage_dlg.activateWindow()
             return
-        self._manage_dlg = ManageDialog(self.db, self._refresh_all, self)
+        self._manage_dlg = ManageDialog(self.db, self._refresh_all, self, show_merchant=self._show_merchant)
         self._manage_dlg.finished.connect(lambda: setattr(self, "_manage_dlg", None))
         self._manage_dlg.show()
 

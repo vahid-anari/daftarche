@@ -1,3 +1,4 @@
+import html
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QTabWidget, QWidget,
     QPushButton, QLabel, QTableWidget, QTableWidgetItem,
@@ -10,6 +11,13 @@ from PySide6.QtGui import QColor, QBrush, QPalette
 
 from daftarche.style import get_settings
 from daftarche.widgets import SingleSelectCombo
+
+
+MERCHANT_ONLY = "(merchant only)"
+
+
+def _is_merchant_only(data):
+    return isinstance(data, dict) and bool(data.get("merchant_only"))
 
 
 def _apply_selection_palette(widget):
@@ -33,10 +41,11 @@ def _confirm_merge(parent, kind, old, new, what):
         QMessageBox.Yes | QMessageBox.No, QMessageBox.No) == QMessageBox.Yes
 
 class ManageDialog(QDialog):
-    def __init__(self, db, on_change_cb, parent=None):
+    def __init__(self, db, on_change_cb, parent=None, show_merchant=None):
         super().__init__(parent)
         self.db = db
         self.on_change_cb = on_change_cb
+        self._show_merchant = show_merchant  # (merchant) → its transactions in the main window
         self.setWindowTitle("Manage")
         self.setMinimumSize(1200, 620)
         self._build()
@@ -52,9 +61,11 @@ class ManageDialog(QDialog):
         self.accounts_panel = AccountsPanel(self.db, self._changed)
         self.cats_panel = CatsRulesPanel(self.db, self._changed)
         self.tags_panel = TagsPanel(self.db, self._changed)
+        self.merchants_panel = MerchantsPanel(self.db, self._changed, self._show_merchant)
 
         self.tabs.addTab(self.accounts_panel, "🏦  Accounts")
         self.tabs.addTab(self.cats_panel, "🏷️  Categories && Rules")
+        self.tabs.addTab(self.merchants_panel, "🏪  Merchants")
         self.tabs.addTab(self.tags_panel, "🔖  Tags")
 
         layout.addWidget(self.tabs)
@@ -80,6 +91,7 @@ class ManageDialog(QDialog):
     def refresh(self):
         self.accounts_panel.refresh()
         self.cats_panel.refresh()
+        self.merchants_panel.refresh()
         self.tags_panel.refresh()
 
     def _changed(self):
@@ -544,6 +556,22 @@ class CatsRulesPanel(QWidget):
         self.cat_table.setRowCount(0)
 
         cats = self.db.get_categories(type_id) if type_id else []
+        type_row = next((t for t in self.db.get_types() if t["id"] == type_id), None)
+        if type_row is not None and ("Income" in type_row["name"] or "Expense" in type_row["name"]):
+            # rules that only set the merchant live in Uncategorized, which has no type: listed here
+            uc, us = self.db.get_uncategorized_ids()
+            n_rules = self.db.conn.execute("SELECT COUNT(*) FROM import_mappings WHERE subcategory_id=? AND type_id=?",
+                                           (us, type_id)).fetchone()[0]
+            data = {"id": uc, "name": MERCHANT_ONLY, "type_id": type_id, "merchant_only": True}
+            self.cat_table.insertRow(0)
+            for col, val in enumerate([MERCHANT_ONLY, "—", str(n_rules), "—"]):
+                item = QTableWidgetItem(val)
+                item.setData(Qt.UserRole, data)
+                item.setForeground(QBrush(QColor(get_settings().get("text_dim") or "#999")))
+                if col > 0:
+                    item.setTextAlignment(Qt.AlignCenter)
+                item.setToolTip("Rules that set only the merchant: their transactions wait in To review")
+                self.cat_table.setItem(0, col, item)
 
         for c in cats:
             tx = self.db.get_transaction_count_for_category(c["id"])
@@ -571,6 +599,20 @@ class CatsRulesPanel(QWidget):
         self.sub_table.setRowCount(0)
 
         subs = self.db.get_subcategories(cat_id) if cat_id else []
+        uc, us = self.db.get_uncategorized_ids()
+        if cat_id == uc:  # the "(merchant only)" line: one sub-line, its rules on the right
+            type_data = self._selected_data(self.type_table)
+            n_rules = self.db.conn.execute("SELECT COUNT(*) FROM import_mappings WHERE subcategory_id=? AND type_id=?",
+                                           (us, type_data["id"] if type_data else None)).fetchone()[0]
+            subs = []
+            self.sub_table.insertRow(0)
+            data = {"id": us, "name": MERCHANT_ONLY, "merchant_only": True}
+            for col, val in enumerate([MERCHANT_ONLY, "—", str(n_rules)]):
+                item = QTableWidgetItem(val)
+                item.setData(Qt.UserRole, data)
+                if col > 0:
+                    item.setTextAlignment(Qt.AlignCenter)
+                self.sub_table.setItem(0, col, item)
 
         for s in subs:
             tx = self.db.get_transaction_count_for_subcategory(s["id"])
@@ -594,7 +636,8 @@ class CatsRulesPanel(QWidget):
         if sub_id is None:
             return
 
-        for row_idx, m in enumerate(self.db.get_rules_for_subcategory(sub_id)):
+        rules = [m for m in self.db.get_rules_for_subcategory(sub_id) if type_id is None or m["type_id"] == type_id]
+        for row_idx, m in enumerate(rules):
             self.map_table.insertRow(row_idx)
             for col_idx, val in enumerate([
                 m["account_name"] or "All",
@@ -729,6 +772,8 @@ class CatsRulesPanel(QWidget):
                 self._select_by_name(self.cat_table, name.strip())
 
     def _rename_cat(self):
+        if self._merchant_only_line():
+            return
         data = self._selected_data(self.cat_table)
         if not data:
             QMessageBox.information(self, "Select", "Select a category first.")
@@ -743,6 +788,8 @@ class CatsRulesPanel(QWidget):
             self.on_change()
 
     def _delete_cat(self):
+        if self._merchant_only_line():
+            return
         data = self._selected_data(self.cat_table)
         if not data:
             QMessageBox.information(self, "Select", "Select a category first.")
@@ -758,6 +805,8 @@ class CatsRulesPanel(QWidget):
     # ── Subcategory actions ───────────────────────────────────────────────────
 
     def _add_sub(self):
+        if self._merchant_only_line():
+            return
         cat_data = self._selected_data(self.cat_table)
         if not cat_data:
             QMessageBox.information(self, "Select", "Select a category first.")
@@ -771,6 +820,8 @@ class CatsRulesPanel(QWidget):
                 self._select_by_name(self.sub_table, name.strip())
 
     def _rename_sub(self):
+        if self._merchant_only_line():
+            return
         data = self._selected_data(self.sub_table)
         if not data:
             QMessageBox.information(self, "Select", "Select a sub-category first.")
@@ -784,6 +835,8 @@ class CatsRulesPanel(QWidget):
             self.on_change()
 
     def _reparent_sub(self):
+        if self._merchant_only_line():
+            return
         selected_subs = self._selected_multi_data(self.sub_table)
         if not selected_subs:
             QMessageBox.information(self, "Select", "Select one or more sub-categories first.")
@@ -817,6 +870,8 @@ class CatsRulesPanel(QWidget):
                 self.on_change()
 
     def _delete_sub(self):
+        if self._merchant_only_line():
+            return
         data = self._selected_data(self.sub_table)
         if not data:
             QMessageBox.information(self, "Select", "Select a sub-category first.")
@@ -828,6 +883,16 @@ class CatsRulesPanel(QWidget):
         if QMessageBox.question(self, "Delete", msg, QMessageBox.Yes | QMessageBox.No) == QMessageBox.Yes:
             self.db.delete_subcategory(data["id"])
             self.on_change()
+
+    def _merchant_only_line(self):
+        """The "(merchant only)" line is selected: it is no category to rename, delete or fill."""
+        cat = self._selected_data(self.cat_table)
+        if _is_merchant_only(cat):
+            QMessageBox.information(self, "Merchant Only",
+                                    "This line holds the rules that only set a merchant (their transactions "
+                                    "wait in To review). Add, edit or delete its rules on the right.")
+            return True
+        return False
 
     # ── Rules actions ─────────────────────────────────────────────────────────
 
@@ -846,6 +911,9 @@ class CatsRulesPanel(QWidget):
         dlg = RuleEditDialog(self.db, type_data, cat_data, sub_data, parent=self)
         if dlg.exec():
             acc_name, name, memo, merchant = dlg.get_values()
+            if _is_merchant_only(sub_data) and not merchant:
+                QMessageBox.warning(self, "Rule", "A rule here only sets the merchant: write the merchant.")
+                return
             try:
                 self.db.save_mapping(
                     type_name=type_data["name"] if type_data else None,
@@ -870,6 +938,9 @@ class CatsRulesPanel(QWidget):
         if not dlg.exec():
             return
         acc_name, name, memo, merchant = dlg.get_values()
+        if _is_merchant_only(sub_data) and not merchant:
+            QMessageBox.warning(self, "Rule", "A rule here only sets the merchant: write the merchant.")
+            return
         try:
             self.db.delete_rule_and_save(
                 rule_id=map_data["id"],
@@ -1106,3 +1177,292 @@ class TagsPanel(QWidget):
         if QMessageBox.question(self, "Delete", msg, QMessageBox.Yes | QMessageBox.No) == QMessageBox.Yes:
             self.db.delete_tag(tag_id)
             self.on_change()
+
+
+# MerchantsPanel  — the shops and people: rename (or merge), delete, set the category, see them
+class MerchantsPanel(QWidget):
+    COL_NAME, COL_CAT, COL_TX, COL_RULES, COL_TOTAL = range(5)
+
+    def __init__(self, db, on_change, show_transactions=None):
+        super().__init__()
+        self.db = db
+        self.on_change = on_change
+        self.show_transactions = show_transactions  # (merchant) → Transactions, from the window
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(16)
+        left = QVBoxLayout()
+        self.find = QLineEdit()
+        self.find.setPlaceholderText("🔍  Find a merchant")
+        self.find.setClearButtonEnabled(True)
+        self.find.textChanged.connect(self._filter)
+        left.addWidget(self.find)
+        self.table = QTableWidget(0, 5)
+        self.table.setHorizontalHeaderLabels(["Merchant", "Category (its rules)", "Transactions", "Rules", "Net Spent"])
+        h = self.table.horizontalHeader()
+        h.setSectionResizeMode(QHeaderView.ResizeToContents)
+        h.setSectionResizeMode(self.COL_CAT, QHeaderView.Stretch)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.table.verticalHeader().setVisible(False)
+        self.table.setAlternatingRowColors(True)
+        self.table.setSortingEnabled(True)
+        self.table.sortByColumn(self.COL_NAME, Qt.AscendingOrder)  # A to Z until a header is clicked
+        self.table.cellDoubleClicked.connect(self._double_clicked)
+        _apply_selection_palette(self.table)
+        left.addWidget(self.table, 1)
+        hint = QLabel("Double-click a merchant to see its transactions, its category to set it. Renaming to a "
+                      "name already there merges the two.")
+        hint.setProperty("class", "dim-label")
+        hint.setWordWrap(True)
+        left.addWidget(hint)
+        layout.addLayout(left, 1)
+        buttons = QVBoxLayout()
+        buttons.setSpacing(8)
+        for label, slot in (("✏️  Rename / Merge", self.rename), ("🏷️  Set Category…", self.set_category),
+                            ("📋  Transactions", self.open_transactions), ("🗑️  Delete", self.delete)):
+            btn = QPushButton(label)
+            btn.setProperty("class", "danger" if "Delete" in label else "secondary")
+            btn.clicked.connect(slot)
+            buttons.addWidget(btn)
+        buttons.addStretch()
+        layout.addLayout(buttons)
+
+    def refresh(self):
+        selected = self._selected()
+        self.table.setSortingEnabled(False)
+        self.table.setRowCount(0)
+        for m in self.db.get_merchant_overview():
+            r = self.table.rowCount()
+            self.table.insertRow(r)
+            targets = sorted(m["rule_targets"])
+            cat = "—" if not targets else targets[0] if len(targets) == 1 else "mixed: " + ", ".join(targets)
+            name = QTableWidgetItem(m["merchant"])
+            name.setData(Qt.UserRole, m)
+            items = [name, QTableWidgetItem(cat), _NumberItem(m["count"]), _NumberItem(m["rules"]),
+                     _NumberItem(m["total"], money=True)]
+            for c, item in enumerate(items):
+                if c >= self.COL_TX:
+                    item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                self.table.setItem(r, c, item)
+        self.table.setSortingEnabled(True)
+        if selected:
+            self._select(selected["merchant"])
+        self._filter(self.find.text())
+
+    def _filter(self, text):
+        text = text.strip().casefold()
+        for r in range(self.table.rowCount()):
+            self.table.setRowHidden(r, bool(text) and text not in self.table.item(r, 0).text().casefold())
+
+    def _selected(self):
+        r = self.table.currentRow()
+        item = self.table.item(r, 0) if r >= 0 else None
+        return item.data(Qt.UserRole) if item else None
+
+    def _select(self, name):
+        for r in range(self.table.rowCount()):
+            if self.table.item(r, 0).text() == name:
+                self.table.selectRow(r)
+                return
+
+    def _need(self):
+        m = self._selected()
+        if not m:
+            QMessageBox.information(self, "Merchants", "Select a merchant first.")
+        return m
+
+    def _double_clicked(self, row, col):
+        self.table.selectRow(row)
+        if col == self.COL_CAT:
+            self.set_category()
+        else:
+            self.open_transactions()
+
+    def open_transactions(self):
+        m = self._need()
+        if m and self.show_transactions:
+            self.show_transactions(m["merchant"])
+
+    def rename(self):
+        m = self._need()
+        if not m:
+            return
+        new, ok = QInputDialog.getText(self, "Rename Merchant", f"New name for '{m['merchant']}':",
+                                       text=m["merchant"])
+        new = " ".join((new or "").split())
+        if not ok or not new or new == m["merchant"]:
+            return
+        existing = next((x for x in self.db.get_merchants() if x.casefold() == new.casefold() and x != m["merchant"]),
+                        None)
+        if existing and not _confirm_merge(self, "merchant", m["merchant"], existing, "transactions and rules"):
+            return
+        name = self.db.rename_merchant(m["merchant"], new)
+        self.on_change()
+        self._select(name)
+
+    def delete(self):
+        m = self._need()
+        if not m:
+            return
+        if QMessageBox.question(
+                self, "Delete Merchant",
+                f"Take '{m['merchant']}' off its {m['count']} transaction(s) and {m['rules']} rule(s)?\n\n"
+                "The transactions stay, without a merchant. Rules that only set this merchant are "
+                "deleted; the others stay.",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No) == QMessageBox.Yes:
+            self.db.delete_merchant(m["merchant"])
+            self.on_change()
+
+    def set_category(self):
+        m = self._need()
+        if not m:
+            return
+        dlg = MerchantCategoryDialog(self.db, m, self)
+        if dlg.exec():
+            self.on_change()
+            self._select(m["merchant"])
+
+
+class _NumberItem(QTableWidgetItem):
+    """A number cell that sorts as a number."""
+
+    def __init__(self, value, money=False):
+        from daftarche.widgets import money as fmt
+        super().__init__(fmt(value) if money else str(value))
+        self._value = value
+
+    def __lt__(self, other):
+        return self._value < getattr(other, "_value", 0)
+
+
+class MerchantCategoryDialog(QDialog):
+    """Set a merchant's category: for its rules (new imports), its transactions with no
+    category, or all its transactions (split ones are left alone)."""
+
+    def __init__(self, db, merchant, parent=None):
+        super().__init__(parent)
+        from daftarche.db import UNCATEGORIZED_CAT, UNCATEGORIZED_SUB
+        from daftarche.widgets import add_subcategory_items
+        self.db = db
+        self.m = merchant
+        self._uncat = UNCATEGORIZED_CAT
+        self._uncat_sub = UNCATEGORIZED_SUB
+        self._add_subs = add_subcategory_items
+        self.setWindowTitle("Set Category")
+        self.setMinimumWidth(500)
+        layout = QVBoxLayout(self)
+        layout.setSpacing(10)
+        title = QLabel(f"Set the category for <b>{html.escape(merchant['merchant'])}</b>")
+        layout.addWidget(title)
+        form = QFormLayout()
+        self.f_type = SingleSelectCombo()
+        types = merchant["types"] or {}
+        names = [t["name"] for t in db.get_types() if "Expense" in t["name"] or "Income" in t["name"]]
+        names.sort(key=lambda t: (-types.get(t, 0), "Expense" not in t))
+        for t in names:
+            self.f_type.addItem(t)
+        self.f_type.currentTextChanged.connect(self._fill)
+        self.f_cat = SingleSelectCombo()
+        self.f_cat.currentTextChanged.connect(self._fill_subs)
+        self.f_sub = SingleSelectCombo()
+        form.addRow("Type:", self.f_type)
+        form.addRow("Category:", self.f_cat)
+        form.addRow("Sub-Category:", self.f_sub)
+        layout.addLayout(form)
+        layout.addWidget(QLabel("Apply to:"))
+        self.chk_rules = QCheckBox()
+        self.chk_rules.setChecked(True)
+        self.chk_uncat = QCheckBox()
+        self.chk_uncat.setChecked(True)
+        self.chk_all = QCheckBox()
+        self.chk_all.toggled.connect(self._enable_checks)
+        for chk in (self.chk_rules, self.chk_uncat, self.chk_all):
+            layout.addWidget(chk)
+        note = QLabel(f"Choosing {UNCATEGORIZED_CAT} makes its rules only set the merchant. Split transactions "
+                      "are left as they are.")
+        note.setProperty("class", "dim-label")
+        note.setWordWrap(True)
+        layout.addWidget(note)
+        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        btns.accepted.connect(self._ok)
+        btns.rejected.connect(self.reject)
+        layout.addWidget(btns)
+        self._fill(self.f_type.currentText())
+
+    def _enable_checks(self, *_):
+        """Uncategorized only ever sets the merchant: it never takes a category off a transaction."""
+        uncat = self.f_cat.currentText() == self._uncat
+        if not uncat and not self.chk_all.isEnabled():
+            self.chk_uncat.setChecked(True)  # back from Uncategorized: the usual choice again
+        if uncat:
+            self.chk_all.setChecked(False)
+        self.chk_all.setEnabled(not uncat)
+        self.chk_uncat.setEnabled(not uncat and not self.chk_all.isChecked())
+        if uncat:
+            self.chk_uncat.setChecked(False)
+
+    def _type_id(self):
+        return self.db.get_type_id(self.f_type.currentText())
+
+    def _counts(self, type_name):
+        type_id = self.db.get_type_id(type_name)
+        uncat_cat, _ = self.db.get_uncategorized_ids()
+        q = """SELECT COUNT(*) FROM transactions t WHERE t.merchant = ? AND t.type_id = ?
+               AND NOT EXISTS (SELECT 1 FROM transaction_splits sp WHERE sp.transaction_id = t.id)"""
+        all_n = self.db.conn.execute(q, (self.m["merchant"], type_id)).fetchone()[0]
+        uncat_n = self.db.conn.execute(q + " AND (t.category_id IS NULL OR t.category_id = ?)",
+                                       (self.m["merchant"], type_id, uncat_cat)).fetchone()[0]
+        rules_n = self.db.conn.execute("SELECT COUNT(*) FROM import_mappings WHERE merchant = ? AND type_id = ?",
+                                       (self.m["merchant"], type_id)).fetchone()[0]
+        return rules_n, uncat_n, all_n
+
+    def _fill(self, type_name):
+        cats = [c["name"] for c in self.db.get_categories(self.db.get_type_id(type_name))]
+        self.f_cat.blockSignals(True)
+        self.f_cat.clear()
+        self.f_cat.addItems([self._uncat] + [c for c in cats if c != self._uncat])
+        current = sorted(self.m["rule_targets"])
+        if len(current) == 1 and current[0] != "(merchant only)":
+            idx = self.f_cat.findText(current[0].split(" › ")[0])
+            if idx >= 0:
+                self.f_cat.setCurrentIndex(idx)
+        self.f_cat.blockSignals(False)
+        self._fill_subs(self.f_cat.currentText())
+        rules_n, uncat_n, all_n = self._counts(type_name)
+        self.chk_rules.setText(f"its rules ({rules_n}): what new imports get")
+        self.chk_uncat.setText(f"its {type_name.lower()} transactions with no category ({uncat_n})")
+        self.chk_all.setText(f"all its {type_name.lower()} transactions ({all_n}), even categorized")
+
+    def _fill_subs(self, cat_name):
+        self.f_sub.clear()
+        cat = self.db.get_category_by_name(cat_name, type_id=self._type_id()) if cat_name else None
+        if cat and cat_name != self._uncat:
+            self._add_subs(self.f_sub, self.db, cat["id"])
+        else:
+            self.f_sub.addItem(self._uncat_sub)
+        self.f_sub.setEnabled(cat_name != self._uncat)
+        self._enable_checks()
+
+    def _ok(self):
+        type_name = self.f_type.currentText()
+        cat_name = self.f_cat.currentText()
+        if cat_name == self._uncat:
+            cat_id, sub_id = self.db.get_uncategorized_ids()
+        else:
+            cat = self.db.get_category_by_name(cat_name, type_id=self._type_id())
+            if cat is None:
+                QMessageBox.warning(self, "Set Category", f"'{cat_name}' is not a {type_name} category.")
+                return
+            sub = self.f_sub.currentText()
+            sub_row = self.db.uncategorized_subcategory(cat["id"]) if sub == self._uncat_sub else \
+                self.db.get_subcategory_by_name(sub, cat["id"])
+            if sub_row is None:
+                QMessageBox.warning(self, "Set Category", f"'{sub}' is not a sub-category of {cat_name}.")
+                return
+            cat_id, sub_id = cat["id"], sub_row["id"]
+        self.result = self.db.set_merchant_category(
+            self.m["merchant"], type_name, cat_id, sub_id, rules=self.chk_rules.isChecked(),
+            uncategorized=self.chk_uncat.isChecked(), all_transactions=self.chk_all.isChecked())
+        self.accept()

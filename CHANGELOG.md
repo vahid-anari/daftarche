@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.20.1 — 2026-10-19
+
+- Manage has a Merchants tab: each merchant with the category its rules give, how many
+  transactions and rules it has, and Net Spent (expenses minus income; transfers left out).
+  Find box at the top; click a header to sort.
+- Rename / Merge: renaming to a name already there (any capitals) merges the two, with
+  their transactions and rules. Delete takes the merchant off its transactions and rules;
+  the transactions stay, and rules that only set that merchant are deleted.
+- Set Category… gives a merchant a category for its rules (what new imports get), its
+  transactions with no category, or all its transactions. Split transactions are left as
+  they are. Only categories of the chosen type are offered. Choosing Uncategorized makes
+  its rules set only the merchant; it never takes a category off a transaction.
+- Double-click a merchant (or Transactions) to see its transactions in the main window,
+  with "← Back to Manage" to return to the Merchants tab.
+- Categories & Rules shows a "(merchant only)" line under Income and Expense with the
+  rules that set only the merchant. It can't be renamed or deleted, and a rule added
+  there needs a merchant.
+- Tags: in every tag picker, type a tag that doesn't exist and press Enter (or "＋ Add")
+  to add it; it shows ticked with "New" and is created when you Save. The Tags box in
+  Edit Transaction takes new tags the same way.
+
 ## 0.20.0 — 2026-10-19
 
 - Split a transaction: one bank row in parts, each with its own category, sub-category,

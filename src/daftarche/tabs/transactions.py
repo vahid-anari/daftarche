@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (
     QMenu, QMessageBox, QDialog, QFormLayout, QDialogButtonBox,
     QCheckBox, QFrame, QSizePolicy,
     QStyledItemDelegate, QStyle, QFileDialog, QApplication, QTextEdit,
-    QScrollArea, QListWidget, QListWidgetItem
+    QListWidget, QListWidgetItem
 )
 from PySide6.QtCore import Qt, QAbstractTableModel, QModelIndex, QItemSelectionModel, QTimer
 from PySide6.QtGui import QColor, QAction, QBrush, QShortcut, QKeySequence, QIcon, QPainter, QPen, QPixmap
@@ -15,13 +15,13 @@ from daftarche.db import (
     MONTHS_ORDER, MONTH_NUM, TRANSFER_UNMATCHED, TRANSFER_MATCHED, SUB_MATCHED, UNCATEGORIZED_CAT, UNCATEGORIZED_SUB,
 )
 from daftarche.widgets import (
-    amount_color_key, money, plain_label,
-    add_subcategory_items, confirm_category,
+    amount_color_key, money, add_subcategory_items, confirm_category,
     CheckComboBox, PeriodSelectorWidget, SymbolButton, SingleSelectCombo, ReadOnlyCopyDelegate,
     EditableTableView, DatePicker
 )
 from daftarche.category_dialog import CategoryDialog
 from daftarche.style import get_settings
+from daftarche.tag_picker import TagsDialog
 
 COLUMNS = [
     "Date", "Type", "Account",
@@ -274,6 +274,7 @@ class TransactionsTab(QWidget):
         self._came_from = None  # (label, go back) of the place that sent you here
         self._review = False  # the To review list: no category, sorted by type
         self._only_ids = None  # just these transactions (e.g. those just imported)
+        self._only_merchants = None  # just these merchants (from Manage → Merchants)
         self._period_before = None  # the period you had before a jump changed it: back after it
         self._current_rows = []
         self._sort_config = [
@@ -540,7 +541,7 @@ class TransactionsTab(QWidget):
         self._apply_filters()
 
     def _get_filters(self):
-        return {**self._shown_filters(), "ids": self._only_ids}
+        return {**self._shown_filters(), "ids": self._only_ids, "merchant": self._only_merchants}
 
     def _shown_filters(self):
         from_date, to_date = self._period.get_range()
@@ -649,6 +650,7 @@ class TransactionsTab(QWidget):
         self._came_from = None
         self._review = False
         self._only_ids = None
+        self._only_merchants = None
         self.nav_bar.hide()
         if self._period_before is not None and not keep_period:
             self._period.restore(self._period_before)  # the jump's dates were for the moment only
@@ -704,7 +706,7 @@ class TransactionsTab(QWidget):
         self.lbl_net.setStyleSheet(f"color: {color};")
 
     def show_matching(self, types=(), accounts=(), categories=(), subcategories=(), came_from=None, text=None,
-                      from_day=None, to_day=None):
+                      from_day=None, to_day=None, merchants=()):
         """All-time view of the transactions with these types, accounts, categories and
         sub-categories (empty = any); used by the overview windows, the Dashboard and Charts.
         ``from_day``/``to_day`` ("YYYY-MM-DD"): only those dates (the months a chart showed).
@@ -717,7 +719,10 @@ class TransactionsTab(QWidget):
             self._show_matching(types, accounts, categories, subcategories, from_day, to_day)
         finally:
             self._navigating = False
-        shown = [", ".join(v) for v in (types, accounts, categories, subcategories) if v]
+        shown = [", ".join(v) for v in (types, accounts, categories, subcategories, merchants) if v]
+        if merchants:
+            self._only_merchants = list(merchants)
+            self._apply_filters()
         if came_from or text:
             self._set_navigation(text or ("Showing: " + " · ".join(shown) if shown else "Showing everything"),
                                  came_from)
@@ -1413,7 +1418,7 @@ class TransactionDialog(QDialog):
         if self.row:
             current_tag_ids = {t["id"] for t in self.db.get_tags_for_transaction(self.row["id"])}
 
-        self.f_tags = CheckComboBox("No tags")
+        self.f_tags = CheckComboBox("No tags", allow_new=True)
         self.f_tags.populate([t["name"] for t in all_tags])
         self.f_tags.set_selected([t["name"] for t in all_tags if t["id"] in current_tag_ids])
 
@@ -1617,6 +1622,9 @@ class TransactionDialog(QDialog):
                     self.db.set_splits(tx_id, self._split_ids)
 
                 selected_names = self.f_tags.get_selected()
+                for new_tag in self.f_tags.new_items:  # typed in the tag box
+                    if new_tag in selected_names:
+                        self.db.add_tag(new_tag)
                 tag_name_to_id = {t["name"]: t["id"] for t in self.db.get_tags()}
                 self.db.set_tags_for_transaction(
                     tx_id, [tag_name_to_id[n] for n in selected_names if n in tag_name_to_id])
@@ -1626,146 +1634,19 @@ class TransactionDialog(QDialog):
             QMessageBox.warning(self, "Error", f"Invalid input: {e}")
 
 
-# TagPickerDialog  — small popup to assign tags to a single transaction
-class TagPickerDialog(QDialog):
+# TagPickerDialog  — the tags of one transaction (find, tick, or add a new one)
+class TagPickerDialog(TagsDialog):
     def __init__(self, db, row, parent=None):
-        super().__init__(parent)
-        self.db = db
-        self.setWindowTitle("Edit Tags")
-        self.setMinimumWidth(300)
-        self._checks = {}
-        self._build(row)
-
-    def _build(self, row):
-        layout = QVBoxLayout(self)
-        layout.setSpacing(10)
-        layout.setContentsMargins(16, 16, 16, 16)
-
-        cat = row.get("category") or ""
-        sub = row.get("subcategory") or ""
+        cat, sub = row.get("category") or "", row.get("subcategory") or ""
         ctx = f"{cat} → {sub}" if cat and sub else cat or sub or "Transaction"
-        lbl = QLabel(ctx)
-        lbl.setProperty("class", "dim-label")
-        layout.addWidget(lbl)
-
-        btn_row = QHBoxLayout()
-        btn_all = QPushButton("✓ All")
-        btn_none = QPushButton("✕ None")
-        btn_all.setProperty("class", "secondary")
-        btn_none.setProperty("class", "secondary")
-        btn_all.setFixedHeight(28)
-        btn_none.setFixedHeight(28)
-        btn_all.clicked.connect(lambda: self._set_all(True))
-        btn_none.clicked.connect(lambda: self._set_all(False))
-        btn_row.addWidget(btn_all)
-        btn_row.addWidget(btn_none)
-        btn_row.addStretch()
-        layout.addLayout(btn_row)
-
-        all_tags = self.db.get_tags()
-        current_tag_ids = {t["id"] for t in self.db.get_tags_for_transaction(row["id"])}
-
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-
-        container = QWidget()
-        container_layout = QVBoxLayout(container)
-        container_layout.setSpacing(4)
-        container_layout.setContentsMargins(4, 4, 4, 4)
-
-        for tag in all_tags:
-            cb = QCheckBox(plain_label(tag["name"]))
-            cb.setChecked(tag["id"] in current_tag_ids)
-            self._checks[tag["id"]] = cb
-            container_layout.addWidget(cb)
-
-        container_layout.addStretch()
-        scroll.setWidget(container)
-        scroll.setMinimumHeight(min(len(all_tags) * 28 + 16, 240))
-        layout.addWidget(scroll, 1)
-
-        btns = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
-        btns.accepted.connect(self.accept)
-        btns.rejected.connect(self.reject)
-        layout.addWidget(btns)
-
-    def _set_all(self, checked):
-        for cb in self._checks.values():
-            cb.setChecked(checked)
-
-    def get_selected(self):
-        return [cb.text().replace("&&", "&") for cb in self._checks.values() if cb.isChecked()]  # see plain_label
+        current = [t["name"] for t in db.get_tags_for_transaction(row["id"])]
+        super().__init__(db, current, "Edit Tags", hint=ctx, parent=parent)
 
 
 # BulkAddTagsDialog  — add tags to multiple transactions (does not remove existing)
-class BulkAddTagsDialog(QDialog):
+class BulkAddTagsDialog(TagsDialog):
     def __init__(self, db, parent=None):
-        super().__init__(parent)
-        self.db = db
-        self.setWindowTitle("Add Tags")
-        self.setMinimumWidth(300)
-        self._checks = {}
-        self._build()
-
-    def _build(self):
-        layout = QVBoxLayout(self)
-        layout.setSpacing(10)
-        layout.setContentsMargins(16, 16, 16, 16)
-
-        lbl = QLabel("Select tags to add to selected transactions:")
-        lbl.setProperty("class", "dim-label")
-        layout.addWidget(lbl)
-
-        btn_row = QHBoxLayout()
-        btn_all = QPushButton("✓ All")
-        btn_none = QPushButton("✕ None")
-        btn_all.setProperty("class", "secondary")
-        btn_none.setProperty("class", "secondary")
-        btn_all.setFixedHeight(28)
-        btn_none.setFixedHeight(28)
-        btn_all.clicked.connect(lambda: self._set_all(True))
-        btn_none.clicked.connect(lambda: self._set_all(False))
-        btn_row.addWidget(btn_all)
-        btn_row.addWidget(btn_none)
-        btn_row.addStretch()
-        layout.addLayout(btn_row)
-
-        all_tags = self.db.get_tags()
-
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-
-        container = QWidget()
-        container_layout = QVBoxLayout(container)
-        container_layout.setSpacing(4)
-        container_layout.setContentsMargins(4, 4, 4, 4)
-
-        for tag in all_tags:
-            cb = QCheckBox(plain_label(tag["name"]))
-            cb.setChecked(False)
-            self._checks[tag["id"]] = cb
-            container_layout.addWidget(cb)
-
-        container_layout.addStretch()
-        scroll.setWidget(container)
-        scroll.setMinimumHeight(min(len(all_tags) * 28 + 16, 240))
-        layout.addWidget(scroll, 1)
-
-        btns = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
-        btns.accepted.connect(self.accept)
-        btns.rejected.connect(self.reject)
-        layout.addWidget(btns)
-
-    def _set_all(self, checked):
-        for cb in self._checks.values():
-            cb.setChecked(checked)
-
-    def get_selected(self):
-        return [cb.text().replace("&&", "&") for cb in self._checks.values() if cb.isChecked()]  # see plain_label
+        super().__init__(db, (), "Add Tags", hint="Tags to add to the selected transactions:", parent=parent)
 
 
 # SearchFieldsDialog

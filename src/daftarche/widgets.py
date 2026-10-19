@@ -299,9 +299,12 @@ class CheckComboBox(QToolButton):
     """
     selectionChanged = Signal(list)
 
-    def __init__(self, placeholder="All", searchable=False, parent=None):
+    def __init__(self, placeholder="All", searchable=False, parent=None, allow_new=False):
         super().__init__(parent)
         self._placeholder = placeholder
+        self._allow_new = allow_new  # Enter in the search box adds what was typed (e.g. a new tag)
+        self.new_items = []
+        searchable = searchable or allow_new
         self._items = []
         self._checked = set()
         self.setToolButtonStyle(Qt.ToolButtonTextOnly)
@@ -324,6 +327,9 @@ class CheckComboBox(QToolButton):
             self._search.setPlaceholderText("🔍  Search...")
             self._search.setClearButtonEnabled(True)
             self._search.textChanged.connect(self._filter_list)
+            if allow_new:
+                self._search.setPlaceholderText("🔍  Find, or type a new one + Enter")
+                self._search.returnPressed.connect(self._add_typed)
             popup_layout.addWidget(self._search)
 
         btn_col = QVBoxLayout()
@@ -372,7 +378,7 @@ class CheckComboBox(QToolButton):
         self._list.blockSignals(True)
         for i in range(self._list.count()):
             li = self._list.item(i)
-            li.setCheckState(Qt.Checked if li.text() in self._checked else Qt.Unchecked)
+            li.setCheckState(Qt.Checked if (li.data(Qt.UserRole) or li.text()) in self._checked else Qt.Unchecked)
         self._list.blockSignals(False)
         self._update_display()
 
@@ -411,11 +417,31 @@ class CheckComboBox(QToolButton):
             item = self._list.item(i)
             item.setHidden(bool(text) and text not in item.text().lower())
 
+    def _add_typed(self):
+        """Enter: tick the typed name, adding it when it is new (saved by the caller)."""
+        text = " ".join(self._search.text().split())
+        if not text:
+            return
+        found = next((t for t in self._items if t.casefold() == text.casefold()), None)
+        if found is None:
+            found = text
+            self._items.append(text)
+            self.new_items.append(text)
+            li = QListWidgetItem(f"{text}  (new)")
+            li.setData(Qt.UserRole, text)
+            li.setFlags(li.flags() | Qt.ItemIsUserCheckable)
+            li.setCheckState(Qt.Unchecked)
+            self._list.addItem(li)
+        self._search.clear()
+        self.set_selected(self.get_selected() + [found])
+        self.selectionChanged.emit(self.get_selected())
+
     def _on_item_changed(self, item):
+        name = item.data(Qt.UserRole) or item.text()
         if item.checkState() == Qt.Checked:
-            self._checked.add(item.text())
+            self._checked.add(name)
         else:
-            self._checked.discard(item.text())
+            self._checked.discard(name)
         self._update_display()
         self.selectionChanged.emit(self.get_selected())
 

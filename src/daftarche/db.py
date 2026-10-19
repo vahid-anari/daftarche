@@ -1620,6 +1620,99 @@ class Database:
         """).fetchall()
         return sorted({r[0] for r in rows}, key=str.casefold)
 
+    def get_merchant_overview(self):
+        """Every merchant: transactions, total, rules, and what its rules set
+        [{merchant, types, count, total, rules, rule_targets}] (total: expenses minus income,
+        transfers left out; rule_targets: set of "Category › Sub" names, "(merchant only)" for
+        rules without a category)."""
+        uncat_cat, _ = self.get_uncategorized_ids()
+        out = {}
+        for r in self.conn.execute("""
+                SELECT t.merchant, ty.name AS type, COUNT(*) AS n,
+                       SUM(CASE WHEN ty.name LIKE '%Expense%' THEN t.amount
+                                WHEN ty.name LIKE '%Income%' THEN -t.amount ELSE 0 END) AS total
+                FROM transactions t LEFT JOIN types ty ON ty.id = t.type_id
+                WHERE t.merchant IS NOT NULL AND TRIM(t.merchant) <> '' GROUP BY t.merchant, ty.name"""):
+            m = out.setdefault(r["merchant"], {"merchant": r["merchant"], "types": {}, "count": 0, "total": 0.0,
+                                               "rules": 0, "rule_targets": set()})
+            m["types"][r["type"]] = r["n"]
+            m["count"] += r["n"]
+            m["total"] += r["total"] or 0
+        for r in self.conn.execute("""
+                SELECT m.merchant, m.category_id, c.name AS cat, s.name AS sub
+                FROM import_mappings m LEFT JOIN categories c ON c.id = m.category_id
+                     LEFT JOIN subcategories s ON s.id = m.subcategory_id
+                WHERE m.merchant IS NOT NULL AND TRIM(m.merchant) <> ''"""):
+            m = out.setdefault(r["merchant"], {"merchant": r["merchant"], "types": {}, "count": 0, "total": 0.0,
+                                               "rules": 0, "rule_targets": set()})
+            m["rules"] += 1
+            if r["category_id"] in (None, uncat_cat):
+                m["rule_targets"].add("(merchant only)")
+            else:
+                m["rule_targets"].add(r["cat"] if r["sub"] in (None, UNCATEGORIZED_SUB) else f"{r['cat']} › {r['sub']}")
+        for m in out.values():
+            m["total"] = round2(m["total"])
+        return sorted(out.values(), key=lambda m: m["merchant"].casefold())
+
+    @atomic
+    def rename_merchant(self, old, new):
+        """Rename a merchant in its transactions and rules; a name already used (any letter case)
+        merges the two. Returns the name it now has."""
+        new = " ".join((new or "").split())
+        if not new:
+            raise ValueError("A merchant needs a name.")
+        target = next((m for m in self.get_merchants() if m.casefold() == new.casefold() and m != old), new)
+        for table in ("transactions", "import_mappings"):
+            self.conn.execute(f"UPDATE {table} SET merchant=? WHERE merchant=?", (target, old))
+        return target
+
+    @atomic
+    def delete_merchant(self, name):
+        """Take the merchant off its transactions and rules. Rules that only set this merchant
+        would set nothing, so they are deleted; the others and the transactions stay.
+        Returns the number of rules deleted."""
+        uncat_cat, _ = self.get_uncategorized_ids()
+        gone = self.conn.execute(
+            "DELETE FROM import_mappings WHERE merchant=? AND (category_id IS NULL OR category_id=?)",
+            (name, uncat_cat)).rowcount
+        for table in ("transactions", "import_mappings"):
+            self.conn.execute(f"UPDATE {table} SET merchant=NULL WHERE merchant=?", (name,))
+        return gone
+
+    @atomic
+    def set_merchant_category(self, merchant, type_name, category_id, subcategory_id,
+                              rules=True, uncategorized=True, all_transactions=False):
+        """Give a merchant's rules and/or transactions of ``type_name`` this category (Uncategorized:
+        its rules only set the merchant). Split transactions are left alone. Returns
+        (rules changed, transactions changed)."""
+        type_id = self.get_type_id(type_name)
+        if type_id is None:
+            raise ValueError(f"No type named {type_name!r}.")
+        uncat_cat, _ = self.get_uncategorized_ids()
+        if category_id == uncat_cat:
+            all_transactions = False  # never wipe the categories it already has
+        else:
+            row = self.conn.execute("SELECT type_id FROM categories WHERE id=?", (category_id,)).fetchone()
+            if row is None or row["type_id"] != type_id:
+                raise ValueError(f"That category is not a {type_name} category.")
+            sub_row = self.conn.execute("SELECT category_id FROM subcategories WHERE id=?", (subcategory_id,)).fetchone()
+            if sub_row is None or sub_row["category_id"] != category_id:
+                raise ValueError("That sub-category is not in that category.")
+        n_rules = n_tx = 0
+        if rules:
+            n_rules = self.conn.execute(
+                "UPDATE import_mappings SET category_id=?, subcategory_id=? WHERE merchant=? AND type_id=?",
+                (category_id, subcategory_id, merchant, type_id)).rowcount
+        if uncategorized or all_transactions:
+            which = "" if all_transactions else " AND (category_id IS NULL OR category_id = ?)"
+            params = [category_id, subcategory_id, merchant, type_id] + ([] if all_transactions else [uncat_cat])
+            n_tx = self.conn.execute(
+                f"""UPDATE transactions SET category_id=?, subcategory_id=?
+                    WHERE merchant=? AND type_id=? {which}
+                      AND NOT EXISTS (SELECT 1 FROM transaction_splits sp WHERE sp.transaction_id = transactions.id)""",
+                params).rowcount
+        return n_rules, n_tx
+
     def get_categories_for_merchant(self, merchant, type_name):
         """The categories this merchant's transactions of ``type_name`` are in, most used first
         (Uncategorized left out): suggested first when choosing a category."""
