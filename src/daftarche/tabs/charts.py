@@ -362,8 +362,8 @@ class ChartsTab(QWidget):
         if entry and isinstance(entry, tuple):
             _, amt_item = entry
             total = self._cat_totals.get(name, 0)
-            amt_item.setText(f"${total:,.0f}" if total else "")
-            amt_item.setForeground(QColor(dim_color))
+            amt_item.setText(f"{money(total, 0)}" if total else "")
+            amt_item.setForeground(QColor(s.get("income") if total < 0 else dim_color))  # money back: green
 
     def _select_all_cats(self):
         self._ignore_cb_changed = True
@@ -387,12 +387,12 @@ class ChartsTab(QWidget):
 
     def _update_total_row(self):
         if self._total_item is not None:
-            self._total_item.setText(f"${sum(self._cat_totals.get(n, 0) for n in self._get_selected_cats()):,.0f}")
+            self._total_item.setText(f"{money(sum(self._cat_totals.get(n, 0) for n in self._get_selected_cats()), 0)}")
 
     def _with_month_total(self, text, period_index):
         """Adds 'Month total' to a hover label when the chart has more than one category."""
         if self._n_chart_cats > 1 and 0 <= period_index < len(self._month_totals):
-            text += f"\nMonth total   ${self._month_totals[period_index]:,.2f}"
+            text += f"\nMonth total   {money(self._month_totals[period_index])}"
         return text
 
     def _get_selected_cats(self):
@@ -409,7 +409,7 @@ class ChartsTab(QWidget):
                     f" QCheckBox {{ color: {s.get('text')}; font-size: {fs + 2}pt; font-weight: bold; spacing: 6px; }}"
                 )
                 total = self._cat_totals.get(name, 0)
-                amt_item.setText(f"${total:,.0f}" if total else "")
+                amt_item.setText(f"{money(total, 0)}" if total else "")
                 amt_item.setForeground(QColor(s.get("text")))
                 f = amt_item.font()
                 f.setPointSize(fs + 2)
@@ -497,7 +497,7 @@ class ChartsTab(QWidget):
             )) if cat_obj else []
 
         items = sorted(
-            [n for n in all_items if self._cat_totals.get(n, 0) > 0],
+            [n for n in all_items if round(self._cat_totals.get(n, 0), 2) != 0],  # money back can make one negative
             key=lambda n: self._cat_totals.get(n, 0), reverse=True,
         )
 
@@ -557,7 +557,7 @@ class ChartsTab(QWidget):
             cb_container.installEventFilter(_CbHoverFilter(cb, name))
             self._cat_table.setCellWidget(row, 0, cb_container)
 
-            amt_item = QTableWidgetItem(f"${total:,.0f}" if total else "")
+            amt_item = QTableWidgetItem(f"{money(total, 0)}" if total else "")
             amt_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
             self._cat_table.setItem(row, 1, amt_item)
 
@@ -625,10 +625,10 @@ class ChartsTab(QWidget):
                                                         account_names=accounts or None, category_name=name,
                                                         group_by="subcategory")
             items = sorted(((k, v) for k, v in totals.items() if v), key=lambda kv: kv[1], reverse=True)
-            total = sum(v for _, v in items) or 1
-            rows = [(f"{v / total * 100:.0f}%", sub, v, {**base, "categories": [name], "subcategories": [sub]})
-                    for sub, v in items]
-            title = f"<b>{name}</b><br>{when}<br>${sum(v for _, v in items):,.2f}"
+            spent = sum(v for _, v in items if v > 0) or 1  # shares of what was spent; money back has none
+            rows = [(f"{v / spent * 100:.0f}%" if v > 0 else "", sub, v,
+                     {**base, "categories": [name], "subcategories": [sub]}) for sub, v in items]
+            title = f"<b>{name}</b><br>{when}<br>{money(sum(v for _, v in items))}"
         else:
             from_day, to_day = self.db._month_range_dates(fy, fm, ty, tm)
             filters = {"type": [type_filter], "category": [selected_cat], "subcategory": [name],
@@ -823,7 +823,7 @@ class ChartsTab(QWidget):
                         if state and 0 <= idx < bs.count():
                             month_label = labels_ref[idx] if idx < len(labels_ref) else ""
                             value = bs.at(idx)
-                            text = self._with_month_total(f"{bs.label()}\n{month_label}   ${value:,.2f}", idx)
+                            text = self._with_month_total(f"{bs.label()}\n{month_label}   {money(value)}", idx)
                             self._active_bar_hover = (text, cat_color)
                             self.chart_view.show_hover(text, self._last_mouse_pos, cat_color)
                             self._highlight_cb(bs.label())
@@ -898,7 +898,7 @@ class ChartsTab(QWidget):
         month_label = labels[pi] if pi < len(labels) else ""
         cat_color = self._cat_colors.get(cat)
         self.chart_view.show_hover(
-            self._with_month_total(f"{cat}\n{month_label}   ${val:,.2f}", pi),
+            self._with_month_total(f"{cat}\n{month_label}   {money(val)}", pi),
             vp_pos, cat_color,
         )
         self._highlight_cb(cat)
@@ -906,7 +906,7 @@ class ChartsTab(QWidget):
     # ── One month as bars: a bar per category, largest first ──────────────────
 
     def _build_one_month_bars(self, values, all_cats, title):
-        cats = [c for c in sorted(all_cats, key=lambda c: values.get(c, 0), reverse=True) if values.get(c, 0) > 0]
+        cats = [c for c in sorted(all_cats, key=lambda c: values.get(c, 0), reverse=True) if round(values.get(c, 0), 2)]
         if not cats:
             self._show_empty_chart("No data for selected period", animated=True)
             return
@@ -933,7 +933,7 @@ class ChartsTab(QWidget):
 
             def on_hover(state, idx, c=cat, v=values[cat], col=color, own=i):
                 if state and idx == own:
-                    text = self._with_month_total(f"{c}\n${v:,.2f}", 0)
+                    text = self._with_month_total(f"{c}\n{money(v)}", 0)
                     self._active_bar_hover = (text, col)
                     self.chart_view.show_hover(text, self._last_mouse_pos, col)
                     self._highlight_cb(c)
@@ -976,7 +976,7 @@ class ChartsTab(QWidget):
             center = self._donut_center_pos()
             if center:
                 lbl = self.chart_view._hover_label
-                lbl.setText(f"{cat_name}\n${val:,.2f}   {pct:.1f}%")
+                lbl.setText(f"{cat_name}\n{money(val)}   {pct:.1f}%")
                 lbl.adjustSize()
                 w, h = lbl.width(), lbl.height()
                 # Shift pos so show_hover's +12/-h-8 offset results in centered position
@@ -984,7 +984,7 @@ class ChartsTab(QWidget):
             else:
                 adjusted = None
             self.chart_view.show_hover(
-                f"{cat_name}\n${val:,.2f}   {pct:.1f}%",
+                f"{cat_name}\n{money(val)}   {pct:.1f}%",
                 adjusted,
                 color,
             )
@@ -1031,7 +1031,7 @@ class ChartsTab(QWidget):
                     if state:
                         self._detail(c)  # a donut covers the range
                         self.chart_view.show_hover(
-                            f"{c}\n${v:,.2f}   {p:.1f}%",
+                            f"{c}\n{money(v)}   {p:.1f}%",
                             self._last_mouse_pos,
                             col,
                         )
@@ -1082,7 +1082,7 @@ class ChartsTab(QWidget):
                 dot_scene_pos = chart.mapToScene(dot_chart_pos)
                 dot_vp_pos = self.chart_view.mapFromScene(dot_scene_pos)
                 self.chart_view.show_hover(
-                    self._with_month_total(f"{cat}\n{label}   ${value:,.2f}", x),
+                    self._with_month_total(f"{cat}\n{label}   {money(value)}", x),
                     dot_vp_pos,
                     self._cat_colors.get(cat),
                 )

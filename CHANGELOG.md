@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.18.0 — 2026-10-19
+
+- Import is a window now: File → Import Statement… (⌘I) asks for the file straight away, or
+  drag a QFX/OFX file onto the main window. After the import, Transactions shows just the
+  new rows ("Just imported"); × shows everything again. Four tabs remain.
+- To review stays in Transactions: View → To Review (⇧⌘R, or ⌥⌘U), the Review button and
+  the Dashboard warning all show the income and expenses with no category, expenses first,
+  with the count above the table. Each one you give a category leaves the list.
+- "← Back to …": when the Dashboard, Charts (the details panel) or Unmatched Transfers
+  send you to Transactions, a bar says where from; ← Back (or ⌘[) returns there.
+  Changing the filters yourself, or ×, ends it.
+- Charts and the details panel list categories and sub-categories that are negative
+  (more money back than spent, e.g. Insurance Claims) as a green "-$…", so the lines add
+  up to the total; shares are of what was spent.
+- Shortcuts: Go menu ⌘1–⌘4 (Dashboard, Transactions, Charts, Accounts) and ⌘[ (Back);
+  ⌘U Check for Updates; ⌘S Back Up; ⇧⌘O Back to My Database; ⌘R Refresh; ⌘N Add
+  Transaction; ⌘F Find; ⌘E Export. Restore has none on purpose.
+- `tools/list_categories.py` writes negative totals as -$141.85.
+
 ## 0.17.1 — 2026-10-19
 
 - File → Open Database… (Ctrl+O) shows another database, a backup say, without changing

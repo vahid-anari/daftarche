@@ -947,6 +947,11 @@ class Database:
         if f.get("merchant"):
             q += " AND t.merchant IN (" + ",".join("?" * len(f["merchant"])) + ")"
             params += f["merchant"]
+        if f.get("ids") is not None:  # just these (e.g. those just imported)
+            if not f["ids"]:
+                return []
+            q += " AND t.id IN (" + ",".join("?" * len(f["ids"])) + ")"
+            params += list(f["ids"])
         if f.get("tags"):
             ph = ",".join("?" * len(f["tags"]))
             tag_id_rows = self.conn.execute(f"""
@@ -1758,7 +1763,7 @@ class Database:
             q += " AND c.name = ?"
             params.append(category_name)
 
-        q += f" GROUP BY {key_expr} HAVING total > 0 ORDER BY total DESC"
+        q += f" GROUP BY {key_expr} HAVING ROUND(total, 2) <> 0 ORDER BY total DESC"  # negative: money back
         rows = self.conn.execute(q, params).fetchall()
         return {r["k"]: round2(r["total"] or 0) for r in rows if r["k"]}
 
@@ -1831,7 +1836,7 @@ class Database:
             q += f" AND (a.name IN ({ph}) OR ta.name IN ({ph}))"
             params += account_names + account_names
 
-        q += " GROUP BY c.name HAVING SUM(t.amount) > 0 ORDER BY c.name"
+        q += " GROUP BY c.name HAVING ROUND(SUM(t.amount), 2) <> 0 ORDER BY c.name"
         rows = self.conn.execute(q, params).fetchall()
         return [r["name"] for r in rows]
 

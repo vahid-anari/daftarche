@@ -257,6 +257,10 @@ class TransactionsTab(QWidget):
         self.db = db
         self._on_change_cb = on_change_cb
         self._updating = False
+        self._navigating = False  # set while a jump (show_matching…) sets the filters: the bar stays
+        self._came_from = None  # (label, go back) of the place that sent you here
+        self._review = False  # the To review list: no category, sorted by type
+        self._only_ids = None  # just these transactions (e.g. those just imported)
         self._current_rows = []
         self._sort_config = [
             {"col": COL_DATE, "desc": True},
@@ -376,6 +380,25 @@ class TransactionsTab(QWidget):
         row2.addWidget(btn_reset)
         layout.addLayout(row2)
 
+        # ── Where you came from / what this list is ──────────────────────────
+        self.nav_bar = QFrame()
+        self.nav_bar.setObjectName("summary_bar")
+        nav = QHBoxLayout(self.nav_bar)
+        nav.setContentsMargins(8, 4, 8, 4)
+        nav.setSpacing(10)
+        self.btn_back = QPushButton("← Back")
+        self.btn_back.setProperty("class", "secondary")
+        self.btn_back.clicked.connect(self.go_back)
+        self.nav_label = QLabel()
+        btn_nav_close = SymbolButton("close", size=26)
+        btn_nav_close.setToolTip("Show all transactions again")
+        btn_nav_close.clicked.connect(self.reset_filters)
+        nav.addWidget(self.btn_back)
+        nav.addWidget(self.nav_label, 1)
+        nav.addWidget(btn_nav_close)
+        self.nav_bar.hide()
+        layout.addWidget(self.nav_bar)
+
         # ── Table ─────────────────────────────────────────────────────────────
         self.model = TxModel()
         self.table = EditableTableView()
@@ -488,6 +511,8 @@ class TransactionsTab(QWidget):
     def _on_any_filter_changed(self):
         if self._updating:
             return
+        if not self._navigating:  # you changed the filters yourself: no longer the list you jumped to
+            self.clear_navigation()
         self._updating = True
         try:
             filters = self._get_filters()
@@ -501,6 +526,9 @@ class TransactionsTab(QWidget):
         self._apply_filters()
 
     def _get_filters(self):
+        return {**self._shown_filters(), "ids": self._only_ids}
+
+    def _shown_filters(self):
         from_date, to_date = self._period.get_range()
         if from_date is None:
             return {
@@ -584,10 +612,6 @@ class TransactionsTab(QWidget):
         self.btn_review.setText(f"📝 Review ({n})")
         self.btn_review.setVisible(n > 0)
 
-    def show_to_review(self):
-        """Every income and expense without a category, to give each one."""
-        self.show_matching(categories=[UNCATEGORIZED_CAT])
-
     def _apply_filters(self):
         self._update_review_button()
         rows = self.db.get_transactions(self._get_filters())
@@ -596,6 +620,54 @@ class TransactionsTab(QWidget):
         self._update_rows_info()
         self._update_summary()
         self._apply_sort()
+        if self._review:
+            self._update_review_text()
+
+    # ── Jumps: where you came from, and the list you are working through ─────
+    def _set_navigation(self, text, came_from=None):
+        self._came_from = came_from
+        self.btn_back.setText(f"← Back to {came_from[0]}" if came_from else "← Back")
+        self.btn_back.setVisible(came_from is not None)
+        self.nav_label.setText(text)
+        self.nav_bar.show()
+
+    def clear_navigation(self):
+        self._came_from = None
+        self._review = False
+        self._only_ids = None
+        self.nav_bar.hide()
+
+    def go_back(self):
+        """Back where the jump came from (⌘[): that tab or window, as you left it."""
+        came_from = self._came_from
+        if came_from is None:
+            return
+        self.reset_filters()
+        came_from[1]()
+
+    def _update_review_text(self):
+        counts = {}
+        for r in self._current_rows:
+            counts[r["type"]] = counts.get(r["type"], 0) + 1
+        if counts:
+            parts = " · ".join(f"{t} {n}" for t, n in sorted(counts.items()))
+            self.nav_label.setText(f"<b>To review</b>: {parts}. Give each one a category (double-click it); "
+                                   "it then leaves this list.")
+        else:
+            self.nav_label.setText("<b>To review</b>: all done ✓")
+
+    def show_to_review(self, came_from=None):
+        """Every income and expense without a category, expenses first, to give each one."""
+        self.show_matching(categories=[UNCATEGORIZED_CAT], came_from=came_from, text="<b>To review</b>")
+        self._review = True
+        self._sort_config = [{"col": COL_TYPE, "desc": False}, {"col": COL_DATE, "desc": True}]
+        self._apply_filters()
+
+    def show_ids(self, ids, text, came_from=None):
+        """Only these transactions (e.g. the ones just imported), with ``text`` above them."""
+        self.show_matching(came_from=came_from, text=text)
+        self._only_ids = list(ids)
+        self._apply_filters()
 
     def _update_summary(self):
         income = sum(r["amount"] for r in self._current_rows if r["type"] and "Income" in r["type"])
@@ -612,9 +684,22 @@ class TransactionsTab(QWidget):
         color = s.get("income") if net >= 0 else s.get("expense")
         self.lbl_net.setStyleSheet(f"color: {color};")
 
-    def show_matching(self, types=(), accounts=(), categories=(), subcategories=()):
+    def show_matching(self, types=(), accounts=(), categories=(), subcategories=(), came_from=None, text=None):
         """All-time view of the transactions with these types, accounts, categories and
-        sub-categories (empty = any); used by View → Uncategorized / Unmatched Transfers."""
+        sub-categories (empty = any); used by the overview windows, the Dashboard and Charts.
+        ``came_from``: (label, go back) for the "← Back to …" bar."""
+        self.clear_navigation()
+        self._navigating = True
+        try:
+            self._show_matching(types, accounts, categories, subcategories)
+        finally:
+            self._navigating = False
+        shown = [", ".join(v) for v in (types, accounts, categories, subcategories) if v]
+        if came_from or text:
+            self._set_navigation(text or ("Showing: " + " · ".join(shown) if shown else "Showing everything"),
+                                 came_from)
+
+    def _show_matching(self, types, accounts, categories, subcategories):
         self._updating = True
         try:
             self.f_search.blockSignals(True)
@@ -636,6 +721,7 @@ class TransactionsTab(QWidget):
         self._on_any_filter_changed()
 
     def reset_filters(self):
+        self.clear_navigation()
         self._updating = True
         try:
             self.f_search.blockSignals(True)

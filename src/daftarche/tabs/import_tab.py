@@ -378,6 +378,7 @@ class ImportTab(QWidget):
         super().__init__()
         self.db = db
         self.on_done_cb = on_done_cb
+        self.imported_ids = []  # the transactions the last Import added
         self.parsed_rows = []
         self._skipped = []
         self._ofx_content = None
@@ -457,7 +458,7 @@ class ImportTab(QWidget):
         layout.addLayout(info_row)
 
         # ── Preview label ─────────────────────────────────────────────────────
-        self.preview_lbl = QLabel("Parsed transactions appear here")
+        self.preview_lbl = QLabel("Parsed transactions appear here. Tip: you can also drag a QFX file onto the main window.")
         self.preview_lbl.setProperty("class", "dim-label")
         layout.addWidget(self.preview_lbl)
 
@@ -504,9 +505,11 @@ class ImportTab(QWidget):
             self, "Open QFX/OFX File", "",
             "QFX/OFX Files (*.qfx *.ofx);;All Files (*)"
         )
-        if not path:
-            return
+        if path:
+            self.load_file(path)
 
+    def load_file(self, path):
+        """Read and preview the statement at ``path`` (from Select QFX File… or a dropped file)."""
         self.parsed_rows = []
         self.model.set_rows([])
         self._current_account = None
@@ -1033,6 +1036,7 @@ class ImportTab(QWidget):
                 return
 
         imported = skipped_dup = 0
+        imported_ids = []
 
         try:
             with self.db.transaction():
@@ -1089,6 +1093,7 @@ class ImportTab(QWidget):
                             fitid=fitid, merchant=r.get("merchant"),
                         )
 
+                    imported_ids.append(tx_id)
                     # Save pre-import tags
                     tags = r.get("_tags", [])
                     if tags and tx_id:
@@ -1121,6 +1126,7 @@ class ImportTab(QWidget):
 
         QMessageBox.information(self, "Import complete", msg)
 
+        self.imported_ids = imported_ids
         if imported > 0:
             self.on_done_cb()
 

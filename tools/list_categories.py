@@ -33,7 +33,8 @@ def category_tree(conn, totals=False):
     def counts(n, total, n_rules):
         parts = [f"{n} tx"]
         if totals:
-            parts.append(f"${total or 0:,.2f}")
+            total = total or 0
+            parts.append(f"-${-total:,.2f}" if total < 0 else f"${total:,.2f}")
         if n_rules:
             parts.append(f"{n_rules} rule{'s' if n_rules != 1 else ''}")
         return "  (" + ", ".join(parts) + ")"

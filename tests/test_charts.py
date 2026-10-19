@@ -152,3 +152,25 @@ def test_detail_pins_and_lists_transactions_of_a_subcategory(detailed):
     assert seen and seen[0]["categories"] == ["Food"] and seen[0]["subcategories"] == ["Restaurants"]
     tab._period._select_preset(1)  # a new range clears it
     assert tab.detail.key is None and not tab.detail.pinned
+
+
+def test_money_back_shows_as_a_negative_line(qapp, db):
+    """Insurance paying back more than was spent there: a negative sub-category, still listed."""
+    from daftarche.db import MONTHS_ORDER
+    from daftarche.tabs.charts import ChartsTab
+    health = _category(db, "Health")
+    for sub in ("Pharmacy", "Insurance Claims"):
+        db.add_subcategory(sub, health)
+    today = datetime.date.today()
+    for sub, amount in (("Pharmacy", 100), ("Insurance Claims", -40)):
+        db.add_transaction(today.year, MONTHS_ORDER[today.month - 1], 1, "Expense", "Card", amount,
+                           db.get_subcategory_by_name(sub, health)["id"], health)
+    tab = keep(ChartsTab(db))
+    tab._period._select_preset(3)
+    tab._detail("Health")
+    assert _panel_rows(tab) == [("100%", "Pharmacy", "$100.00"), ("", "Insurance Claims", "-$40.00")]
+    assert "$60.00" in tab.detail.title.text()  # the rows add up to the category
+    tab.f_cat_selector.set_items(["Health"], include_all=True, selected="Health")
+    tab._on_category_pick_changed()
+    assert tab._cat_cbs["Insurance Claims"][1].text() == "-$40"
+    assert tab._total_item.text() == "$60"

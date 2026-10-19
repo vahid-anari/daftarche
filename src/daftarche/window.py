@@ -8,14 +8,14 @@ from PySide6.QtWidgets import (
     QDialogButtonBox, QPushButton, QColorDialog, QFrame, QGridLayout,
     QMessageBox, QFileDialog
 )
-from PySide6.QtCore import QUrl
+from PySide6.QtCore import Qt, QTimer, QUrl
 from PySide6.QtGui import QAction, QColor, QDesktopServices, QFont, QKeySequence, QPalette
 from sciwidgets.dialogs import show_about_dialog
 
 from daftarche.db import Database
 from daftarche.app_info import APP, APP_NAME
 from daftarche.backup import copy_db, copy_for_viewing, mirror_snapshots, restore_backup, startup_backup
-from daftarche.overview import UncategorizedDialog, UnmatchedTransfersDialog
+from daftarche.overview import UnmatchedTransfersDialog
 from daftarche.paths import BACKUP_DIR, DATA_DIR, DB_PATH
 from daftarche.style import build_stylesheet, get_settings, DEFAULTS
 from daftarche.widgets import StepSpinBox, SingleSelectCombo
@@ -68,23 +68,39 @@ class MainWindow(QMainWindow):
             return action
 
         file_menu = bar.addMenu("File")
-        add(file_menu, "Open Database…", self.open_database, QKeySequence("Ctrl+O"))
-        self.back_action = add(file_menu, "Back to My Database", self.back_to_my_database)
+        add(file_menu, "Import Statement…", lambda: self.open_import(), QKeySequence("Ctrl+I"))
+        add(file_menu, "Export Transactions…", self._export, QKeySequence("Ctrl+E"))
         file_menu.addSeparator()
-        self.backup_action = add(file_menu, "Back Up Database…", self._save_backup)
-        self.restore_action = add(file_menu, "Restore Backup…", self._restore_backup)
+        add(file_menu, "Open Database…", self.open_database, QKeySequence("Ctrl+O"))
+        self.back_action = add(file_menu, "Back to My Database", self.back_to_my_database, QKeySequence("Ctrl+Shift+O"))
+        file_menu.addSeparator()
+        self.backup_action = add(file_menu, "Back Up Database…", self._save_backup, QKeySequence("Ctrl+S"))
+        self.restore_action = add(file_menu, "Restore Backup…", self._restore_backup)  # no shortcut: it replaces data
         file_menu.addSeparator()
         add(file_menu, "Show Data Folder", self._show_data_folder)
         file_menu.addSeparator()
         add(file_menu, "Quit", QApplication.instance().quit, QKeySequence("Ctrl+Q"))
 
         edit_menu = bar.addMenu("Edit")
+        add(edit_menu, "Add Transaction…", self._add_transaction, QKeySequence("Ctrl+N"))
+        add(edit_menu, "Find…", self._find, QKeySequence("Ctrl+F"))
+        edit_menu.addSeparator()
         add(edit_menu, "Manage…", self._open_manage, QKeySequence("Ctrl+M"))
         add(edit_menu, "Settings…", self.open_settings, QKeySequence("Ctrl+,"))
 
         view_menu = bar.addMenu("View")
-        add(view_menu, "Uncategorized…", self.show_uncategorized, QKeySequence("Ctrl+U"))
+        review = add(view_menu, "To Review", self.show_uncategorized)
+        review.setShortcuts([QKeySequence("Ctrl+Shift+R"), QKeySequence("Ctrl+Alt+U")])
         add(view_menu, "Unmatched Transfers…", self.show_unmatched_transfers, QKeySequence("Ctrl+Shift+U"))
+        view_menu.addSeparator()
+        add(view_menu, "Refresh", self._refresh_now, QKeySequence("Ctrl+R"))
+
+        go_menu = bar.addMenu("Go")
+        for i, (name, tab) in enumerate((("Dashboard", "dashboard_tab"), ("Transactions", "transactions_tab"),
+                                         ("Charts", "charts_tab"), ("Accounts", "accounts_tab")), start=1):
+            add(go_menu, name, lambda t=tab: self.tabs.setCurrentWidget(getattr(self, t)), QKeySequence(f"Ctrl+{i}"))
+        go_menu.addSeparator()
+        add(go_menu, "Back", lambda: self.transactions_tab.go_back(), QKeySequence("Ctrl+["))
 
         self.help_menu = bar.addMenu("Help")
         add(self.help_menu, "Show Data Folder", self._show_data_folder)
@@ -92,15 +108,75 @@ class MainWindow(QMainWindow):
         add(self.help_menu, f"About {APP_NAME}", self._show_about)
         self._update_view_state()
 
-    def show_uncategorized(self):
-        UncategorizedDialog(self.db, self._show_transactions, parent=self).exec()
+    def show_uncategorized(self, came_from=None):
+        """The To review list (income and expenses with no category), in Transactions."""
+        self.tabs.setCurrentWidget(self.transactions_tab)
+        self.transactions_tab.show_to_review(came_from=came_from)
 
     def show_unmatched_transfers(self):
-        UnmatchedTransfersDialog(self.db, self._show_transactions, on_change=self._refresh_all, parent=self).exec()
+        def show(**filters):  # from a line of the window: "← Back to Unmatched Transfers" opens it again
+            self._show_transactions(came_from=("Unmatched Transfers", self.show_unmatched_transfers), **filters)
+        UnmatchedTransfersDialog(self.db, show, on_change=self._refresh_all, parent=self).exec()
 
-    def _show_transactions(self, **filters):
+    def _show_transactions(self, came_from=None, **filters):
         self.tabs.setCurrentWidget(self.transactions_tab)
-        self.transactions_tab.show_matching(**filters)
+        self.transactions_tab.show_matching(came_from=came_from, **filters)
+
+    def _back_to_tab(self, name, tab):
+        """(label, go back) for the Back bar: that tab, as it was left."""
+        return name, lambda: self.tabs.setCurrentWidget(tab)
+
+    # ── Menu commands for the Transactions tab ────────────────────────────────
+    def _add_transaction(self):
+        self.tabs.setCurrentWidget(self.transactions_tab)
+        self.transactions_tab.add_transaction()
+
+    def _find(self):
+        self.tabs.setCurrentWidget(self.transactions_tab)
+        self.transactions_tab.f_search.setFocus()
+        self.transactions_tab.f_search.selectAll()
+
+    def _export(self):
+        self.tabs.setCurrentWidget(self.transactions_tab)
+        self.transactions_tab.export()
+
+    def _refresh_now(self):
+        tab = self.tabs.currentWidget()
+        if hasattr(tab, "refresh"):
+            tab.refresh()
+
+    # ── Import (a window: a task with a start and an end) ─────────────────────
+    def open_import(self, path=None):
+        """The Import window, with ``path`` already read when given (a dropped file). After an
+        import, Transactions shows just the new rows."""
+        dialog = ImportDialog(self.db, self)
+        if path:
+            dialog.tab.load_file(path)
+        dialog.exec()
+        ids = dialog.imported_ids
+        if ids:
+            self._refresh_all()
+            self.tabs.setCurrentWidget(self.transactions_tab)
+            n = len(ids)
+            self.transactions_tab.show_ids(ids, f"<b>Just imported</b>: {n} transaction{'s' if n != 1 else ''}")
+
+    def dragEnterEvent(self, event):
+        if self._dropped_statement(event):
+            event.acceptProposedAction()
+
+    def dropEvent(self, event):
+        path = self._dropped_statement(event)
+        if path:
+            event.acceptProposedAction()
+            self.open_import(path)
+
+    def _dropped_statement(self, event):
+        """The QFX/OFX file being dragged onto the window, or None."""
+        urls = event.mimeData().urls() if event.mimeData().hasUrls() else []
+        paths = [u.toLocalFile() for u in urls if u.isLocalFile()]
+        if self.viewing is None and len(paths) == 1 and paths[0].lower().endswith((".qfx", ".ofx")):
+            return paths[0]
+        return None
 
     def _show_data_folder(self):
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(DATA_DIR)))
@@ -123,17 +199,17 @@ class MainWindow(QMainWindow):
         self.transactions_tab = TransactionsTab(self.db, self._refresh_all)
         self.charts_tab = ChartsTab(self.db)
         self.accounts_tab = AccountsTab(self.db)
-        self.import_tab = ImportTab(self.db, self._refresh_all)
 
         self.tabs.addTab(self.dashboard_tab, "📊  Dashboard")
         self.tabs.addTab(self.transactions_tab, "📋  Transactions")
         self.tabs.addTab(self.charts_tab, "📈  Charts")
         self.tabs.addTab(self.accounts_tab, "🏦  Accounts")
-        self.tabs.addTab(self.import_tab, "📥  Import")
         self.tabs.currentChanged.connect(self._on_tab_changed)
-        self.charts_tab.detail.openRequested.connect(lambda filters: self._show_transactions(**filters))
-        self.dashboard_tab.open_overview = (  # the Dashboard's warning opens the same windows
-            lambda uncategorized: self.show_uncategorized() if uncategorized else self.show_unmatched_transfers())
+        self.charts_tab.detail.openRequested.connect(
+            lambda filters: self._show_transactions(came_from=self._back_to_tab("Charts", self.charts_tab), **filters))
+        self.dashboard_tab.open_overview = (  # the Dashboard's warning: To review, or the transfers window
+            lambda uncategorized: self.show_uncategorized(came_from=self._back_to_tab("Dashboard", self.dashboard_tab))
+            if uncategorized else self.show_unmatched_transfers())
         return self.tabs
 
     def _rebuild_tabs(self):
@@ -217,6 +293,7 @@ class MainWindow(QMainWindow):
         self.back_action.setEnabled(viewing)
         for action in (self.backup_action, self.restore_action):  # they are about your own database
             action.setEnabled(not viewing)
+        self.setAcceptDrops(not viewing)
 
     def _switch_to(self, db):
         if getattr(self, "_manage_dlg", None) is not None:
@@ -330,6 +407,34 @@ class MainWindow(QMainWindow):
         QMessageBox.information(self, "Restored",
                                 f"Backup restored.\n\nYour data from before the restore was saved as\n{safety.name}\n"
                                 "in the backups folder.")
+
+
+class ImportDialog(QDialog):
+    """File → Import Statement…: the statement preview and import, in a window of its own."""
+
+    def __init__(self, db, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Import Statement")
+        self.setAttribute(Qt.WA_DeleteOnClose)  # see CategoryDialog: nothing closed lingers until quit
+        if parent is not None:
+            self.resize(int(parent.width() * 0.9), int(parent.height() * 0.85))
+        self.imported_ids = []  # kept on the Python side: read after the window is gone
+        self._asked = False
+        self.tab = ImportTab(db, self._done)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.tab)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if not self._asked and not self.tab.parsed_rows and not self.tab._ofx_content:
+            self._asked = True  # opened from the menu: choose the file straight away
+            QTimer.singleShot(0, self.tab._browse_ofx)
+
+    def _done(self):
+        """Imported: close, and say what was added."""
+        self.imported_ids = list(self.tab.imported_ids)
+        self.accept()
 
 
 class SettingsDialog(QDialog):

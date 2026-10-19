@@ -92,11 +92,11 @@ def plain_label(text):
     return (text or "").replace("&", "&&")
 
 
-def money(value):
+def money(value, decimals=2):
     """$1,234.50, or -$30.00 for money back (a refund is a negative expense)."""
     if value is None:
         return ""
-    return f"-${-value:,.2f}" if value < 0 else f"${value:,.2f}"
+    return f"-${-value:,.{decimals}f}" if round(value, decimals) < 0 else f"${abs(value):,.{decimals}f}"
 
 
 def amount_color_key(type_name, amount):

@@ -54,10 +54,12 @@ daftarche install-app         add the app to Applications / Start menu (--remove
 daftarche --version
 ```
 
-Import → Select QFX File… reads a statement downloaded from your bank's website;
-the account is recognised from the file, transactions already imported are
-skipped, and saved mappings fill in the categories. Edit what is left in the
-preview, then Import New. Transactions → Match Transfers pairs the two sides of
+File → Import Statement… (⌘I, or drag the file onto the window) reads a QFX
+statement downloaded from your bank's website; the account is recognised from the
+file, transactions already imported are skipped, and saved rules fill in the
+merchant and category. Edit what is left in the preview, then Import New; the
+new rows then show in Transactions, and those still without a category wait in
+To review (⇧⌘R). Transactions → Match Transfers pairs the two sides of
 a transfer between your accounts. Edit → Manage… edits the types, accounts,
 categories and tags; Edit → Settings… (⌘,) changes the font and colours.
 View → Uncategorized… (⌘U) and View → Unmatched Transfers… (⇧⌘U) show what is
@@ -78,7 +80,8 @@ keeps its files in one folder:
 
 On Windows the folder is `%APPDATA%\Daftarche`, on Linux `~/.local/share/daftarche`.
 Set `DAFTARCHE_HOME` to use another folder, for example a test copy.
-File → Back Up Database… and Restore Backup… save and load a copy of the database by hand.
+File → Back Up Database… and Restore Backup… save and load a copy of the database by hand;
+File → Open Database… shows a backup (through a copy) without changing anything.
 The monthly snapshots sit on the same disk as the database; Settings → Extra
 backup folder also copies them to a folder of your choice (iCloud Drive, an
 external disk), and Time Machine covers the data folder too. Help → Show Data
