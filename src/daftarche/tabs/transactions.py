@@ -261,6 +261,7 @@ class TransactionsTab(QWidget):
         self._came_from = None  # (label, go back) of the place that sent you here
         self._review = False  # the To review list: no category, sorted by type
         self._only_ids = None  # just these transactions (e.g. those just imported)
+        self._period_before = None  # the period you had before a jump changed it: back after it
         self._current_rows = []
         self._sort_config = [
             {"col": COL_DATE, "desc": True},
@@ -631,11 +632,14 @@ class TransactionsTab(QWidget):
         self.nav_label.setText(text)
         self.nav_bar.show()
 
-    def clear_navigation(self):
+    def clear_navigation(self, keep_period=False):
         self._came_from = None
         self._review = False
         self._only_ids = None
         self.nav_bar.hide()
+        if self._period_before is not None and not keep_period:
+            self._period.restore(self._period_before)  # the jump's dates were for the moment only
+            self._period_before = None
 
     def go_back(self):
         """Back where the jump came from (⌘[): that tab or window, as you left it."""
@@ -684,14 +688,18 @@ class TransactionsTab(QWidget):
         color = s.get("income") if net >= 0 else s.get("expense")
         self.lbl_net.setStyleSheet(f"color: {color};")
 
-    def show_matching(self, types=(), accounts=(), categories=(), subcategories=(), came_from=None, text=None):
+    def show_matching(self, types=(), accounts=(), categories=(), subcategories=(), came_from=None, text=None,
+                      from_day=None, to_day=None):
         """All-time view of the transactions with these types, accounts, categories and
         sub-categories (empty = any); used by the overview windows, the Dashboard and Charts.
+        ``from_day``/``to_day`` ("YYYY-MM-DD"): only those dates (the months a chart showed).
         ``came_from``: (label, go back) for the "← Back to …" bar."""
-        self.clear_navigation()
+        period_before = self._period_before or self._period.state()
+        self.clear_navigation(keep_period=True)
+        self._period_before = period_before
         self._navigating = True
         try:
-            self._show_matching(types, accounts, categories, subcategories)
+            self._show_matching(types, accounts, categories, subcategories, from_day, to_day)
         finally:
             self._navigating = False
         shown = [", ".join(v) for v in (types, accounts, categories, subcategories) if v]
@@ -699,7 +707,7 @@ class TransactionsTab(QWidget):
             self._set_navigation(text or ("Showing: " + " · ".join(shown) if shown else "Showing everything"),
                                  came_from)
 
-    def _show_matching(self, types, accounts, categories, subcategories):
+    def _show_matching(self, types, accounts, categories, subcategories, from_day=None, to_day=None):
         self._updating = True
         try:
             self.f_search.blockSignals(True)
@@ -707,7 +715,10 @@ class TransactionsTab(QWidget):
             self.f_search.blockSignals(False)
             for combo in (self.f_type, self.f_account, self.f_category, self.f_subcat, self.f_tags):
                 combo.clear_selection()
-            self._period._select_preset(0, emit=False)  # "All"
+            if from_day and to_day:
+                self._period.set_custom_range(date.fromisoformat(from_day), date.fromisoformat(to_day))
+            else:
+                self._period._select_preset(0, emit=False, persist=False)  # "All", for the moment
         finally:
             self._updating = False
         self.refresh()

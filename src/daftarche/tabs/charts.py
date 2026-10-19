@@ -619,7 +619,8 @@ class ChartsTab(QWidget):
         key = (name, fy, fm, ty, tm, type_filter, selected_cat, tuple(accounts))
         if key == self.detail.key:
             return
-        base = {"types": [type_filter], "accounts": list(accounts)}
+        from_day, to_day = self.db._month_range_dates(fy, fm, ty, tm)
+        base = {"types": [type_filter], "accounts": list(accounts), "from_day": from_day, "to_day": to_day}
         if selected_cat == "All":
             totals = self.db.get_period_totals_by_group(fy, fm, ty, tm, type_filter=type_filter,
                                                         account_names=accounts or None, category_name=name,
@@ -630,7 +631,6 @@ class ChartsTab(QWidget):
                      {**base, "categories": [name], "subcategories": [sub]}) for sub, v in items]
             title = f"<b>{name}</b><br>{when}<br>{money(sum(v for _, v in items))}"
         else:
-            from_day, to_day = self.db._month_range_dates(fy, fm, ty, tm)
             filters = {"type": [type_filter], "category": [selected_cat], "subcategory": [name],
                        "from_day": from_day, "to_day": to_day}
             if accounts:

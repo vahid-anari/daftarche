@@ -1259,6 +1259,7 @@ class Database:
         internal_id = internal["id"] if internal else None
         used = set()
         matched = 0
+        self.last_merged = {}  # incoming id → the id of the pair it became (the incoming row is deleted)
         for _, _, _, _, r1, r2 in pairs:
             if r1["id"] in used or r2["id"] in used:
                 continue
@@ -1288,6 +1289,7 @@ class Database:
                                  SELECT ?, tag_id FROM transaction_tags WHERE transaction_id = ?""",
                               (r1["id"], r2["id"]))
             self.conn.execute("DELETE FROM transactions WHERE id=?", (r2["id"],))
+            self.last_merged[r2["id"]] = r1["id"]
             used.update((r1["id"], r2["id"]))
             matched += 1
 

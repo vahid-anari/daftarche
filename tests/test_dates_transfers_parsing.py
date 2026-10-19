@@ -151,7 +151,7 @@ def test_import_keeps_the_previewed_transfer_category(qapp, db, tmp_path):
     tab = ImportTab(db, lambda: None)
     path = tmp_path / "visa.qfx"
     path.write_text(credit_card_statement(), encoding="cp1252")
-    with mock.patch("daftarche.tabs.import_tab.QFileDialog.getOpenFileName", return_value=(str(path), "")), \
+    with mock.patch("daftarche.tabs.import_tab.QFileDialog.getOpenFileNames", return_value=([str(path)], "")), \
          mock.patch.object(tab, "_ask_account", return_value="Person-Bank-Visa"):
         tab._browse_ofx()
     preview = {r["name"]: r["category"]["name"] for r in tab.parsed_rows if r["is_transfer"]}

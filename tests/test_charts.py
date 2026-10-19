@@ -150,6 +150,7 @@ def test_detail_pins_and_lists_transactions_of_a_subcategory(detailed):
     tab.detail.openRequested.connect(seen.append)
     tab.detail.table.cellDoubleClicked.emit(0, 1)
     assert seen and seen[0]["categories"] == ["Food"] and seen[0]["subcategories"] == ["Restaurants"]
+    assert seen[0]["from_day"] < seen[0]["to_day"]  # the range the panel showed
     tab._period._select_preset(1)  # a new range clears it
     assert tab.detail.key is None and not tab.detail.pinned
 

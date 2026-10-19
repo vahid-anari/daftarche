@@ -444,7 +444,7 @@ class CheckComboBox(QToolButton):
         elif n == total:
             self.setText("All  ▼")
         elif n == 1:
-            self.setText(f"{next(iter(self._checked))}  ▼")
+            self.setText(f"{plain_label(next(iter(self._checked)))}  ▼")  # "Coffee & Snacks", not "Coffee _Snacks"
         else:
             self.setText(f"{n} selected  ▼")
 
@@ -662,7 +662,7 @@ class SingleSelectCombo(QComboBox):
         class _SelectOnFocus(QObject):  # clicking in selects the name, so typing replaces it
             def eventFilter(self_, obj, event):
                 if event.type() == QEvent.FocusIn:
-                    QTimer.singleShot(0, le.selectAll)
+                    QTimer.singleShot(0, le, le.selectAll)
                 return False
 
         self._select_on_focus = _SelectOnFocus(le)
@@ -1141,7 +1141,7 @@ class PeriodSelectorWidget(QWidget):
             root.addWidget(self._range_widget)
 
     # ── Preset selection ──────────────────────────────────────────────────────
-    def _select_preset(self, idx, emit=True):
+    def _select_preset(self, idx, emit=True, persist=True):
         self._active_idx = idx
         presets = self._MONTH_PRESETS if self._mode == "month" else self._DAY_PRESETS
         is_custom = (idx == len(presets) - 1)
@@ -1152,7 +1152,8 @@ class PeriodSelectorWidget(QWidget):
 
         self._range_widget.setVisible(is_custom)
 
-        get_settings().set(f"{self._config_key}_preset_idx", idx)
+        if persist:
+            get_settings().set(f"{self._config_key}_preset_idx", idx)
 
         if emit:
             from_d, to_d = self._compute_preset_range(idx)
@@ -1233,6 +1234,30 @@ class PeriodSelectorWidget(QWidget):
             return min(from_d, to_d), to_d
 
         return self._compute_preset_range(self._active_idx)
+
+    def set_custom_range(self, from_date, to_date, emit=False):
+        """Custom, from ``from_date`` to ``to_date`` (dates): e.g. the months a chart showed. For
+        the moment only: your saved choice stays (see state/restore)."""
+        self._set_pickers(from_date.year, MONTHS_ORDER[from_date.month - 1], from_date.day,
+                          to_date.year, MONTHS_ORDER[to_date.month - 1], to_date.day)
+        presets = self._MONTH_PRESETS if self._mode == "month" else self._DAY_PRESETS
+        self._select_preset(len(presets) - 1, emit=emit, persist=False)
+
+    def _set_pickers(self, fy, fm, fd, ty, tm, td):
+        rw = self._range_widget
+        rw.to_p.set_min_date(PICKER_MIN_YEAR, PICKER_MIN_MONTH, PICKER_MIN_DAY)
+        rw.from_p.set_date(fy, fm, fd)
+        rw.to_p.set_date(ty, tm, td)
+        rw.to_p.set_min_date(fy, fm, fd)
+
+    def state(self):
+        """What is chosen now (preset and custom dates), to put back with restore()."""
+        return self._active_idx, self._range_widget.get_range()
+
+    def restore(self, state):
+        idx, rng = state
+        self._set_pickers(*rng)
+        self._select_preset(idx, emit=False, persist=False)
 
     def refresh_style(self):
         for btn in self._preset_btns:

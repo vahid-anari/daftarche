@@ -117,7 +117,7 @@ class DetailPanel(QFrame):
         self.hint.hide()
         self.table.show()
         self.table.resizeRowsToContents()
-        QTimer.singleShot(0, self.table.resizeRowsToContents)  # again once the columns have their widths
+        QTimer.singleShot(0, self.table, self.table.resizeRowsToContents)  # again once the columns are sized (dropped if the panel is gone)
         self.pin.setEnabled(True)
 
     # ── pinning ───────────────────────────────────────────────────────────────

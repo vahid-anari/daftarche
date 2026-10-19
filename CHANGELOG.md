@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.19.0 — 2026-10-19
+
+- Import several statements at once: choose several QFX files (⌘-click) or drop several on
+  the window. Each file's account comes from the file; the list on the left shows each
+  one: ✓ ready (with how many are new), ⚠ account to choose (Choose account…), or ✗ left
+  out with the reason (not a statement, unreadable, empty). Import New imports every
+  ready file at once, all or nothing. A row that is in two files (overlapping statements)
+  is imported once.
+- After the import: one summary of the balances (the bank's, from each account's newest
+  file, against the calculated one), and Match Transfers runs by itself when transfers came
+  in, so both sides imported together are paired.
+- An unknown account can be a new one: type a name in the account window (a "New" mark
+  shows; a name in your Person-Bank-Type style is suggested). Files with the same account
+  number are asked about once; Change account… corrects a choice. The new account and the
+  account number's link are saved only when you import. For a new account whose balance
+  is off, the import offers to add the difference as its starting balance (an External
+  Transfer the day before its first transaction in any of its files).
+- Charts: double-clicking a line of the details panel shows those transactions for the
+  months the panel showed, not for all dates; Back (or ×) puts your own period back, and
+  your saved period is not changed by the jump.
+- A filter box showing one name with "&" ("Coffee & Snacks") no longer shows it as
+  "Coffee _Snacks".
+
 ## 0.18.0 — 2026-10-19
 
 - Import is a window now: File → Import Statement… (⌘I) asks for the file straight away, or

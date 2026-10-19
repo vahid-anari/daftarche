@@ -147,7 +147,7 @@ def import_tab(db, tmp_path, content, account):
     tab = ImportTab(db, lambda: None)
     path = tmp_path / "statement.qfx"
     path.write_text(content, encoding="cp1252")
-    with mock.patch("daftarche.tabs.import_tab.QFileDialog.getOpenFileName", return_value=(str(path), "")), \
+    with mock.patch("daftarche.tabs.import_tab.QFileDialog.getOpenFileNames", return_value=([str(path)], "")), \
          mock.patch.object(tab, "_ask_account", return_value=account):
         tab._browse_ofx()
     return tab
@@ -161,7 +161,7 @@ def test_empty_second_file_does_not_import_the_first_one(qapp, db, tmp_path):
     empty = QFX.split("<STMTTRN>")[0] + "</BANKTRANLIST></STMTRS></STMTTRNRS></BANKMSGSRSV1></OFX>"
     path = tmp_path / "empty.qfx"
     path.write_text(empty.replace("<ACCTID>0000000", "<ACCTID>999"), encoding="cp1252")
-    with mock.patch("daftarche.tabs.import_tab.QFileDialog.getOpenFileName", return_value=(str(path), "")), \
+    with mock.patch("daftarche.tabs.import_tab.QFileDialog.getOpenFileNames", return_value=([str(path)], "")), \
          mock.patch.object(tab, "_ask_account", return_value="Savings"):
         tab._browse_ofx()
     assert tab.parsed_rows == []

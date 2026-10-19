@@ -125,6 +125,38 @@ def test_dropping_a_statement_opens_the_import_window(win, tmp_path):
     event.mimeData.return_value = data
     with mock.patch.object(win, "open_import") as opened:
         win.dropEvent(event)
-    opened.assert_called_once_with(str(tmp_path / "May.QFX"))
+    opened.assert_called_once_with([str(tmp_path / "May.QFX")])
     data.setUrls([QUrl.fromLocalFile(str(tmp_path / "photo.png"))])
     assert win._dropped_statement(event) is None
+
+
+def test_a_charts_line_opens_on_its_dates(win):
+    db = win.db
+    food = db.get_category_by_name("Food", type_name="Expense")["id"]
+    db.add_subcategory("Coffee & Snacks", food)
+    sub = db.get_subcategory_by_name("Coffee & Snacks", food)["id"]
+    db.add_transaction(2026, "June", 9, "Expense", "Card", 4, sub, food, name="LATTE JUNE")
+    db.add_transaction(2026, "April", 9, "Expense", "Card", 4, sub, food, name="LATTE APRIL")
+    win.charts_tab.detail.openRequested.emit({"types": ["Expense"], "categories": ["Food"],
+                                              "subcategories": ["Coffee & Snacks"],
+                                              "from_day": "2026-06-01", "to_day": "2026-06-30"})
+    assert names(win) == ["LATTE JUNE"]  # that month only, not every date
+    tab = win.transactions_tab
+    from daftarche.widgets import CheckComboBox
+    box = keep(CheckComboBox("All"))
+    box.populate(["Coffee & Snacks", "Tea"])
+    box.set_selected(["Coffee & Snacks"])
+    assert box.text().startswith("Coffee && Snacks")  # Qt shows "&&" as "&" ("Coffee _Snacks" before)
+    assert [d.isoformat() for d in tab._period.get_range()] == ["2026-06-01", "2026-06-30"]
+
+
+def test_back_puts_your_period_back(win):
+    tab = win.transactions_tab
+    tab._period._select_preset(4)  # Last 30 Days, your choice
+    win.charts_tab.detail.openRequested.emit({"types": ["Expense"], "from_day": "2026-05-01",
+                                              "to_day": "2026-05-31"})
+    assert tab._period._active_idx == 6  # Custom, the chart's month
+    from daftarche.style import get_settings
+    assert get_settings().get("period_transactions_preset_idx") == 4  # not saved over yours
+    tab.go_back()
+    assert tab._period._active_idx == 4

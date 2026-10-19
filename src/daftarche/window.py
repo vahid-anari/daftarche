@@ -146,12 +146,14 @@ class MainWindow(QMainWindow):
             tab.refresh()
 
     # ── Import (a window: a task with a start and an end) ─────────────────────
-    def open_import(self, path=None):
-        """The Import window, with ``path`` already read when given (a dropped file). After an
+    def open_import(self, paths=None):
+        """The Import window, with ``paths`` already read when given (dropped files). After an
         import, Transactions shows just the new rows."""
         dialog = ImportDialog(self.db, self)
-        if path:
-            dialog.tab.load_file(path)
+        if isinstance(paths, str):
+            paths = [paths]
+        if paths:
+            dialog.tab.load_files(paths)
         dialog.exec()
         ids = dialog.imported_ids
         if ids:
@@ -165,18 +167,17 @@ class MainWindow(QMainWindow):
             event.acceptProposedAction()
 
     def dropEvent(self, event):
-        path = self._dropped_statement(event)
-        if path:
+        paths = self._dropped_statement(event)
+        if paths:
             event.acceptProposedAction()
-            self.open_import(path)
+            self.open_import(paths)
 
     def _dropped_statement(self, event):
-        """The QFX/OFX file being dragged onto the window, or None."""
+        """The QFX/OFX files being dragged onto the window (a list), or None."""
         urls = event.mimeData().urls() if event.mimeData().hasUrls() else []
         paths = [u.toLocalFile() for u in urls if u.isLocalFile()]
-        if self.viewing is None and len(paths) == 1 and paths[0].lower().endswith((".qfx", ".ofx")):
-            return paths[0]
-        return None
+        statements = [p for p in paths if p.lower().endswith((".qfx", ".ofx"))]
+        return statements if self.viewing is None and statements else None
 
     def _show_data_folder(self):
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(DATA_DIR)))
@@ -427,9 +428,9 @@ class ImportDialog(QDialog):
 
     def showEvent(self, event):
         super().showEvent(event)
-        if not self._asked and not self.tab.parsed_rows and not self.tab._ofx_content:
+        if not self._asked and not self.tab.statements:
             self._asked = True  # opened from the menu: choose the file straight away
-            QTimer.singleShot(0, self.tab._browse_ofx)
+            QTimer.singleShot(0, self.tab, self.tab._browse_ofx)
 
     def _done(self):
         """Imported: close, and say what was added."""

@@ -1,14 +1,14 @@
 import re
 import os
 import html
-from datetime import date
+from datetime import date, timedelta
 
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QAbstractItemView, QHeaderView,
     QMessageBox, QCheckBox, QFileDialog, QDialog, QDialogButtonBox,
     QApplication, QFrame, QScrollArea, QStyledItemDelegate,
-    QMenu
+    QMenu, QListWidget, QFormLayout
 )
 from PySide6.QtCore import Qt, QAbstractTableModel, QModelIndex
 from PySide6.QtGui import QColor, QBrush, QKeySequence, QShortcut, QAction
@@ -20,6 +20,7 @@ from daftarche.widgets import (
 )
 from daftarche.db import (
     MONTHS_ORDER,
+    TRANSFER_MATCHED,
     TRANSFER_UNMATCHED,
     UNCATEGORIZED_CAT,
     UNCATEGORIZED_SUB,
@@ -194,6 +195,57 @@ COL_MEMO = 9
 COL_FITID = 10
 
 OPPOSITE = {"Income": "Expense", "Expense": "Income"}
+
+BANK_NAMES = {"010": "CIBC", "004": "TD", "003": "RBC", "001": "BMO", "002": "Scotiabank", "006": "National",
+              "016": "HSBC", "614": "Tangerine", "815": "Desjardins", "030": "Simplii"}
+
+
+def _fmt_date(d):
+    return f"{d[0:4]}-{d[4:6]}-{d[6:8]}" if d and len(d) == 8 else (d or "")
+
+
+class Statement:
+    """One QFX/OFX file of an import: its account, its rows, or why it cannot be imported."""
+
+    def __init__(self, path):
+        self.path = path
+        self.name = os.path.basename(path)
+        self.content = None
+        self.header = {}
+        self.account = None
+        self.rows = []
+        self.skipped = []
+        self.error = None  # why this file is left out (not a statement, unreadable…)
+
+    @property
+    def balamt(self):
+        return self.header.get("balamt")
+
+    @property
+    def curdef(self):
+        return self.header.get("curdef") or "CAD"
+
+    def read(self):
+        try:
+            with open(self.path, "rb") as f:
+                self.content = decode_statement(f.read())
+        except OSError as exc:
+            self.error = f"could not be read ({exc.strerror or exc})"
+            return
+        if not re.search(r"<OFX>|<STMTTRN>", self.content, re.IGNORECASE):
+            self.error = "not a bank statement (QFX/OFX)"
+            return
+        self.header = parse_qfx_header(self.content)
+
+    def label(self, new_count=None):
+        if self.error:
+            return f"✗  {self.name}\n{self.error}"
+        if not self.account:
+            last4 = (self.header.get("acctid") or "")[-4:]
+            return f"⚠  {self.name}\naccount …{last4}: choose one"
+        if new_count is None:
+            return f"✓  {self.name}\n{self.account}"
+        return f"✓  {self.name}\n{self.account} · {new_count} new"
 
 
 def find_rule(db, type_name, account, name, memo):
@@ -379,14 +431,59 @@ class ImportTab(QWidget):
         self.db = db
         self.on_done_cb = on_done_cb
         self.imported_ids = []  # the transactions the last Import added
-        self.parsed_rows = []
-        self._skipped = []
-        self._ofx_content = None
-        self._current_account = None
+        self.statements = []  # the files of this import, in the order chosen
+        self._index = -1  # the one shown
         self._show_new_only = False
-        self._balamt = None
-        self._curdef = "CAD"
         self._build_ui()
+
+    # the statement on screen: most of the tab works on it
+    @property
+    def current(self):
+        return self.statements[self._index] if 0 <= self._index < len(self.statements) else None
+
+    @property
+    def parsed_rows(self):
+        return self.current.rows if self.current else []
+
+    @parsed_rows.setter
+    def parsed_rows(self, rows):
+        if self.current:
+            self.current.rows = rows
+
+    @property
+    def _current_account(self):
+        return self.current.account if self.current else None
+
+    @property
+    def _ofx_content(self):
+        return self.current.content if self.current else None
+
+    @property
+    def _skipped(self):
+        return self.current.skipped if self.current else []
+
+    @_skipped.setter
+    def _skipped(self, value):
+        if self.current:
+            self.current.skipped = value
+
+    @property
+    def _balamt(self):
+        return self.current.balamt if self.current else None
+
+    @property
+    def _curdef(self):
+        return self.current.curdef if self.current else "CAD"
+
+    def _is_dup(self, fitid, account=None):
+        """Already in the database, or in an earlier file of this import for the same account."""
+        account = account or self._current_account
+        if not fitid or not account:
+            return False
+        if self.db.fitid_exists(fitid, account):
+            return True
+        return any(st.account == account and any(r.get("fitid") == fitid for r in st.rows)
+                   for st in self.statements[:max(self._index, 0)])
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
@@ -425,6 +522,9 @@ class ImportTab(QWidget):
         info_row = QHBoxLayout()
         info_row.setSpacing(6)
 
+        self.btn_choose_account = QPushButton("Choose account…")
+        self.btn_choose_account.clicked.connect(self._choose_account)
+        self.btn_choose_account.hide()
         self.lbl_file = QLabel("File: —")
         self.lbl_account = QLabel("")
         self.lbl_period = QLabel("")
@@ -447,6 +547,7 @@ class ImportTab(QWidget):
         info_row.addWidget(self.lbl_period)
         info_row.addWidget(sep3)
         info_row.addWidget(self.lbl_balance)
+        info_row.addWidget(self.btn_choose_account)
         info_row.addStretch()
 
         # hide separators until populated
@@ -485,7 +586,16 @@ class ImportTab(QWidget):
 
         QShortcut(QKeySequence.Copy, self.table, activated=self._copy_selected)
 
-        layout.addWidget(self.table, 1)
+        self.file_list = QListWidget()  # the files of this import (shown when there are several)
+        self.file_list.setFixedWidth(300)
+        self.file_list.setTextElideMode(Qt.ElideMiddle)
+        self.file_list.setSpacing(3)
+        self.file_list.currentRowChanged.connect(self._show_statement)
+        self.file_list.hide()
+        body = QHBoxLayout()
+        body.addWidget(self.file_list)
+        body.addWidget(self.table, 1)
+        layout.addLayout(body, 1)
 
         # ── Status row ────────────────────────────────────────────────────────
         status_row = QHBoxLayout()
@@ -501,140 +611,226 @@ class ImportTab(QWidget):
     # ── File browsing ─────────────────────────────────────────────────────────
 
     def _browse_ofx(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Open QFX/OFX File", "",
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, "Open QFX/OFX Files (several: ⌘-click)", "",
             "QFX/OFX Files (*.qfx *.ofx);;All Files (*)"
         )
-        if path:
-            self.load_file(path)
+        if paths:
+            self.load_files(paths)
 
     def load_file(self, path):
-        """Read and preview the statement at ``path`` (from Select QFX File… or a dropped file)."""
-        self.parsed_rows = []
-        self.model.set_rows([])
-        self._current_account = None
-        self._skipped = []
-        self.lbl_status.setText("📂 Opening file...")
-        QApplication.processEvents()
+        self.load_files([path])
 
-        try:
-            with open(path, "rb") as f:
-                content = decode_statement(f.read())
-        except OSError as exc:
-            QMessageBox.warning(self, "Error", f"Could not read file:\n{exc}")
-            return
+    def load_files(self, paths):
+        """Read and preview the statements at ``paths`` (chosen or dropped): each file's account
+        comes from the file; an unknown one is asked for (or chosen later); files that cannot be
+        imported are listed with the reason."""
+        self.statements = [Statement(p) for p in paths]
+        self._index = -1
+        self._chosen = {}  # account number → name chosen in this import (saved when it is imported)
+        self._new_accounts = set()  # names typed for new accounts (made when imported)
+        for st in self.statements:
+            st.read()
+            if st.error:
+                continue
+            acctid = st.header.get("acctid")
+            known = self.db.get_account_by_acctid(acctid) if acctid else None
+            if known:
+                st.account = known["name"]
+        unknown = [st for st in self.statements if not st.error and not st.account]
+        for n, st in enumerate(unknown, start=1):  # asked in turn (once per account number); Cancel: later
+            if st.account:
+                continue  # an earlier file had the same account number
+            note = f"File {n} of {len(unknown)}: {st.name}" if len(self.statements) > 1 else st.name
+            self._identify(st, note)
+        for i, st in enumerate(self.statements):
+            if st.account:
+                self._parse_statement(i)
+        self._recheck_duplicates()
+        self._refresh_file_list()
+        first = next((i for i, st in enumerate(self.statements) if st.account), 0)
+        self.file_list.blockSignals(True)
+        self.file_list.setCurrentRow(first)
+        self.file_list.blockSignals(False)
+        self._show_statement(first)
 
-        self._ofx_content = content
-        self.lbl_file.setText(f"File: {os.path.basename(path)}")
-        self.lbl_status.setText("🔍 Parsing transactions...")
-        QApplication.processEvents()
-
-        header = parse_qfx_header(content)
-        acctid = header["acctid"]
-        accttype = header["accttype"]
-        bankid = header["bankid"]
-        dtstart = header["dtstart"]
-        dtend = header["dtend"]
-
-        def _fmt_date(d):
-            if len(d) == 8:
-                return f"{d[0:4]}-{d[4:6]}-{d[6:8]}"
-            return d
-
-        balamt = header["balamt"]
-        dtasof = header["dtasof"]
-        curdef = header["curdef"] or "CAD"
-
-        known = self.db.get_account_by_acctid(acctid) if acctid else None
-        if known:
-            self._current_account = known["name"]
-        else:
-            self._current_account = self._ask_account(acctid, accttype, bankid)
-            if not self._current_account:
-                self._clear()
-                return
-
-        s = get_settings()
-        acc = self.db.get_account_by_name(self._current_account)
-        account_color = (acc["color"] if acc and acc["color"] else None) or s.get("accent")
-
-        # store for post-import balance check
-        self._balamt = balamt
-        self._curdef = curdef
-
-        # populate info row labels
-        self.lbl_file.setText(f"File: {os.path.basename(path)}")
-
-        self.lbl_account.setText(self._current_account)
-        self.lbl_account.setStyleSheet(f"color: {account_color}; font-weight: bold;")
-        self.lbl_account.setVisible(True)
-
-        if dtstart:
-            self.lbl_period.setText(f"Period: {_fmt_date(dtstart)} → {_fmt_date(dtend)}")
-            self.lbl_period.setVisible(True)
-        else:
-            self.lbl_period.setVisible(False)
-
-        if balamt is not None:
-            asof = f"  as of {_fmt_date(dtasof)}" if dtasof else ""
-            self.lbl_balance.setText(f"Balance: ${balamt:,.2f} {curdef}{asof}")
-            self.lbl_balance.setVisible(True)
-        else:
-            self.lbl_balance.setVisible(False)
-
-        # show separators
-        for sep in self._info_seps:
-            sep.setVisible(True)
-
+    def _parse_statement(self, i):
+        self._index = i
         self.parse()
+        st = self.statements[i]
+        if not st.rows:
+            st.error = "no transactions in it"
 
-    def _ask_account(self, acctid, accttype, bankid):
+    def _recheck_duplicates(self):
+        """Duplicate or new, in file order: a row also in an earlier file of the same account is
+        a duplicate (after an account is chosen, a later file may now have some)."""
+        keep = self._index
+        for i, st in enumerate(self.statements):
+            if st.account and not st.error:
+                self._index = i
+                for r in st.rows:
+                    r["_status"] = "⏭️ Duplicate" if self._is_dup(r.get("fitid")) else "🆕 New"
+        self._index = keep
+
+    def _identify(self, st, note=""):
+        """Ask which account ``st`` is for; every file with its account number gets the answer.
+        Nothing is saved yet: a new account, and the account number's link, come with the import."""
+        h = st.header
+        name = self._ask_account(h.get("acctid"), h.get("accttype"), h.get("bankid"), note=note,
+                                 period=(h.get("dtstart"), h.get("dtend")), current=st.account)
+        if name:
+            if getattr(self, "_made_account", False):
+                self._new_accounts.add(name)
+            self._made_account = False
+            for other in self.statements:
+                if not other.error and other.header.get("acctid") == h.get("acctid"):
+                    other.account = name
+            if h.get("acctid"):
+                self._chosen[h["acctid"]] = name
+        return name
+
+    def _choose_account(self):
+        """Choose (or change) the account of the file shown, and of the others with its number."""
+        st = self.current
+        if not st or st.error or not self._identify(st, st.name):
+            return
+        shown = self._index
+        for i, other in enumerate(self.statements):
+            if other.account == st.account and other.header.get("acctid") == st.header.get("acctid"):
+                self._parse_statement(i)
+        self._recheck_duplicates()
+        self._index = shown
+        self._refresh_file_list()
+        self._show_statement(shown)
+
+    def _refresh_file_list(self):
+        self.file_list.blockSignals(True)
+        current = self.file_list.currentRow()
+        self.file_list.clear()
+        for st in self.statements:
+            new = sum(1 for r in st.rows if "Duplicate" not in r.get("_status", ""))
+            self.file_list.addItem(st.label(new if st.account else None))
+        self.file_list.setCurrentRow(max(current, 0) if self.statements else -1)
+        self.file_list.setVisible(len(self.statements) > 1)
+        self.file_list.blockSignals(False)
+
+    def _show_statement(self, index):
+        """Show one file of the import: its account, period, balance and rows."""
+        if not 0 <= index < len(self.statements):
+            return
+        self._index = index
+        st = self.current
+        s = get_settings()
+        self.lbl_file.setText(f"File: {st.name}")
+        h = st.header
+        for w in (self.lbl_account, self.lbl_period, self.lbl_balance, *self._info_seps):
+            w.setVisible(False)
+        self.btn_choose_account.setVisible(not st.error)
+        self.btn_choose_account.setText("Change account…" if st.account else "Choose account…")
+        self.model.set_rows(st.rows)
+        if st.error:
+            self.lbl_status.setText(f"✗ {st.name}: {st.error}. It is left out.")
+            return
+        if not st.account:
+            self.lbl_status.setText("⚠ This file's account is not known yet: choose it to import this file.")
+            return
+        acc = self.db.get_account_by_name(st.account)
+        color = (acc["color"] if acc and acc["color"] else None) or s.get("accent")
+        self.lbl_account.setText(st.account + ("  (new)" if st.account in self._new_accounts else ""))
+        self.lbl_account.setStyleSheet(f"color: {color}; font-weight: bold;")
+        self.lbl_account.setVisible(True)
+        self._info_seps[0].setVisible(True)
+        if h.get("dtstart"):
+            self.lbl_period.setText(f"Period: {_fmt_date(h['dtstart'])} → {_fmt_date(h.get('dtend'))}")
+            self.lbl_period.setVisible(True)
+            self._info_seps[1].setVisible(True)
+        if st.balamt is not None:
+            asof = f"  as of {_fmt_date(h.get('dtasof'))}" if h.get("dtasof") else ""
+            self.lbl_balance.setText(f"Balance: {money(st.balamt)} {st.curdef}{asof}")
+            self.lbl_balance.setVisible(True)
+            self._info_seps[2].setVisible(True)
+        self._apply_new_filter(self.chk_new_only.isChecked())
+        self._update_status_bar()
+
+    def _suggest_account_name(self, accttype, bankid):
+        """A name in the style of the accounts there are (Person-Bank-Type)."""
+        names = [a["name"] for a in self.db.get_accounts()]
+        people = [n.split("-")[0] for n in names if n.count("-") >= 2]
+        person = max(set(people), key=people.count) if people else ""
+        bank = BANK_NAMES.get((bankid or "").lstrip("0").rjust(3, "0")) or BANK_NAMES.get(bankid or "")
+        if not bank:
+            for a in self.db.get_all_account_ids():
+                if a["bankid"] == bankid and a["account_name"] and a["account_name"].count("-") >= 2:
+                    bank = a["account_name"].split("-")[1]
+                    break
+        kind = {"CHECKING": "Chequing", "SAVINGS": "Saving", "CREDITLINE": "Credit", "CREDITCARD": "Credit"}.get(
+            (accttype or "").upper(), "Credit" if not accttype else accttype.title())
+        return "-".join(x for x in (person, bank or "Bank", kind) if x)
+
+    def _ask_account(self, acctid, accttype, bankid, note="", period=(None, None), current=None):
+        """Which account a file is for: an existing one, or a new name (made on OK)."""
         dlg = QDialog(self)
         dlg.setWindowTitle("Identify Account")
-        dlg.setMinimumWidth(400)
-
+        dlg.setMinimumWidth(540)
         layout = QVBoxLayout(dlg)
         layout.setSpacing(12)
-
-        info = QLabel(
-            f"This QFX file contains an account that hasn't been seen before.\n\n"
-            f"Account ID:   {acctid}\n"
-            f"Account Type: {accttype}\n"
-            f"Bank ID:      {bankid}\n\n"
-            f"Which account does this belong to?"
-        )
+        bank = BANK_NAMES.get(bankid or "") or (f"bank {bankid}" if bankid else "a bank")
+        kind = {"CHECKING": "chequing", "SAVINGS": "savings", "MONEYMRKT": "money market"}.get(
+            (accttype or "").upper(), "credit card")
+        when = f" · {_fmt_date(period[0])} – {_fmt_date(period[1])}" if period and period[0] else ""
+        info = QLabel((f"<b>{note}</b><br>" if note else "") +
+                      f"This file is for an account not seen before:<br>"
+                      f"{bank} · {kind} · ending {(acctid or '')[-4:] or '?'}{when}<br><br>"
+                      "Pick the account, or type a name for a new one.")
         info.setWordWrap(True)
         layout.addWidget(info)
-
+        names = [a["name"] for a in self.db.get_accounts()]
         combo = SingleSelectCombo()
-        for a in self.db.get_accounts():
-            combo.addItem(a["name"])
-        layout.addWidget(combo)
+        combo.allow_typing()
+        combo.addItems(names)
+        combo.setCurrentText(current or self._suggest_account_name(accttype, bankid))
+        new = QLabel("New")
+        new.setStyleSheet(f"color: {get_settings().get('income') or '#2ecc71'}; font-weight: bold;")
+        policy = new.sizePolicy()
+        policy.setRetainSizeWhenHidden(True)
+        new.setSizePolicy(policy)
 
+        def mark(text):
+            new.setVisible(bool(text.strip()) and not any(n.casefold() == text.strip().casefold() for n in names))
+        combo.currentTextChanged.connect(mark)
+        mark(combo.currentText())
+        row = QHBoxLayout()
+        row.addWidget(combo, 1)
+        row.addWidget(new)
+        form = QFormLayout()
+        form.addRow("Account:", row)
+        layout.addLayout(form)
         btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         btns.accepted.connect(dlg.accept)
         btns.rejected.connect(dlg.reject)
         layout.addWidget(btns)
-
-        if dlg.exec():
-            account_name = combo.currentText()
-            if acctid:
-                self.db.save_account_id(acctid, account_name, accttype, bankid)
-            return account_name
-        return None
+        if not dlg.exec():
+            return None
+        typed = combo.currentText().strip()
+        if not typed:
+            return None
+        account_name = next((n for n in names if n.casefold() == typed.casefold()), typed)
+        self._made_account = account_name not in names  # made when the import is done, not before
+        return account_name
 
     def _clear(self):
-        self._ofx_content = None
-        self._current_account = None
+        self.statements = []
+        self._index = -1
+        self._chosen = {}
+        self._new_accounts = set()
+        self._refresh_file_list()
+        self.btn_choose_account.hide()
         self.lbl_file.setText("File: —")
-        self._balamt = None
-        self._curdef = "CAD"
         self.lbl_account.setVisible(False)
         self.lbl_period.setVisible(False)
         self.lbl_balance.setVisible(False)
         for sep in self._info_seps:
             sep.setVisible(False)
-        self.parsed_rows.clear()
         self.model.set_rows([])
         self.lbl_status.setText("")
 
@@ -692,7 +888,7 @@ class ImportTab(QWidget):
                 r["category"] = transfer_cat_internal
                 r["subcategory"] = transfer_sub_unmatched_int
                 fitid_t = r.get("fitid")
-                r["_status"] = "⏭️ Duplicate" if (fitid_t and self.db.fitid_exists(fitid_t, account)) else "🆕 New"
+                r["_status"] = "⏭️ Duplicate" if self._is_dup(fitid_t) else "🆕 New"
                 continue
 
             # Step 2 — E-transfer with a Transfer mapping
@@ -709,7 +905,7 @@ class ImportTab(QWidget):
                     r["category"] = transfer_cat_external
                     r["subcategory"] = transfer_sub_unmatched_ext
                     fitid_t = r.get("fitid")
-                    r["_status"] = "⏭️ Duplicate" if (fitid_t and self.db.fitid_exists(fitid_t, account)) else "🆕 New"
+                    r["_status"] = "⏭️ Duplicate" if self._is_dup(fitid_t) else "🆕 New"
                     continue
 
             # Step 3 — Normal income/expense mapping (a credit that only an expense rule knows is
@@ -732,7 +928,7 @@ class ImportTab(QWidget):
 
             # Step 4 — Status
             fitid = r.get("fitid")
-            is_dup = bool(fitid and self.db.fitid_exists(fitid, account))
+            is_dup = self._is_dup(fitid)
             sub = r["subcategory"]
 
             if is_dup:
@@ -849,7 +1045,7 @@ class ImportTab(QWidget):
     def _refresh_status_for_row(self, row_idx):
         row = self.model.get_row(row_idx)
         fitid = row.get("fitid")
-        is_dup = bool(fitid and self.db.fitid_exists(fitid, self._current_account or ""))
+        is_dup = self._is_dup(fitid)
         row["_status"] = "⏭️ Duplicate" if is_dup else "🆕 New"
 
     def _emit_row_changed(self, row_idx):
@@ -1012,22 +1208,29 @@ class ImportTab(QWidget):
 
     # ── Import ────────────────────────────────────────────────────────────────
 
+    def _ready(self):
+        """The files that can be imported: a known account and rows."""
+        return [st for st in self.statements if st.account and not st.error and st.rows]
+
     def import_all(self):
-        if not self.parsed_rows:
-            QMessageBox.warning(self, "Nothing", "Parse a statement first.")
+        """Import every file that is ready, all of them or none; then the balances, matched transfers."""
+        ready = self._ready()
+        if not ready:
+            QMessageBox.warning(self, "Nothing", "Choose a statement first (or the account of the one chosen).")
             return
-        account = self._current_account
-        if not account:
-            QMessageBox.warning(self, "No account", "No account detected.")
-            return
-        uncategorized = _without_category(
-            [r for r in self.parsed_rows if not (r.get("fitid") and self.db.fitid_exists(r["fitid"], account))])
-        if uncategorized:
-            n = len(uncategorized)
-            box = QMessageBox(QMessageBox.Question, "Uncategorized",
-                              f"{n} transaction{'s have' if n != 1 else ' has'} no category. "
-                              f"Import {'them' if n != 1 else 'it'} as Uncategorized?\n\n"
-                              "You can categorize them later (View → Uncategorized).", parent=self)
+        left_out = [st for st in self.statements if st not in ready]
+        new_rows = [r for st in ready for r in st.rows if "Duplicate" not in r.get("_status", "")]
+        uncategorized = _without_category(new_rows)
+        if uncategorized or left_out:
+            parts = []
+            if left_out:
+                parts.append("Left out: " + ", ".join(
+                    f"{st.name} ({st.error or 'no account chosen'})" for st in left_out) + ".")
+            if uncategorized:
+                n = len(uncategorized)
+                parts.append(f"{n} transaction{'s have' if n != 1 else ' has'} no category: "
+                             f"{'they wait' if n != 1 else 'it waits'} in To review (⇧⌘R).")
+            box = QMessageBox(QMessageBox.Question, "Import", "\n\n".join(parts) + "\n\nImport?", parent=self)
             import_btn = box.addButton("Import", QMessageBox.AcceptRole)
             box.addButton("Go Back", QMessageBox.RejectRole)
             box.setDefaultButton(import_btn)
@@ -1037,97 +1240,151 @@ class ImportTab(QWidget):
 
         imported = skipped_dup = 0
         imported_ids = []
-
+        had = {st.account: self._tx_count(st.account) for st in ready}
         try:
             with self.db.transaction():
-                for r in self.parsed_rows:
-                    # Skip duplicates automatically — no checkbox needed
-                    fitid = r.get("fitid") or None
-                    is_dup = bool(fitid and self.db.fitid_exists(fitid, account))
-                    if is_dup:
-                        skipped_dup += 1
-                        continue
-
-                    type_str = r.get("type", "Expense")
-                    is_transfer = "Transfer" in type_str
-                    _dp = date.fromisoformat(r["date"])
-
-                    if is_transfer:
-                        direction = r.get("direction", "debit")
-                        from_acc = account if direction == "debit" else None
-                        to_acc = None if direction == "debit" else account
-                        tx_name = r.get("name") or None
-                        tx_memo = r.get("memorandum") or r.get("memo") or None
-                        if r.get("category") and r.get("subcategory"):  # as shown in the preview
-                            cat_id, sub_id = r["category"]["id"], r["subcategory"]["id"]
-                        else:
-                            cat_id, sub_id = self.db.get_transfer_cat_sub(
-                                description=tx_name or tx_memo or "",
-                                from_account=from_acc or "",
-                                to_account=to_acc or "",
-                                matched=False,
-                            )
-                        tx_id = self.db.add_transaction(
-                            _dp.year, MONTHS_ORDER[_dp.month - 1], _dp.day, type_str,
-                            from_acc, r["amount"], sub_id, cat_id,
-                            name=tx_name, memorandum=tx_memo,
-                            to_account_name=to_acc,
-                            transfer_status=TRANSFER_UNMATCHED,
-                            fitid=fitid,
-                        )
-                    else:
-                        cat = r.get("category")
-                        sub = r.get("subcategory")
-                        cat_id = cat["id"] if cat else None
-                        sub_id = sub["id"] if sub else None
-                        if not cat_id:
-                            cat_id, _ = self.db.get_uncategorized_ids()
-                        if not sub_id:
-                            _, sub_id = self.db.get_uncategorized_ids()
-                        tx_name = r.get("name") or None
-                        tx_memo = r.get("memorandum") or r.get("memo") or None
-                        tx_id = self.db.add_transaction(
-                            _dp.year, MONTHS_ORDER[_dp.month - 1], _dp.day, type_str,
-                            account, r["amount"], sub_id, cat_id,
-                            name=tx_name, memorandum=tx_memo,
-                            fitid=fitid, merchant=r.get("merchant"),
-                        )
-
-                    imported_ids.append(tx_id)
-                    # Save pre-import tags
-                    tags = r.get("_tags", [])
-                    if tags and tx_id:
-                        self.db.set_tags_for_transaction(tx_id, [t["id"] for t in tags])
-
-                    imported += 1
+                for st in ready:  # new accounts, and the account numbers chosen here, come with it
+                    self.db.get_or_create_account(st.account)
+                    acctid = st.header.get("acctid")
+                    if acctid and self._chosen.get(acctid) == st.account:
+                        self.db.save_account_id(acctid, st.account, st.header.get("accttype"),
+                                                st.header.get("bankid"))
+                for st in ready:
+                    n, dups, ids = self._import_statement(st)
+                    imported += n
+                    skipped_dup += dups
+                    imported_ids += ids
         except Exception as exc:
             QMessageBox.critical(self, "Import Failed",
                                  f"Nothing was imported.\n\n{type(exc).__name__}: {exc}")
             return
 
-        msg = f"✅ Imported {imported} transaction{'s' if imported != 1 else ''}."
+        matched = 0
+        if imported and any("Transfer" in (r.get("type") or "") for st in ready for r in st.rows):
+            try:
+                matched = self.db.match_unmatched_transfers()  # both sides may have come in together
+            except Exception as exc:  # the import itself is done
+                QMessageBox.warning(self, "Match Transfers", f"Matching transfers failed: {exc}\n"
+                                                             "Use Match Transfers in Transactions later.")
+            merged = getattr(self.db, "last_merged", {}) or {}
+            imported_ids = list(dict.fromkeys(merged.get(i, i) for i in imported_ids))  # the pair, not the gone half
+
+        files = f" from {len(ready)} files" if len(ready) > 1 else ""
+        msg = f"✅ Imported {imported} transaction{'s' if imported != 1 else ''}{files}."
         if skipped_dup:
-            msg += f"\n⏭️ {skipped_dup} duplicate{'s' if skipped_dup != 1 else ''} skipped automatically."
+            msg += f"<br>⏭️ {skipped_dup} duplicate{'s' if skipped_dup != 1 else ''} skipped."
+        if matched:
+            msg += f"<br>🔄 Matched {matched} transfer pair{'s' if matched != 1 else ''}."
+        checks = self._balance_checks(ready) if imported else []
+        if checks:
+            msg += "<br><br><table cellspacing='6'><tr><th align='left'>Account</th><th>Bank</th>" \
+                   "<th>Calculated</th><th></th></tr>"
+            for account, bank, calc, diff, _st in checks:
+                ok = abs(diff) < 0.02
+                msg += (f"<tr><td>{html.escape(account)}</td><td align='right'>{money(bank)}</td>"
+                        f"<td align='right'>{money(calc)}</td>"
+                        f"<td>{'✅' if ok else '⚠️ off by ' + money(abs(diff))}</td></tr>")
+            msg += "</table>"
+        box = QMessageBox(QMessageBox.Information, "Import complete", msg, parent=self)
+        box.setTextFormat(Qt.RichText)
+        box.exec()
 
-        if self._balamt is not None and imported > 0:
-            acc = self.db.get_account_by_name(account)
-            if acc:
-                balances = self.db.get_latest_account_balances()
-                calc_bal = balances.get(acc["id"])
-                if calc_bal is not None:
-                    diff = round(self._balamt - calc_bal, 2)
-                    msg += f"\n\n💰 Bank balance:       ${self._balamt:,.2f} {self._curdef}"
-                    msg += f"\n📊 Calculated balance: ${calc_bal:,.2f} {self._curdef}"
-                    if abs(diff) < 0.02:
-                        msg += "\n\n✅ Balance matches!"
-                    else:
-                        sign = "+" if diff > 0 else ""
-                        msg += f"\n\n⚠️ Difference: {sign}${diff:,.2f} {self._curdef}"
-
-        QMessageBox.information(self, "Import complete", msg)
+        for account, bank, calc, diff, st in checks:  # a new account starts with money already in it
+            if abs(diff) >= 0.02 and account in self._new_accounts and not had.get(account):
+                first = min((r["date"] for s2 in ready if s2.account == account for r in s2.rows), default=None)
+                self._offer_starting_balance(st, diff, imported_ids, first)
 
         self.imported_ids = imported_ids
         if imported > 0:
             self.on_done_cb()
 
         self._clear()
+
+    def _tx_count(self, account):
+        acc = self.db.get_account_by_name(account)
+        return self.db.get_transaction_count_for_account(acc["id"]) if acc else 0
+
+    def _balance_checks(self, ready):
+        """(account, bank balance, calculated, difference, statement) per account, from its newest file."""
+        newest = {}
+        for st in ready:
+            if st.balamt is None:
+                continue
+            key = st.header.get("dtasof") or st.header.get("dtend") or ""
+            if st.account not in newest or key >= newest[st.account][0]:
+                newest[st.account] = (key, st)
+        balances = self.db.get_latest_account_balances()
+        out = []
+        for account, (_key, st) in newest.items():
+            acc = self.db.get_account_by_name(account)
+            calc = balances.get(acc["id"]) if acc else None
+            if calc is not None:
+                out.append((account, st.balamt, calc, round(st.balamt - calc, 2), st))
+        return out
+
+    def _offer_starting_balance(self, st, diff, imported_ids, first):
+        """A new account's first statement rarely starts from zero: offer the difference as an
+        External Transfer the day before its first transaction in any file (your way of recording it)."""
+        if not first:
+            return
+        day = date.fromisoformat(first) - timedelta(days=1)
+        box = QMessageBox(QMessageBox.Question, "Starting Balance",
+                          f"{st.account} is off by {money(abs(diff))}: probably the money it had before "
+                          f"this statement.\n\nAdd {money(abs(diff))} as its starting balance "
+                          f"(an {'incoming' if diff > 0 else 'outgoing'} External Transfer on {day})?",
+                          parent=self)
+        add = box.addButton("Add Starting Balance", QMessageBox.AcceptRole)
+        box.addButton("Not Now", QMessageBox.RejectRole)
+        box.exec()
+        if box.clickedButton() is not add:
+            return
+        with self.db.transaction():
+            cat_id, sub_id = self.db.get_transfer_cat_sub(description="Starting balance", matched=True)
+            tx_id = self.db.add_transaction(
+                day.year, MONTHS_ORDER[day.month - 1], day.day, "Transfer",
+                None if diff > 0 else st.account, abs(diff), sub_id, cat_id,
+                name="Starting balance", to_account_name=st.account if diff > 0 else None,
+                transfer_status=TRANSFER_MATCHED)  # nothing to match it with: not left as unmatched
+        imported_ids.append(tx_id)
+
+    def _import_statement(self, st):
+        """Add one file's new rows (inside the import's transaction); (added, duplicates, ids)."""
+        account = st.account
+        added = dups = 0
+        ids = []
+        for r in st.rows:
+            fitid = r.get("fitid") or None
+            if fitid and self.db.fitid_exists(fitid, account):  # also catches an earlier file of this import
+                dups += 1
+                continue
+            type_str = r.get("type", "Expense")
+            _dp = date.fromisoformat(r["date"])
+            tx_name = r.get("name") or None
+            tx_memo = r.get("memorandum") or r.get("memo") or None
+            if "Transfer" in type_str:
+                direction = r.get("direction", "debit")
+                from_acc = account if direction == "debit" else None
+                to_acc = None if direction == "debit" else account
+                if r.get("category") and r.get("subcategory"):  # as shown in the preview
+                    cat_id, sub_id = r["category"]["id"], r["subcategory"]["id"]
+                else:
+                    cat_id, sub_id = self.db.get_transfer_cat_sub(
+                        description=tx_name or tx_memo or "", from_account=from_acc or "",
+                        to_account=to_acc or "", matched=False)
+                tx_id = self.db.add_transaction(
+                    _dp.year, MONTHS_ORDER[_dp.month - 1], _dp.day, type_str,
+                    from_acc, r["amount"], sub_id, cat_id, name=tx_name, memorandum=tx_memo,
+                    to_account_name=to_acc, transfer_status=TRANSFER_UNMATCHED, fitid=fitid)
+            else:
+                uncat_cat, uncat_sub = self.db.get_uncategorized_ids()
+                cat, sub = r.get("category"), r.get("subcategory")
+                tx_id = self.db.add_transaction(
+                    _dp.year, MONTHS_ORDER[_dp.month - 1], _dp.day, type_str,
+                    account, r["amount"], sub["id"] if sub else uncat_sub, cat["id"] if cat else uncat_cat,
+                    name=tx_name, memorandum=tx_memo, fitid=fitid, merchant=r.get("merchant"))
+            ids.append(tx_id)
+            tags = r.get("_tags", [])
+            if tags and tx_id:
+                self.db.set_tags_for_transaction(tx_id, [t["id"] for t in tags])
+            added += 1
+        return added, dups, ids

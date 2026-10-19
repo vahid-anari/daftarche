@@ -87,7 +87,7 @@ def load(db, tmp_path, account):
     tab = ImportTab(db, lambda: None)
     path = tmp_path / "s.qfx"
     path.write_text(QFX, encoding="cp1252")
-    with mock.patch("daftarche.tabs.import_tab.QFileDialog.getOpenFileName", return_value=(str(path), "")), \
+    with mock.patch("daftarche.tabs.import_tab.QFileDialog.getOpenFileNames", return_value=([str(path)], "")), \
          mock.patch.object(tab, "_ask_account", return_value=account):
         tab._browse_ofx()
     return tab
