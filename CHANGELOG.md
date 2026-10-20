@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.24.1 — 2026-10-19
+
+- Help → Check for Updates… chosen while the automatic check at start-up was still running no
+  longer shows the update notice twice (sciwidgets 0.12.2).
+- `tools/make_demo_db.py` makes a demo database with invented data, for screenshots or trying
+  the app; the README shows screenshots made with it.
+
 ## 0.24.0 — 2026-10-19
 
 - The Help menu is the same as in the author's other apps (Maxwell Bloch Studio, Line Catalog
