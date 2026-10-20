@@ -1,0 +1,103 @@
+name: phone release
+
+# Pushing a tag phone-vX.Y.Z builds the signed APK of mobile/ and publishes a GitHub Release
+# "Phone X.Y.Z" with it, its text taken from the "## X.Y.Z — date" section of
+# mobile/CHANGELOG.md. The phone app finds it there (Settings › Check for Updates).
+#
+# Secrets (Settings › Secrets and variables › Actions):
+#   ANDROID_KEYSTORE_BASE64   the key store, base64 (made once: see mobile/README.md)
+#   ANDROID_KEYSTORE_PASSWORD its password (also the key's)
+
+on:
+  push:
+    tags: ["phone-v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build and publish, e.g. phone-v0.1.0"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Version, notes and checks
+        run: |
+          version="${TAG#phone-v}"
+          in_project=$(sed -n 's/^version = "\(.*\)"/\1/p' mobile/pyproject.toml)
+          if [ "$version" != "$in_project" ]; then
+            echo "Tag $TAG but mobile/pyproject.toml has version $in_project" >&2
+            exit 1
+          fi
+          awk -v v="$version" '
+            /^## / { if (found) exit; if ($2 == v) { found = 1; next } }
+            found { print }
+          ' mobile/CHANGELOG.md > notes.md
+          if ! grep -q '[^[:space:]]' notes.md; then
+            echo "mobile/CHANGELOG.md has no section '## $version'" >&2
+            exit 1
+          fi
+          IFS=. read -r major minor patch <<< "$version"
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          echo "BUILD_NUMBER=$((major * 10000 + minor * 100 + patch))" >> "$GITHUB_ENV"
+
+      - name: Tests
+        run: |
+          pip install -e . pytest
+          pytest mobile/tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+
+      - name: Key store
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "The secret ANDROID_KEYSTORE_BASE64 is missing (see mobile/README.md)" >&2
+            exit 1
+          fi
+          echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/daftarche-phone.jks"
+
+      - name: Build the APK
+        working-directory: mobile
+        env:
+          FLET_ANDROID_SIGNING_KEY_STORE: ${{ runner.temp }}/daftarche-phone.jks
+          FLET_ANDROID_SIGNING_KEY_STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          FLET_ANDROID_SIGNING_KEY_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          FLET_ANDROID_SIGNING_KEY_ALIAS: daftarche
+          FLET_CLI_NO_RICH_OUTPUT: "1"
+        run: |
+          pip install "flet[all]==1.0.4"
+          flet build apk --yes --build-number "$BUILD_NUMBER" --build-version "$VERSION" -o dist-apk
+          ls -l dist-apk
+          apk=$(ls dist-apk/*.apk | head -1)
+          cp "$apk" "$GITHUB_WORKSPACE/daftarche-phone-$VERSION.apk"
+
+      - name: Create or update the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          file="daftarche-phone-$VERSION.apk"
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release edit "$TAG" --title "Phone $VERSION" --notes-file notes.md
+            gh release upload "$TAG" "$file" --clobber
+          else
+            # --latest=false: the desktop app's release stays the "Latest" one
+            gh release create "$TAG" "$file" --title "Phone $VERSION" --notes-file notes.md --latest=false
+          fi

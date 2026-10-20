@@ -6,6 +6,8 @@ on the Mac into a folder shared with the phone) and reads it again when asked.
 
 from __future__ import annotations
 
+import asyncio
+import errno
 import os
 from datetime import date
 from pathlib import Path
@@ -17,6 +19,7 @@ from .charts import LineChart, bar_chart, legend, share_bar
 from .snapshot import (PALETTE, PERIODS, SNAPSHOT_NAME, Snapshot, SnapshotError, money, month_label,
                        period_range)
 from .theme import THEME_CHOICES, material_theme, palette_for
+from .update import check as check_for_update
 
 TABS = (("Dashboard", ft.Icons.DASHBOARD_OUTLINED, ft.Icons.DASHBOARD),
         ("Transactions", ft.Icons.RECEIPT_LONG_OUTLINED, ft.Icons.RECEIPT_LONG),
@@ -26,6 +29,8 @@ PAGE_SIZE = 150
 """Transactions shown at first; "Show more" adds as many again."""
 TOP_CATEGORIES = 7
 """Categories of their own in the stacked bars; the rest are "Other"."""
+NEED_ACCESS = "access"
+"""``problem`` when Android has not allowed reading the folder yet."""
 
 
 class PhoneApp:
@@ -46,6 +51,12 @@ class PhoneApp:
         self.chart_account = None
         self.open_category = None
         self.p = palette_for("system", page.platform_brightness)
+        self.android = page.platform in (ft.PagePlatform.ANDROID, ft.PagePlatform.ANDROID_TV) and not page.web
+        self.permissions = None
+        if self.android:  # an extension the Android build carries (not there in `flet run` on a Mac)
+            from flet_permission_handler import PermissionHandler
+            self.permissions = PermissionHandler()
+        self.update_info = None
 
     # ── start ────────────────────────────────────────────────────────────────
     async def start(self):
@@ -53,25 +64,53 @@ class PhoneApp:
         page.title = "Daftarche"
         page.padding = 0
         page.on_platform_brightness_change = lambda e: self.render()
+        page.on_app_lifecycle_state_change = self._lifecycle
         self.folder = os.environ.get("DAFTARCHE_PHONE_FOLDER") or (await self.prefs.get("folder")) or ""
         self.theme_choice = (await self.prefs.get("theme")) or "system"
         self.load()
         self.render()
+        page.run_task(self._daily_update_check)
 
-    def load(self):
-        """Read the snapshot from the folder again."""
+    def load(self, keep=False):
+        """Read the snapshot from the folder again.
+
+        ``keep``: when it cannot be read now (Syncthing in the middle of copying it, say), keep
+        showing the one read before. Returns the problem, or "".
+        """
+        before = self.snap
         self.snap, self.problem = None, ""
         if not self.folder:
             self.problem = "Choose the folder Daftarche on your Mac writes to (Settings › Phone)."
-            return
+            return self.problem
         path = Path(self.folder) / SNAPSHOT_NAME
         try:
             self.snap = Snapshot.load(path)
         except FileNotFoundError:
             self.problem = (f"No {SNAPSHOT_NAME} in this folder yet. On the Mac, choose this folder in "
                             "Daftarche's Settings › Phone, or File › Update Phone Snapshot.")
-        except (SnapshotError, PermissionError) as exc:
+        except PermissionError:
+            self.problem = NEED_ACCESS
+        except OSError as exc:
+            self.problem = NEED_ACCESS if exc.errno in (errno.EACCES, errno.EPERM) else str(exc)
+        except SnapshotError as exc:
             self.problem = str(exc)
+        if self.snap is None and keep and before is not None:
+            self.snap = before
+        return self.problem
+
+    def _lifecycle(self, e):
+        """Back in the app (from Android's settings, or later in the day): read the file again."""
+        if getattr(e, "state", None) == ft.AppLifecycleState.RESUME:
+            self.load(keep=True)
+            self.render()
+
+    async def _allow_access(self, e=None):
+        """Android's "All files access" page for this app; the file is read again on return."""
+        if self.permissions is not None:
+            from flet_permission_handler import Permission
+            await self.permissions.request(Permission.MANAGE_EXTERNAL_STORAGE)
+        self.load()
+        self.render()
 
     # ── the frame ────────────────────────────────────────────────────────────
     def render(self):
@@ -101,9 +140,11 @@ class PhoneApp:
         self.render()
 
     def _reload(self, e=None):
-        self.load()
+        problem = self.load(keep=True)
         self.render()
-        self._toast("Read again" if self.snap else self.problem)
+        if problem == NEED_ACCESS:
+            return
+        self._toast(f"Could not read it now: {problem}" if problem and self.snap else problem or "Read again")
 
     def _toast(self, text):
         self.page.show_dialog(ft.SnackBar(ft.Text(text), duration=2500))
@@ -116,12 +157,22 @@ class PhoneApp:
 
     def _welcome(self):
         p = self.p
+        if self.problem == NEED_ACCESS:
+            text = ("Daftarche needs your permission to read the folder with your data. On the next page, "
+                    "turn on \u201cAllow access to manage all files\u201d for Daftarche, then come back.\n\n"
+                    "The app only reads daftarche-phone.json; it never changes or sends anything.")
+            button = ft.FilledButton("Allow Access", icon=ft.Icons.LOCK_OPEN, on_click=self._allow_access)
+        else:
+            text = self.problem
+            button = ft.FilledButton("Choose Folder", icon=ft.Icons.FOLDER_OPEN, on_click=self._choose_folder)
         return ft.Container(ft.Column([
             ft.Icon(ft.Icons.MENU_BOOK_ROUNDED, size=56, color=p.accent),
             ft.Text("Your account book, on the phone", size=20, weight=ft.FontWeight.BOLD, color=p.text,
                     text_align=ft.TextAlign.CENTER),
-            ft.Text(self.problem, size=14, color=p.dim, text_align=ft.TextAlign.CENTER),
-            ft.FilledButton("Choose Folder", icon=ft.Icons.FOLDER_OPEN, on_click=self._choose_folder),
+            ft.Text(text, size=14, color=p.dim, text_align=ft.TextAlign.CENTER),
+            button,
+            ft.TextButton("Choose another folder", on_click=self._choose_folder,
+                          visible=self.problem == NEED_ACCESS),
         ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=16, tight=True),
             padding=32, alignment=ft.Alignment.CENTER, expand=True)
 
@@ -224,7 +275,8 @@ class PhoneApp:
                       [(p.income, [i for _, i, _ in monthly]), (p.expense, [e for _, _, e in monthly])])],
             spacing=10))
 
-        return self._page([top, self._periods("Dashboard"), stats, chart,
+        banner = self._update_banner()
+        return self._page([*([banner] if banner else []), top, self._periods("Dashboard"), stats, chart,
                            self._category_card("Expense", start, end, "Expenses by Category")])
 
     def _category_card(self, kind, start, end, title, account=None, expandable=False):
@@ -537,21 +589,75 @@ class PhoneApp:
                         color=p.income if b > 0 else p.expense if b < 0 else p.dim)]))
         return self._card(ft.Column([self._heading("Loans"), *rows], spacing=10))
 
+    # ── Updates ──────────────────────────────────────────────────────────────
+    async def _daily_update_check(self):
+        """Once a day, quietly: is there a newer app? (Shown on the Dashboard.)"""
+        today = date.today().isoformat()
+        if self.page.web or (await self.prefs.get("update_checked")) == today:
+            return
+        try:
+            self.update_info = await asyncio.to_thread(check_for_update, __version__)
+        except (OSError, ValueError):
+            return
+        await self.prefs.set("update_checked", today)
+        if self.update_info:
+            self.render()
+
+    async def _check_updates_now(self, e=None):
+        self.page.pop_dialog()
+        try:
+            self.update_info = await asyncio.to_thread(check_for_update, __version__)
+        except (OSError, ValueError) as exc:
+            self._toast(f"Could not reach GitHub: {exc}")
+            return
+        if self.update_info:
+            self.tab = 0
+            self.render()
+        else:
+            self._toast(f"Daftarche {__version__} is the newest version.")
+
+    def _update_banner(self):
+        info, p = self.update_info, self.p
+        if not info:
+            return None
+        notes = info["notes"].splitlines()
+        return self._card(ft.Column([
+            ft.Text(f"Daftarche {info['version']} is available", size=15, weight=ft.FontWeight.BOLD, color=p.text),
+            ft.Text("\n".join(notes[:6]), size=12, color=p.dim, visible=bool(notes)),
+            ft.Text("Download it, then open the file to install it over this one: your folder and "
+                    "settings stay.", size=12, color=p.dim),
+            ft.Row([ft.TextButton("Later", on_click=self._dismiss_update),
+                    ft.FilledButton("Download", icon=ft.Icons.DOWNLOAD, on_click=self._download_update)],
+                   alignment=ft.MainAxisAlignment.END)], spacing=6), accent=p.accent)
+
+    def _dismiss_update(self, e=None):
+        self.update_info = None
+        self.render()
+
+    async def _download_update(self, e=None):
+        await ft.UrlLauncher().launch_url(self.update_info["apk"], mode=ft.LaunchMode.EXTERNAL_APPLICATION)
+
     # ── Settings ─────────────────────────────────────────────────────────────
     def _settings(self, e=None):
         s, p = self.snap, self.p
         about = (f"App {__version__}  ·  data from Daftarche {s.app_version}" if s and s.app_version
                  else f"App {__version__}")
+        self._path_field = path_field = ft.TextField(value=self.folder, label="Folder", dense=True,
+                                                     on_submit=self._typed_folder,
+                                  hint_text="/storage/emulated/0/Daftarche", text_size=14)
         sheet = ft.BottomSheet(ft.Container(ft.Column([
             ft.Text("Settings", size=17, weight=ft.FontWeight.BOLD, color=p.text),
-            ft.Text("Folder", size=13, color=p.dim),
-            ft.Text(self.folder or "none chosen", size=14, color=p.text, selectable=True),
-            ft.OutlinedButton("Choose Folder", icon=ft.Icons.FOLDER_OPEN, on_click=self._choose_folder),
+            path_field,
+            ft.Row([ft.OutlinedButton("Choose Folder", icon=ft.Icons.FOLDER_OPEN, on_click=self._choose_folder),
+                    ft.TextButton("Use Typed Path", on_click=self._typed_folder)],
+                   wrap=True),
             ft.Text("Theme", size=13, color=p.dim),
             ft.SegmentedButton(segments=[ft.Segment(value=k, label=ft.Text(v)) for k, v in THEME_CHOICES.items()],
                                selected=[self.theme_choice], show_selected_icon=False, on_change=self._set_theme),
             ft.Divider(color=p.border),
-            ft.Text(about, size=12, color=p.dim),
+            ft.Row([ft.Text(about, size=12, color=p.dim, expand=True),
+                    ft.TextButton("Check for Updates", on_click=self._check_updates_now,
+                                  visible=not self.page.web)]),
             ft.Text("Read-only: nothing here changes your data. By Vahid Anari, MIT License.", size=12,
                     color=p.dim)], spacing=10, tight=True),
             padding=ft.Padding.only(left=20, right=20, top=8, bottom=28)), bgcolor=p.surface, show_drag_handle=True)
@@ -564,12 +670,24 @@ class PhoneApp:
 
     async def _choose_folder(self, e=None):
         folder = await self.picker.get_directory_path(dialog_title="Folder with daftarche-phone.json")
-        if not folder:
-            return
+        if folder:
+            await self._use_folder(folder)
+
+    async def _typed_folder(self, e=None):
+        folder = (self._path_field.value or "").strip()
+        if folder:
+            await self._use_folder(folder)
+
+    async def _use_folder(self, folder):
         self.folder = folder
         await self.prefs.set("folder", folder)
-        self.page.pop_dialog()
-        self.load()
+        try:
+            self.page.pop_dialog()
+        except Exception:  # no sheet open (the welcome page)
+            pass
+        if self.load() == NEED_ACCESS and self.permissions is not None:
+            await self._allow_access()
+            return
         self.render()
 
 

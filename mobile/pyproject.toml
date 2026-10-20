@@ -6,7 +6,11 @@ readme = "README.md"
 license = "MIT"
 authors = [{ name = "Vahid Anari", email = "vahid.anari8@gmail.com" }]
 requires-python = ">=3.10"
-dependencies = ["flet==1.0.4"]
+dependencies = [
+    "flet==1.0.4",
+    "flet-permission-handler==1.0.4",  # Android's "All files access", to read the Syncthing folder
+    "certifi",  # certificates for the update check (Python on a phone has none of its own)
+]
 
 [tool.flet]
 product = "Daftarche"
@@ -14,6 +18,10 @@ artifact = "daftarche"
 org = "io.github.vahid_anari"
 company = "Vahid Anari"
 copyright = "Copyright (C) 2026 Vahid Anari"
+
+[tool.flet.android.permission]
+# read daftarche-phone.json in the folder Syncthing keeps (outside the app's own storage)
+"android.permission.MANAGE_EXTERNAL_STORAGE" = true
 
 [tool.flet.app]
 path = "src"
