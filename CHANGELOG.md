@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.26.0 — 2026-10-20
+
+- The phone snapshot, first step towards Daftarche on the phone: choose a phone folder in
+  Settings → Phone (a Syncthing folder shared with the phone, say) and Daftarche keeps a
+  read-only copy of your data there, `daftarche-phone.json`, after every import and when you
+  quit; File → Update Phone Snapshot writes it at any time. Balances and loans are worked out
+  on the Mac; bank account numbers, import rules and bank ids are left out. Off until a folder
+  is chosen, and never for a database opened with Open Database…. The format is in
+  `docs/phone-snapshot.md`.
+
 ## 0.25.1 — 2026-10-19
 
 - User Guide: the author on the cover and in the PDF's properties, and a closing line with the
