@@ -96,6 +96,9 @@ pytest
 
 The tests use only invented data (`tests/data/sample.qfx`) and a temporary data
 folder. `python tools/make_icon.py` redraws the icon and the splash image.
+`python tools/make_demo_db.py` makes a demo database with a year of invented transactions in
+its own folder (default `~/Desktop/daftarche-demo`), for screenshots or trying the app without
+your own data: `DAFTARCHE_HOME=~/Desktop/daftarche-demo daftarche`.
 
 Two one-off tools fill in notes for past online purchases: `python tools/export_shop_charges.py`
 writes the Amazon and AliExpress transactions (only those, and only the columns needed) to
