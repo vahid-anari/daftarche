@@ -46,22 +46,6 @@ def refresh_launcher() -> None:
     refresh_if_outdated(APP)
 
 
-def add_update_action(window):
-    """Help → Check for Updates… at the top of the window's Help menu; returns the update checker."""
-    from PySide6.QtGui import QAction
-    from sciwidgets.app.update_ui import AppUpdates
-
-    from daftarche.app_info import APP
-
-    updates = AppUpdates(window, APP)
-    action = QAction("Check for Updates…", window)
-    action.setMenuRole(QAction.MenuRole.NoRole)
-    action.setShortcut("Ctrl+U")
-    action.triggered.connect(lambda: updates.check(manual=True))
-    window.help_menu.insertAction(window.help_menu.actions()[0], action)
-    return updates
-
-
 def run_view() -> int:
     import time
 
@@ -113,7 +97,7 @@ def run_view() -> int:
             splash.close()
         QMessageBox.critical(None, APP_DISPLAY_NAME, str(exc))
         return 1
-    updates = add_update_action(window)
+    updates = window.help.updates
 
     def show_window() -> None:
         window.show()

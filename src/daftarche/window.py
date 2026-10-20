@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, QTimer, QUrl
 from PySide6.QtGui import QAction, QColor, QDesktopServices, QFont, QKeySequence, QPalette
-from sciwidgets.dialogs import show_about_dialog
+from sciwidgets.app.help import AppHelp
 
 from daftarche.db import Database
 from daftarche.app_info import APP, APP_NAME
@@ -101,7 +101,7 @@ class MainWindow(QMainWindow):
         add(edit_menu, "Add Transaction…", self._add_transaction, QKeySequence("Ctrl+N"))
         add(edit_menu, "Find…", self._find, QKeySequence("Ctrl+F"))
         edit_menu.addSeparator()
-        add(edit_menu, "Manage…", self._open_manage, QKeySequence("Ctrl+M"))
+        add(edit_menu, "Manage…", self._open_manage, QKeySequence("Ctrl+Shift+M"))  # ⌘M minimises on a Mac
         add(edit_menu, "Settings…", self.open_settings, QKeySequence("Ctrl+,"))
 
         view_menu = bar.addMenu("View")
@@ -120,9 +120,8 @@ class MainWindow(QMainWindow):
         add(go_menu, "Back", lambda: self.transactions_tab.go_back(), QKeySequence("Ctrl+["))
 
         self.help_menu = bar.addMenu("Help")
-        add(self.help_menu, "Show Data Folder", self._show_data_folder)
-        self.help_menu.addSeparator()
-        add(self.help_menu, f"About {APP_NAME}", self._show_about)
+        self.help = AppHelp(self, APP, author="Vahid Anari")  # the Help menu shared with the other apps
+        self.help.add_to(self.help_menu)
         self._update_view_state()
 
     def show_uncategorized(self, came_from=None):
@@ -231,15 +230,6 @@ class MainWindow(QMainWindow):
 
     def _show_data_folder(self):
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(DATA_DIR)))
-
-    def _show_about(self):
-        show_about_dialog(
-            f"About {APP_NAME}",
-            f"<b>Version {APP.version}</b><br><br>"
-            "Personal bookkeeping: bank statements (QFX/OFX), categories, transfers and charts.<br><br>"
-            f'<a href="https://github.com/{APP.github_repo}">github.com/{APP.github_repo}</a><br>'
-            "MIT License · Vahid Anari",
-            parent=self, heading=APP_NAME)
 
     def _build_tabs(self):
         self.tabs = QTabWidget()

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.24.0 — 2026-10-19
+
+- The Help menu is the same as in the author's other apps (Maxwell Bloch Studio, Line Catalog
+  Explorer), from sciwidgets 0.12: Check for Updates… (⌘U) and About Daftarche, which now also
+  lists the libraries the app is built on, with their versions and licenses. Show Data Folder
+  stays in the File menu (it was in both).
+- Edit → Manage… is now ⌘⇧M: ⌘M is the Mac's Minimize key.
+- Needs sciwidgets 0.12.
+
 ## 0.23.0 — 2026-10-19
 
 - Themes: Edit → Settings → Theme is Dark (as before), Light, or Match macOS, which follows

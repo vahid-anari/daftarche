@@ -39,7 +39,7 @@ This adds Daftarche to your Applications folder (macOS), the Start menu
 (Windows) or the applications menu (Linux), with its own icon. It starts the
 daftarche of the Python you ran the command with, and keeps working after updates.
 
-To update, use Help → Check for Updates… in the app (it also checks quietly at
+To update, use Help → Check for Updates… (⌘U) in the app (it also checks quietly at
 start-up) or `daftarche update` in a terminal.
 
 For development, install from a clone: `git clone https://github.com/vahid-anari/daftarche.git`,
