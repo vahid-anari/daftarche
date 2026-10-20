@@ -18,10 +18,7 @@ import os
 
 from daftarche.paths import CONFIG_PATH
 
-DEFAULTS: dict = {
-    "font_family": "Helvetica Neue",
-    "font_size": 14,
-    "splash_seconds": 3.5,   # how long the splash stays at least; 0 = no splash
+DARK_COLORS: dict = {
     "accent": "#7c6af7",
     "bg_base": "#1e1c18",
     "bg_surface": "#2a2720",
@@ -34,6 +31,42 @@ DEFAULTS: dict = {
     "transfer": "#f39c12",
     "danger": "#c0392b",
 }
+LIGHT_COLORS: dict = {
+    "accent": "#6b57e8",
+    "bg_base": "#f5f3ee",
+    "bg_surface": "#ffffff",
+    "bg_raised": "#e9e5dc",
+    "text": "#2a2620",
+    "text_dim": "#7a7064",
+    "border": "#d4ccbe",
+    "income": "#1f9d55",
+    "expense": "#d33a2c",
+    "transfer": "#c97a06",
+    "danger": "#c0392b",
+}
+THEMES = {"dark": DARK_COLORS, "light": LIGHT_COLORS}
+THEME_NAMES = {"dark": "Dark", "light": "Light", "system": "Match macOS"}
+COLOR_KEYS = tuple(DARK_COLORS)
+
+DEFAULTS: dict = {
+    "font_family": "Helvetica Neue",
+    "font_size": 14,
+    "splash_seconds": 3.5,   # how long the splash stays at least; 0 = no splash
+    "theme": "dark",         # dark, light, or system (follows the Mac's Appearance)
+    **DARK_COLORS,           # the colours as they were before themes (old settings files)
+}
+
+
+def system_theme() -> str:
+    """"light" or "dark", as the Mac (or the system) shows windows now; "dark" when unknown."""
+    try:
+        from PySide6.QtCore import Qt
+        from PySide6.QtGui import QGuiApplication
+        if QGuiApplication.instance() is None:
+            return "dark"
+        return "light" if QGuiApplication.styleHints().colorScheme() == Qt.ColorScheme.Light else "dark"
+    except (ImportError, AttributeError):
+        return "dark"
 
 TAB20_COLORS = [
     "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
@@ -65,6 +98,15 @@ def _lighten(hex_color: str, amount: int = 40) -> str:
     return f"#{min(255, r + amount):02x}{min(255, g + amount):02x}{min(255, b + amount):02x}"
 
 
+def _shade(hex_color: str, amount: int) -> str:
+    """Lighter for a dark colour, darker for a light one: a hover that shows on either theme."""
+    h = hex_color.lstrip("#")
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    if 0.299 * r + 0.587 * g + 0.114 * b < 140:
+        return _lighten(hex_color, amount)
+    return f"#{max(0, r - amount):02x}{max(0, g - amount):02x}{max(0, b - amount):02x}"
+
+
 def _rgba(hex_color: str, alpha: float) -> str:
     h = hex_color.lstrip("#")
     r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
@@ -87,6 +129,36 @@ class Settings:
             except (OSError, ValueError):
                 # keep the damaged file for a look instead of silently overwriting it
                 os.replace(CONFIG_PATH, f"{CONFIG_PATH}.broken")
+        # before themes, colours were kept at the top: they were changes to the dark theme
+        old = {k: self._data[k] for k in COLOR_KEYS if k in self._data and self._data[k] != DARK_COLORS[k]}
+        if old and "colors_dark" not in self._data:
+            self._data["colors_dark"] = old
+        for k in COLOR_KEYS:
+            self._data.pop(k, None)
+
+    # ── themes ───────────────────────────────────────────────────────────────
+    def theme(self) -> str:
+        """The chosen theme: "dark", "light" or "system"."""
+        t = self._data.get("theme", "dark")
+        return t if t in THEME_NAMES else "dark"
+
+    def active_theme(self) -> str:
+        """The theme on screen now: "dark" or "light" ("system" follows the Mac)."""
+        t = self.theme()
+        return system_theme() if t == "system" else t
+
+    def theme_colors(self, theme: str) -> dict:
+        """A theme's colours, with your changes to it."""
+        return {**THEMES[theme], **self._data.get(f"colors_{theme}", {})}
+
+    def set_theme_colors(self, theme: str, colors: dict) -> None:
+        """Keep only what differs from the theme's own colours (so a later default change shows)."""
+        changed = {k: v for k, v in colors.items() if k in COLOR_KEYS and v != THEMES[theme][k]}
+        if changed:
+            self._data[f"colors_{theme}"] = changed
+        else:
+            self._data.pop(f"colors_{theme}", None)
+        self.save()
 
     def save(self) -> None:
         """Write to a temporary file and swap it in: a crash mid-write never leaves half a file."""
@@ -96,14 +168,20 @@ class Settings:
         os.replace(tmp, CONFIG_PATH)
 
     def get(self, key: str):
+        if key in COLOR_KEYS:
+            return self.theme_colors(self.active_theme())[key]
         return self._data.get(key, DEFAULTS.get(key))
 
     def set(self, key: str, value) -> None:
+        if key in COLOR_KEYS:  # a change to the theme on screen
+            theme = self.active_theme()
+            self.set_theme_colors(theme, {**self.theme_colors(theme), key: value})
+            return
         self._data[key] = value
         self.save()
 
     def reset(self) -> None:
-        self._data = dict(DEFAULTS)
+        self._data = {k: v for k, v in DEFAULTS.items() if k not in COLOR_KEYS}
         self.save()
 
 
@@ -141,8 +219,8 @@ def _style_vars(s: Settings) -> dict:
         "fs": s.get("font_size"),
         "ac_hover": _lighten(ac, 35),
         "danger_hover": _lighten(danger, 35),
-        "raised_hover": _lighten(raised, 20),
-        "surf_hover": _lighten(surf, 15),
+        "raised_hover": _shade(raised, 20),
+        "surf_hover": _shade(surf, 15),
         "ac_sel": _rgba(ac, 0.28),
         "ac_selA": _rgba(ac, 0.45),
         "ac_item": _rgba(ac, 0.35),

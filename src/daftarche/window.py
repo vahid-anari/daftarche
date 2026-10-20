@@ -18,7 +18,7 @@ from daftarche.app_info import APP, APP_NAME
 from daftarche.backup import copy_db, copy_for_viewing, mirror_snapshots, restore_backup, startup_backup
 from daftarche.overview import UnmatchedTransfersDialog
 from daftarche.paths import BACKUP_DIR, DATA_DIR, DB_PATH
-from daftarche.style import build_stylesheet, get_settings, DEFAULTS
+from daftarche.style import build_stylesheet, get_settings, DEFAULTS, THEMES, THEME_NAMES, system_theme
 from daftarche.widgets import StepSpinBox, SingleSelectCombo
 
 from daftarche.tabs.transactions import TransactionsTab
@@ -55,6 +55,21 @@ class MainWindow(QMainWindow):
         self._build_menus()
 
         self._refresh_all()
+        # Match macOS: the Mac switching between light and dark (e.g. Auto at sunset) switches too
+        QApplication.styleHints().colorSchemeChanged.connect(self._system_theme_changed)
+
+    def _system_theme_changed(self, *_):
+        if self.settings.theme() == "system":
+            self._restyle()
+
+    def _restyle(self):
+        """New colours: the style, then every tab (the one on screen now, the others when shown)."""
+        self._apply_style()
+        self._stale.update((self.dashboard_tab, self.transactions_tab, self.charts_tab, self.accounts_tab))
+        self._refresh_all()
+        for name in ("_manage_dlg", "_loans_dlg"):
+            if getattr(self, name, None) is not None:
+                getattr(self, name).refresh()
 
     # ── UI construction ───────────────────────────────────────────────────────
     def _build_menus(self):
@@ -295,8 +310,7 @@ class MainWindow(QMainWindow):
     def open_settings(self):
         dlg = SettingsDialog(self.settings, self)
         if dlg.exec():
-            self._apply_style()
-            self._refresh_all()
+            self._restyle()
 
     def _open_manage(self):
         if hasattr(self, "_manage_dlg") and self._manage_dlg is not None:
@@ -494,10 +508,9 @@ class SettingsDialog(QDialog):
         self.setWindowTitle("Settings")
 
         self._color_btns = {}
-        self._pending_colors = {
-            key: self.settings.get(key)
-            for key, _ in self.COLOR_KEYS_COL_1 + self.COLOR_KEYS_COL_2
-        }
+        # each theme's colours, changed here until OK
+        self._pending_themes = {t: self.settings.theme_colors(t) for t in THEMES}
+        self._pending_theme = self.settings.theme()
         self._pending_extra_dir = self.settings.get("backup_extra_dir") or ""
 
         self._build()
@@ -525,13 +538,24 @@ class SettingsDialog(QDialog):
 
         colors_lbl = QLabel("Colors")
         colors_lbl.setProperty("class", "settings-section")
+        self.f_theme = SingleSelectCombo()
+        for key, name in THEME_NAMES.items():
+            self.f_theme.addItem(name, key)
+        self.f_theme.setCurrentIndex(list(THEME_NAMES).index(self._pending_theme))
+        self.f_theme.currentIndexChanged.connect(self._theme_changed)
+        self.lbl_editing = QLabel()
+        self.lbl_editing.setProperty("class", "dim-label")
+        theme_row = QHBoxLayout()
+        theme_row.addWidget(QLabel("Theme:"))
+        theme_row.addWidget(self.f_theme)
+        theme_row.addWidget(self.lbl_editing, 1)
 
         color_grid = QGridLayout()
         color_grid.setSpacing(10)
         for i, (key, label) in enumerate(self.COLOR_KEYS_COL_1):
             lbl = QLabel(label)
             btn = QPushButton()
-            self._set_btn_color(btn, self._pending_colors[key])
+            self._set_btn_color(btn, self._colors()[key])
             btn.clicked.connect(lambda checked=False, k=key: self._pick_color(k))
             self._color_btns[key] = btn
             color_grid.addWidget(lbl, i, 0)
@@ -540,7 +564,7 @@ class SettingsDialog(QDialog):
         for i, (key, label) in enumerate(self.COLOR_KEYS_COL_2):
             lbl = QLabel(label)
             btn = QPushButton()
-            self._set_btn_color(btn, self._pending_colors[key])
+            self._set_btn_color(btn, self._colors()[key])
             btn.clicked.connect(lambda checked=False, k=key: self._pick_color(k))
             self._color_btns[key] = btn
             color_grid.addWidget(lbl, i, 3)
@@ -567,6 +591,7 @@ class SettingsDialog(QDialog):
         extra_row.addWidget(btn_extra_clear)
 
         btn_reset = QPushButton("Reset to Defaults")
+        btn_reset.setToolTip("The font, the splash screen, and the colours of the theme shown")
         btn_reset.setProperty("class", "secondary")
         btn_reset.clicked.connect(self._reset)
         btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
@@ -594,12 +619,30 @@ class SettingsDialog(QDialog):
         layout.addLayout(form)
         layout.addWidget(self._sep())
         layout.addWidget(colors_lbl)
+        layout.addLayout(theme_row)
         layout.addLayout(color_grid)
         layout.addWidget(self._sep())
         layout.addWidget(backups_lbl)
         layout.addLayout(extra_row)
         layout.addWidget(self._sep())
         layout.addLayout(btn_row)
+        self._theme_changed()
+
+    def _editing(self):
+        """The theme whose colours the buttons show and change ("system": the one on screen now)."""
+        return system_theme() if self._pending_theme == "system" else self._pending_theme
+
+    def _colors(self):
+        return self._pending_themes[self._editing()]
+
+    def _theme_changed(self, *_):
+        self._pending_theme = self.f_theme.currentData()
+        for key, btn in self._color_btns.items():
+            self._set_btn_color(btn, self._colors()[key])
+        self.lbl_editing.setText(f"(editing the {THEME_NAMES[self._editing()]} colours: the Mac shows that one now)"
+                                 if self._pending_theme == "system" else "")
+        if self.isVisible():
+            self.setFixedSize(self.sizeHint())
 
     def _show_extra_dir(self):
         path = self._pending_extra_dir.replace(os.path.expanduser("~"), "~", 1)
@@ -632,12 +675,12 @@ class SettingsDialog(QDialog):
         # btn.setText(color)
 
     def _pick_color(self, key):
-        current = QColor(self._pending_colors[key])
+        current = QColor(self._colors()[key])
         color = QColorDialog.getColor(current, self, f"Choose color for {key}")
 
         if color.isValid():
             hex_color = color.name()
-            self._pending_colors[key] = hex_color
+            self._colors()[key] = hex_color
             self._set_btn_color(self._color_btns[key], hex_color)
 
     def _save(self):
@@ -645,8 +688,9 @@ class SettingsDialog(QDialog):
         self.settings.set("font_size", int(self.f_size.value()))
         self.settings.set("splash_seconds", float(self.f_splash.value()))
 
-        for key, color in self._pending_colors.items():
-            self.settings.set(key, color)
+        self.settings.set("theme", self._pending_theme)
+        for theme, colors in self._pending_themes.items():
+            self.settings.set_theme_colors(theme, colors)
 
         self.settings.set("backup_extra_dir", self._pending_extra_dir)
         try:
@@ -664,7 +708,6 @@ class SettingsDialog(QDialog):
         self.f_size.setValue(default_size)
         self.f_splash.setValue(self._default_value("splash_seconds"))
 
+        self._pending_themes[self._editing()] = dict(THEMES[self._editing()])  # this theme's own colours
         for key, btn in self._color_btns.items():
-            default_color = self._default_value(key)
-            self._pending_colors[key] = default_color
-            self._set_btn_color(btn, default_color)
+            self._set_btn_color(btn, self._colors()[key])

@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.23.0 — 2026-10-19
+
+- Themes: Edit → Settings → Theme is Dark (as before), Light, or Match macOS, which follows
+  the Mac's Appearance and switches by itself when the Mac does (e.g. Auto at sunset).
+- Each theme keeps its own colour changes: the colour buttons change the theme shown, and
+  switching back and forth loses nothing. Reset to Defaults gives the theme shown its own
+  colours again. Colours you had changed before are kept as changes to Dark.
+- The whole window takes the new colours at once, the Manage and Loans windows too.
+- Hover colours darken on light backgrounds, so they show in Light.
+- Dashboard: the old account cards no longer linger for a moment after a refresh.
+
 ## 0.22.0 — 2026-10-19
 
 - Category icons: each category can have an emoji, shown before its name in Transactions,

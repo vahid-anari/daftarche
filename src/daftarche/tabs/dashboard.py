@@ -110,6 +110,7 @@ class DashboardTab(QWidget):
         while self.account_cards_layout.count() > 1:
             item = self.account_cards_layout.takeAt(0)
             if item.widget():
+                item.widget().hide()  # out of sight now: deleteLater waits for the event loop
                 item.widget().deleteLater()
 
         total_balance = self.db.get_current_total_balance()
