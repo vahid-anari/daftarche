@@ -3,7 +3,9 @@
 Run from the repository root: python tools/make_icon.py [bars|combo]
 Writes src/daftarche/data/icons/app_icon.png (1024 x 1024, transparent corners,
 macOS icon grid) and src/daftarche/data/icons/splash.png (1600 x 900, chart on the
-right, room for the title on the left). Same family as linecat's and Maxwell
+right, room for the title on the left); for the phone app, mobile/src/assets/icon_android.png
+(square, edge to edge: Android cuts it to its own shape, so the chart stays in the middle)
+and mobile/src/assets/splash.png (the chart alone, for the start-up screen). Same family as linecat's and Maxwell
 Bloch Studio's icons, in the Finance theme colours (style.py DEFAULTS).
 """
 import sys
@@ -13,6 +15,8 @@ from PIL import Image, ImageChops, ImageDraw, ImageFilter
 
 ICON_OUT = "src/daftarche/data/icons/app_icon.png"
 SPLASH_OUT = "src/daftarche/data/icons/splash.png"
+PHONE_ICON_OUT = "mobile/src/assets/icon_android.png"
+PHONE_SPLASH_OUT = "mobile/src/assets/splash.png"
 VARIANT = sys.argv[1] if len(sys.argv) > 1 else "bars"
 S = 1024                      # icon canvas
 SIDE = 824                    # icon body (macOS grid)
@@ -143,5 +147,17 @@ def make_splash():
     print(f"-> {SPLASH_OUT} ({VARIANT})")
 
 
+def make_phone_icon():
+    """Android: no corners or shadow of our own, the chart inside the middle 60 % (the part
+    every launcher shape keeps)."""
+    img = chart(background(S, S), 0.26 * S, 0.74 * S, 0.70 * S, 0.68 * S, VARIANT)
+    img.convert("RGB").save(PHONE_ICON_OUT)
+    print(f"-> {PHONE_ICON_OUT} ({VARIANT})")
+    splash = chart(Image.new("RGBA", (S, S), (0, 0, 0, 0)), 0.30 * S, 0.70 * S, 0.67 * S, 0.58 * S, VARIANT)
+    splash.save(PHONE_SPLASH_OUT)
+    print(f"-> {PHONE_SPLASH_OUT} ({VARIANT})")
+
+
 make_icon()
 make_splash()
+make_phone_icon()

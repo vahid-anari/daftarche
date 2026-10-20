@@ -1,6 +1,6 @@
 [project]
 name = "daftarche-phone"
-version = "0.1.0"
+version = "0.1.1"
 description = "Daftarche on the phone: a read-only view of your account book"
 readme = "README.md"
 license = "MIT"
@@ -18,6 +18,13 @@ artifact = "daftarche"
 org = "io.github.vahid_anari"
 company = "Vahid Anari"
 copyright = "Copyright (C) 2026 Vahid Anari"
+
+# icon: assets/icon_android.png, splash: assets/splash.png (both from tools/make_icon.py)
+icon_background = "#1e1c18"
+
+[tool.flet.splash]
+color = "#1e1c18"
+dark_color = "#1e1c18"
 
 [tool.flet.android.permission]
 # read daftarche-phone.json in the folder Syncthing keeps (outside the app's own storage)

@@ -2,6 +2,12 @@
 
 Released with tags `phone-vX.Y.Z`; each release carries the signed APK.
 
+## 0.1.1 — 2026-10-20
+
+- Daftarche's own icon (the rising green bars) and start-up screen, instead of Flet's.
+- A much smaller download: the APK is built for 64-bit ARM phones only (nearly every
+  Android phone of the last years), not for every kind of processor.
+
 ## 0.1.0 — 2026-10-20
 
 - The first version: Dashboard, Transactions, Charts and Accounts (with loans) from the
