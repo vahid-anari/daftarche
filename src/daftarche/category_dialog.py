@@ -124,7 +124,7 @@ class CategoryDialog(QDialog):
         self.f_merchant.setCurrentText(self._preset_merchant)
         self.f_merchant.lineEdit().setPlaceholderText(
             "Several merchants: leave empty to keep each one's" if self._merchant_mixed
-            else "The shop or person (e.g. Amazon, Zahra)")
+            else "The shop or person (e.g. Amazon, Vahid)")
         self.f_merchant.currentTextChanged.connect(self._merchant_changed)
         self.f_category = _typing_combo()
         self.f_category.lineEdit().setPlaceholderText(f"Empty: {UNCATEGORIZED_CAT} (to choose later)")

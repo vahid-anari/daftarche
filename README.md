@@ -15,6 +15,10 @@ transaction table that exports to Excel.
 Everything stays on your computer, in one SQLite file. Statements have been
 tested with CIBC's QFX downloads; other banks' QFX/OFX files use the same format.
 
+<img src="https://raw.githubusercontent.com/vahid-anari/daftarche/main/docs/figures/dashboard.png" width="700" alt="Daftarche dashboard: account balances, income and expense per month, expenses by category">
+
+The screenshots show invented data (`tools/make_demo_db.py`).
+
 ## Installation
 
 Python 3.10 or newer. With [pipx](https://pipx.pypa.io/) (its own environment, recommended):
@@ -59,11 +63,29 @@ statement downloaded from your bank's website; the account is recognised from th
 file, transactions already imported are skipped, and saved rules fill in the
 merchant and category. Edit what is left in the preview, then Import New; the
 new rows then show in Transactions, and those still without a category wait in
-To review (⇧⌘R). Transactions → Match Transfers pairs the two sides of
-a transfer between your accounts. Edit → Manage… edits the types, accounts,
-categories and tags; Edit → Settings… (⌘,) changes the font and colours.
-View → Uncategorized… (⌘U) and View → Unmatched Transfers… (⇧⌘U) show what is
+To review (⇧⌘R). Match Transfers in the Transactions tab pairs the two sides of
+a transfer between your accounts. Edit → Manage… (⇧⌘M) edits the types, accounts,
+categories and tags; Edit → Settings… (⌘,) changes the font, colours and theme.
+View → To Review (⇧⌘R) and View → Unmatched Transfers… (⇧⌘U) show what is
 still left to sort, all time; double-click a line to see those transactions.
+
+<img src="https://raw.githubusercontent.com/vahid-anari/daftarche/main/docs/figures/transactions.png" width="700" alt="Transactions tab: filters by date, type, account, category and tags, and the transaction table with totals">
+
+Charts shows each month by category (lines or bars); hover a category to see its
+sub-categories, click to keep them.
+
+<img src="https://raw.githubusercontent.com/vahid-anari/daftarche/main/docs/figures/charts.png" width="700" alt="Charts tab: monthly expenses by category as stacked bars, with the sub-categories of Groceries">
+
+Accounts shows each account's balance (or income, expense, transfers) month by month.
+
+<img src="https://raw.githubusercontent.com/vahid-anari/daftarche/main/docs/figures/accounts.png" width="700" alt="Accounts tab: balance of each account by month, as a chart and a table">
+
+## User Guide
+
+Help → User Guide (⌘?) opens the guide in the app: getting started, importing statements,
+sorting, the four tabs, transfers, loans and splits, settings, backups, and the shortcuts. Its
+sources are in `docs/` (`user_guide.tex` with its own style, `guide.sty`); `sh tools/build_docs.sh`
+builds it with XeLaTeX into `src/daftarche/data/user_guide.pdf`.
 
 ## Your data
 

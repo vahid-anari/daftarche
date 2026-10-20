@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.25.0 — 2026-10-19
+
+- A User Guide: Help → User Guide (⌘?) opens it. Plain language and the app's own colours,
+  with screenshots: getting started, importing statements, sorting with categories and rules,
+  To Review, the four tabs, transfers, refunds, splits and loans, Manage and Settings, your
+  data and backups, updates, a shortcut sheet and common questions. Built from `docs/` with
+  `tools/build_docs.sh` (XeLaTeX).
+- The README shows screenshots made with the demo data; examples say "Vahid" instead of
+  "Zahra"; the README's shortcut lines match the app again (To Review ⇧⌘R, Manage ⇧⌘M).
+
 ## 0.24.1 — 2026-10-19
 
 - Help → Check for Updates… chosen while the automatic check at start-up was still running no
@@ -164,7 +174,7 @@
 
 ## 0.17.0 — 2026-10-18
 
-- A Merchant for every transaction: the shop or person (Amazon, Zahra). A new column in
+- A Merchant for every transaction: the shop or person (Amazon, Vahid). A new column in
   Transactions and in the Import preview, a field in Edit Transaction, searched like the
   other fields, and written to the Excel export.
 - Money back is a negative amount of the same type, in the category it was spent in: a

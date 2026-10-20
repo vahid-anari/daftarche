@@ -1439,7 +1439,7 @@ class TransactionDialog(QDialog):
         self.f_merchant.allow_typing()
         self.f_merchant.addItems(self.db.get_merchants())
         self.f_merchant.setCurrentText((self.row.get("merchant") or "") if self.row else "")
-        self.f_merchant.lineEdit().setPlaceholderText("The shop or person (e.g. Amazon, Zahra)")
+        self.f_merchant.lineEdit().setPlaceholderText("The shop or person (e.g. Amazon, Vahid)")
         self.f_merchant.setMaxVisibleItems(15)
 
         self.f_category = SingleSelectCombo()

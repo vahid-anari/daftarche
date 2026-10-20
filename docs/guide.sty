@@ -1,0 +1,120 @@
+% Daftarche User Guide — look and feel.
+% Friendly, plain design in the app's own colours and font (XeLaTeX).
+\NeedsTeXFormat{LaTeX2e}
+\ProvidesPackage{guide}[2026/10/19 Daftarche User Guide style]
+
+\RequirePackage{fontspec}
+\RequirePackage{xcolor}
+\RequirePackage{graphicx}
+\RequirePackage[letterpaper,top=2.2cm,bottom=2.4cm,left=2.6cm,right=2.6cm,headheight=14pt]{geometry}
+\RequirePackage{tikz}
+\RequirePackage[most]{tcolorbox}
+\RequirePackage{enumitem}
+\RequirePackage{titlesec}
+\RequirePackage{fancyhdr}
+\RequirePackage{setspace}
+\RequirePackage{array}
+\RequirePackage{booktabs}
+\RequirePackage{colortbl}
+\RequirePackage[hidelinks]{hyperref}
+\RequirePackage{eso-pic}
+\usetikzlibrary{calc,shadows}
+
+% ── Font: the app's own (Helvetica Neue on a Mac), else a free Helvetica ─────
+\IfFontExistsTF{Helvetica Neue}
+  {\setmainfont{Helvetica Neue}\setsansfont{Helvetica Neue}}
+  {\setmainfont{TeX Gyre Heros}\setsansfont{TeX Gyre Heros}}
+\renewcommand{\familydefault}{\rmdefault}
+% Key symbols (⌘ ⌥ ⇧ ⌃): Lucida Grande on a Mac has them, Helvetica Neue does not
+\IfFontExistsTF{Lucida Grande}{\newfontfamily\keyfont{Lucida Grande}}{\newfontfamily\keyfont{DejaVu Sans}}
+\setstretch{1.18}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.55em}
+% Friendly reading: ragged right, no hyphenation
+\RequirePackage{ragged2e}
+\AtBeginDocument{\raggedright\setlength{\parindent}{0pt}}
+\hyphenpenalty=10000 \exhyphenpenalty=10000
+
+% ── Colours of the app (style.py) ────────────────────────────────────────────
+\definecolor{accent}{HTML}{7C6AF7}
+\definecolor{accentdark}{HTML}{5A48D6}
+\definecolor{accentsoft}{HTML}{EEEBFE}
+\definecolor{night}{HTML}{1E1C18}
+\definecolor{surface}{HTML}{2A2720}
+\definecolor{ink}{HTML}{2A2620}
+\definecolor{dim}{HTML}{7A7064}
+\definecolor{paper}{HTML}{F5F3EE}
+\definecolor{line}{HTML}{D4CCBE}
+\definecolor{income}{HTML}{1F9D55}
+\definecolor{expense}{HTML}{D33A2C}
+\definecolor{transfer}{HTML}{C97A06}
+\definecolor{incomesoft}{HTML}{E6F5EC}
+\definecolor{transfersoft}{HTML}{FBF1E1}
+\color{ink}
+
+% ── Chapters: a coloured number badge and a large title ──────────────────────
+\titleformat{\section}[block]
+  {\huge\bfseries\color{ink}\raggedright}
+  {\tikz[baseline=(n.base)]\node[n/.style={}, fill=accent, text=white, rounded corners=6pt,
+     minimum width=1.15cm, minimum height=1.15cm, font=\huge\bfseries] (n) {\thesection};}
+  {0.5em}{}
+\titlespacing*{\section}{0pt}{0pt}{0.4em}
+\titleformat{\subsection}{\Large\bfseries\color{accentdark}\raggedright}{}{0pt}{}
+\titlespacing*{\subsection}{0pt}{1.1em}{0.2em}
+\newcommand{\chapter}[2]{%
+  \clearpage\section{#1}\vspace{-0.2em}{\large\color{dim}#2\par}\vspace{0.8em}}
+
+% ── Header and footer ────────────────────────────────────────────────────────
+\pagestyle{fancy}
+\fancyhf{}
+\renewcommand{\headrulewidth}{0pt}
+\fancyhead[L]{\small\color{dim}Daftarche \textcolor{accent}{·} User Guide}
+\fancyhead[R]{\small\color{dim}\leftmark}
+\fancyfoot[C]{\tikz\node[fill=accentsoft, text=accentdark, rounded corners=7pt, inner xsep=7pt,
+  inner ysep=3pt, font=\small\bfseries]{\thepage};}
+\renewcommand{\sectionmark}[1]{\markboth{#1}{}}
+
+% ── Keys drawn as keys:  \key{⌘}\key{I} ──────────────────────────────────────
+\newcommand{\key}[1]{\tikz[baseline=(k.base)]\node[draw=line, fill=white, rounded corners=3pt,
+  inner xsep=4pt, inner ysep=1.5pt, font=\keyfont\small, text=ink,
+  drop shadow={shadow xshift=0pt, shadow yshift=-0.8pt, fill=line, opacity=1}] (k) {\strut#1};}
+\newcommand{\keys}[1]{\def\@sep{}\@for\k:=#1\do{\@sep\key{\k}\def\@sep{\,}}}
+% menu paths:  \menu{File > Import Statement…}
+\newcommand{\menu}[1]{\textbf{\color{accentdark}#1}}
+\newcommand{\then}{\,\textcolor{dim}{›}\ }
+\newcommand{\button}[1]{\tikz[baseline=(b.base)]\node[fill=accentsoft, text=accentdark, rounded corners=4pt,
+  inner xsep=5pt, inner ysep=1.5pt, font=\small\bfseries] (b) {\strut#1};}
+
+% ── Boxes ────────────────────────────────────────────────────────────────────
+\newcommand{\boxicon}[2]{\tikz[baseline=-0.6ex]\node[circle, fill=#1, text=white, inner sep=0pt,
+  minimum size=1.35em, font=\small\bfseries]{#2};}
+\newtcolorbox{tip}[1][Tip]{enhanced, breakable, colback=accentsoft, colframe=accentsoft,
+  boxrule=0pt, arc=8pt, left=12pt, right=12pt, top=8pt, bottom=8pt, before skip=0.9em, after skip=0.9em,
+  fontupper=\normalsize,
+  title={\boxicon{accent}{i}\hspace{0.5em}\textbf{\color{accentdark}#1}}, coltitle=accentdark,
+  attach title to upper={\par\vspace{0.15em}}}
+\newtcolorbox{careful}[1][Good to know]{enhanced, breakable, colback=transfersoft, colframe=transfersoft,
+  boxrule=0pt, arc=8pt, left=12pt, right=12pt, top=8pt, bottom=8pt, before skip=0.9em, after skip=0.9em,
+  title={\boxicon{transfer}{!}\hspace{0.5em}\textbf{\color{transfer!80!black}#1}},
+  attach title to upper={\par\vspace{0.15em}}}
+\newtcolorbox{inshort}{enhanced, colback=white, colframe=line, boxrule=0.6pt, arc=8pt,
+  left=12pt, right=12pt, top=8pt, bottom=8pt, before skip=0.4em, after skip=1em,
+  borderline west={4pt}{0pt}{accent}}
+
+% ── Numbered steps with round badges ─────────────────────────────────────────
+\newlist{steps}{enumerate}{1}
+\DeclareRobustCommand{\stepbadge}[1]{\tikz[baseline=(s.base)]\node[circle, fill=accent, text=white,
+  inner sep=0pt, minimum size=1.45em, font=\small\bfseries] (s) {#1};}
+\setlist[steps]{label={\protect\stepbadge{\arabic*}},
+  leftmargin=2.3em, labelsep=0.7em, itemsep=0.35em, topsep=0.3em}
+\setlist[itemize]{label=\textcolor{accent}{\textbullet}, leftmargin=1.4em, itemsep=0.15em, topsep=0.2em}
+
+% ── Screenshots ──────────────────────────────────────────────────────────────
+\newcommand{\screenshot}[3][\linewidth]{%
+  \par\begin{center}\includegraphics[width=#1]{figures/#2}\\[-0.2em]
+  {\small\color{dim}#3}\end{center}\vspace{-0.4em}}
+
+% ── Coloured words for the three kinds of money ──────────────────────────────
+\newcommand{\income}{\textbf{\color{income}Income}}
+\newcommand{\expense}{\textbf{\color{expense}Expense}}
+\newcommand{\transfer}{\textbf{\color{transfer}Transfer}}

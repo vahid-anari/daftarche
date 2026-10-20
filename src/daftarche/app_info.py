@@ -13,6 +13,8 @@ APP_VERSION = __version__
 
 ICONS = Path(__file__).resolve().parent / "data" / "icons"
 APP_IMAGE = ICONS / "splash.png"
+USER_GUIDE = ICONS.parent / "user_guide.pdf"
+"""The User Guide, built from docs/user_guide.tex by tools/build_docs.sh."""
 """Background of the splash screen (drawn by tools/make_icon.py)."""
 
 DIST_NAME = "daftarche"

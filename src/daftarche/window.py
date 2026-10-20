@@ -14,7 +14,7 @@ from PySide6.QtGui import QAction, QColor, QDesktopServices, QFont, QKeySequence
 from sciwidgets.app.help import AppHelp
 
 from daftarche.db import Database
-from daftarche.app_info import APP, APP_NAME
+from daftarche.app_info import APP, APP_NAME, USER_GUIDE
 from daftarche.backup import copy_db, copy_for_viewing, mirror_snapshots, restore_backup, startup_backup
 from daftarche.overview import UnmatchedTransfersDialog
 from daftarche.paths import BACKUP_DIR, DATA_DIR, DB_PATH
@@ -120,7 +120,8 @@ class MainWindow(QMainWindow):
         add(go_menu, "Back", lambda: self.transactions_tab.go_back(), QKeySequence("Ctrl+["))
 
         self.help_menu = bar.addMenu("Help")
-        self.help = AppHelp(self, APP, author="Vahid Anari")  # the Help menu shared with the other apps
+        self.help = AppHelp(self, APP, user_guide=USER_GUIDE, author="Vahid Anari",  # shared with the other apps
+                            missing_hint="From a clone, build it with sh tools/build_docs.sh (needs XeLaTeX).")
         self.help.add_to(self.help_menu)
         self._update_view_state()
 

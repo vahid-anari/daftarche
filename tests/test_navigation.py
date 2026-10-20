@@ -24,7 +24,7 @@ def win(qapp, monkeypatch, tmp_path):
     db.add_category("Food", "Expense")
     food = db.get_category_by_name("Food", type_name="Expense")["id"]
     db.add_transaction(2026, "May", 1, "Expense", "Card", 10, us, uc, name="AMAZON")
-    db.add_transaction(2026, "May", 2, "Income", "Card", 20, us, uc, name="ZAHRA")
+    db.add_transaction(2026, "May", 2, "Income", "Card", 20, us, uc, name="VAHID")
     db.add_transaction(2026, "May", 3, "Expense", "Card", 30, us, uc, name="SHOP")
     db.add_transaction(2026, "May", 4, "Expense", "Card", 5, db.uncategorized_subcategory(food)["id"], food,
                        name="BAKERY")
@@ -55,7 +55,7 @@ def test_four_tabs_and_the_go_menu(win):
 def test_review_stays_in_transactions(win):
     win.show_uncategorized()
     tab = win.transactions_tab
-    assert names(win) == ["SHOP", "AMAZON", "ZAHRA"]  # expenses first, newest first
+    assert names(win) == ["SHOP", "AMAZON", "VAHID"]  # expenses first, newest first
     assert not tab.nav_bar.isHidden() and tab.btn_back.isHidden()  # nowhere to go back to
     assert "Expense 2 · Income 1" in tab.nav_label.text()
     db = win.db
@@ -63,7 +63,7 @@ def test_review_stays_in_transactions(win):
     tx = next(r for r in db.get_transactions() if r["name"] == "SHOP")
     db.update_transaction(tx["id"], category_id=food["id"], subcategory_id=db.uncategorized_subcategory(food["id"])["id"])
     tab._notify_change()
-    assert names(win) == ["AMAZON", "ZAHRA"] and "Expense 1 · Income 1" in tab.nav_label.text()
+    assert names(win) == ["AMAZON", "VAHID"] and "Expense 1 · Income 1" in tab.nav_label.text()
     tab.f_type.set_selected(["Income"])  # filtering by hand: no longer the jump's list
     tab._on_any_filter_changed()
     assert tab.nav_bar.isHidden()
