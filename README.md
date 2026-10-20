@@ -122,6 +122,5 @@ Vahid Anari ·
 [GitHub](https://github.com/vahid-anari) ·
 [LinkedIn](https://www.linkedin.com/in/vahid-anari/)
 
-Related projects: [linecat](https://github.com/vahid-anari/linecat) ·
-[sciwidgets](https://github.com/vahid-anari/sciwidgets) ·
-[Maxwell Bloch Studio](https://github.com/vahid-anari/maxwell-bloch-studio)
+Built with [sciwidgets](https://github.com/vahid-anari/sciwidgets), the widget package shared with
+the author's scientific apps.
