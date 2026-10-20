@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.25.1 — 2026-10-19
+
+- User Guide: the author on the cover and in the PDF's properties, and a closing line with the
+  license and where to find the source code.
+
 ## 0.25.0 — 2026-10-19
 
 - A User Guide: Help → User Guide (⌘?) opens it. Plain language and the app's own colours,

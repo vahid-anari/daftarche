@@ -3,6 +3,9 @@
 \usepackage{guide}
 \input{version.tex}
 
+\hypersetup{pdftitle={Daftarche User Guide}, pdfauthor={Vahid Anari},
+  pdfsubject={User Guide for Daftarche \AppVersion}, pdfkeywords={Daftarche, bookkeeping, personal finance}}
+
 \begin{document}
 
 % ════════════════════════════════════════════════════════════════════════════
@@ -29,6 +32,8 @@
     font=\large\bfseries] at ($(current page.south west)+(2.6cm,3.2cm)$) {User Guide};
   \node[anchor=south west, text=white!60!night, font=\normalsize]
     at ($(current page.south west)+(6.4cm,3.42cm)$) {for version \AppVersion};
+  \node[anchor=south west, text=white!78!night, font=\large, inner sep=0pt]
+    at ($(current page.south west)+(2.6cm,1.9cm)$) {by Vahid Anari};
 \end{tikzpicture}
 \newpage
 
@@ -411,5 +416,10 @@ Unmatched Transfers…} shows payments whose other side is still missing.}
 folders.}
 \qa{Does Daftarche send my data anywhere?}
 {Never. It only goes online to check for a newer version of itself.}
+
+\vfill
+{\small\color{dim}Daftarche and this guide are written by Vahid Anari and are free software under the
+MIT License. Source code, questions and suggestions:
+\href{https://github.com/vahid-anari/daftarche}{\color{accentdark}github.com/vahid-anari/daftarche}.\par}
 
 \end{document}
