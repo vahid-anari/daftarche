@@ -1,0 +1,23 @@
+[project]
+name = "daftarche-phone"
+version = "0.1.0"
+description = "Daftarche on the phone: a read-only view of your account book"
+readme = "README.md"
+license = "MIT"
+authors = [{ name = "Vahid Anari", email = "vahid.anari8@gmail.com" }]
+requires-python = ">=3.10"
+dependencies = ["flet==1.0.4"]
+
+[tool.flet]
+product = "Daftarche"
+artifact = "daftarche"
+org = "io.github.vahid_anari"
+company = "Vahid Anari"
+copyright = "Copyright (C) 2026 Vahid Anari"
+
+[tool.flet.app]
+path = "src"
+module = "main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
