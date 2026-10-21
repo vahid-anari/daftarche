@@ -2,6 +2,18 @@
 
 Released with tags `phone-vX.Y.Z`; each release carries the signed APK.
 
+## 0.2.0 — 2026-10-21
+
+- Android's Back goes back one step instead of leaving the app: it closes an open sheet,
+  returns from Show transactions (or an account's transactions) to where you were, as you
+  left it, goes to the Dashboard from another tab, and on the Dashboard says "Press Back
+  again to exit" first.
+- Swipe left or right to change tabs; the tab bar follows.
+- Sheets (filters, a transaction's details, Settings) no longer slip under Android's Back /
+  Home buttons: their buttons stay above them.
+- Android's own bars take the app's colours: the button strip like the tab bar, the status
+  bar like the page, with symbols that stay readable in the light theme.
+
 ## 0.1.1 — 2026-10-20
 
 - Daftarche's own icon (the rising green bars) and start-up screen, instead of Flet's.
