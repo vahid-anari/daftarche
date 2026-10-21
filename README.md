@@ -146,6 +146,10 @@ backing up the database.
 Pushing a tag `vX.Y.Z` publishes a GitHub Release with that version's section of
 [`CHANGELOG.md`](CHANGELOG.md); `python -m build && twine upload dist/*` puts it on PyPI.
 
+## Support
+
+Daftarche is free, and I work on it in my spare time. If it's useful to you, you can [buy me a coffee](https://buymeacoffee.com/vahidanarim) ☕
+
 ## License
 
 MIT License. See [LICENSE](LICENSE).
