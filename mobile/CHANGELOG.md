@@ -2,6 +2,16 @@
 
 Released with tags `phone-vX.Y.Z`; each release carries the signed APK.
 
+## 0.3.1 — 2026-10-21
+
+- Dashboard: the accounts under the Total Balance are folded; tap the card (▾) to see them. The
+  app remembers whether you left them open.
+- Dashboard: an Expense | Income switch on the donut (or, for longer periods, on the list), so
+  the month's income by category can be seen too.
+- Accounts: the list of accounts is now under the chart, in its card, instead of a legend plus a
+  card for each account: colour, name, balance and the change in the period. Tap one for its
+  transactions, as before.
+
 ## 0.3.0 — 2026-10-21
 
 - Connected to Daftarche on the Mac by its QR code (Settings › Phone › Connect a Phone… on

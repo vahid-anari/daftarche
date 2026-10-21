@@ -171,3 +171,49 @@ def test_the_account_has_a_line_of_its_own(app):
     texts = [c.value for c in _walk(phone._tx_row(tx)) if isinstance(c, ft.Text)]
     name = phone.snap.account_name(tx["account"])
     assert name in texts and not any("·" in t and name in t for t in texts)
+
+
+# ── 0.3.1: accounts folded, Expense | Income on the Dashboard, the Accounts list in its card ─
+def _texts(control):
+    return [c.value for c in _walk(control) if isinstance(c, ft.Text)]
+
+
+def test_the_dashboards_accounts_start_folded_and_open_on_a_tap(app):
+    phone, page, view = app
+    phone.render()
+    name = phone.snap.accounts[0]["name"]
+    assert "Total Balance" in _texts(phone._pager.controls[0]) and name not in _texts(phone._pager.controls[0])
+    phone._toggle_accounts()
+    assert phone.accounts_open and name in _texts(phone._pager.controls[0])
+    phone._toggle_accounts()
+    assert name not in _texts(phone._pager.controls[0])
+
+
+def test_the_dashboard_switches_to_income(app):
+    phone, page, view = app
+    phone._set_period("Dashboard", "Last Month")
+    assert any(t.startswith("Expense in ") for t in _texts(phone._pager.controls[0]))
+    phone._set_dash_kind("Income")
+    texts = _texts(phone._pager.controls[0])
+    assert any(t.startswith("Income in ") for t in texts) and "Income by Category" in texts
+    phone._set_period("Dashboard", "6 Months")  # the bars: the switch moves to the list's title
+    texts = _texts(phone._pager.controls[0])
+    assert "Income vs Expense" in texts and "Income by Category" in texts
+
+
+def test_the_accounts_list_is_in_the_chart_card(app):
+    phone, page, view = app
+    phone.period["Accounts"] = "6 Months"
+    phone.tab = 3
+    phone.render()
+    page_ = phone._pager.controls[3]
+    shown = phone.snap.shown_accounts()
+    cards = [c for c in page_.controls if isinstance(c, ft.Container) and c.on_click is not None]
+    assert cards == []  # no separate account cards any more
+    rows = [c for c in _walk(page_) if isinstance(c, ft.Container) and c.on_click is not None]
+    assert len(rows) >= len(shown)
+    texts = _texts(page_)
+    assert all(a["name"] in texts for a in shown) and any(t.endswith("in this period") for t in texts)
+    page.navigation_bar.update = lambda: None
+    rows[-1].on_click(None)  # the last row: an account → its transactions
+    assert phone.tab == 1 and phone.tx_filters["account"] is not None
