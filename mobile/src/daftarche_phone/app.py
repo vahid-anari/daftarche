@@ -222,6 +222,18 @@ class PhoneApp:
                                   selected_index=self.tab, on_change=self._swiped, expand=True)
         return self._pager
 
+    def _redraw(self):
+        """Draw the tabs again in place, after a choice inside a tab (a period, a filter, a tapped
+        category): each list keeps where it was scrolled to. render() builds new lists, which
+        open at the top."""
+        if self.snap is None or getattr(self, "_pager", None) is None:
+            self.render()
+            return
+        fresh = [self._dashboard(), self._transactions(), self._charts(), self._accounts()]
+        for old, new in zip(self._pager.controls, fresh):
+            old.controls = new.controls
+        self.page.update()
+
     def _sheet(self, content, **kwargs):
         """A sheet from the bottom whose content stays above Android's Back / Home buttons (Flet's
         own sheet keeps clear of the top and sides only); its background still reaches the edge."""
@@ -290,7 +302,7 @@ class PhoneApp:
             self.tx_range = None
         if tab == "Charts":
             self.chart_month = None
-        self.render()
+        self._redraw()
 
     def _range(self, tab):
         if tab == "Transactions" and self.tx_range:
@@ -347,20 +359,30 @@ class PhoneApp:
             ft.Row([self._stat("Net", money(sm["net"], sign=True), p.signed(sm["net"]) if sm["net"] else p.text),
                     self._stat("Transactions", f"{sm['count']:,}", p.transfer)], spacing=10)], spacing=10)
 
-        # one or two months make a poor chart: then the last six months, for context
-        short = self.period["Dashboard"] in ("This Month", "Last Month")
-        monthly = s.monthly(*period_range("6 Months", date.today())) if short else s.monthly(start, end)
-        chart = self._card(ft.Column([
-            self._heading("Income vs Expense",
-                          ft.Text("last 6 months", size=12, color=p.dim) if short else None),
-            legend(p, [(p.income, "Income"), (p.expense, "Expense")]),
-            bar_chart(p, [month_label(m) for m, _, _ in monthly],
-                      [(p.income, [i for _, i, _ in monthly]), (p.expense, [e for _, _, e in monthly])])],
-            spacing=10))
+        rows = s.by_category("Expense", start, end)
+        colours = {c: PALETTE[i % len(PALETTE)] for i, (c, _) in enumerate(rows)}
+        monthly = s.monthly(start, end)
+        if len(monthly) <= 1:  # one month (This / Last Month): how its spending divides, as in Charts
+            month = monthly[0][0] if monthly else start[:7]
+            shown = [(colours[c], v) for c, v in rows[:TOP_CATEGORIES]]
+            rest = round(sum(v for _, v in rows[TOP_CATEGORIES:]), 2)
+            if rest > 0:
+                shown.append((p.dim, rest))
+            chart = self._card(ft.Column([
+                self._heading(f"Expense in {long_month(month)}"),
+                donut(p, shown, money(sm["expense"]), f"{len(rows)} categor{'y' if len(rows) == 1 else 'ies'}")],
+                spacing=12))
+        else:
+            chart = self._card(ft.Column([
+                self._heading("Income vs Expense"),
+                legend(p, [(p.income, "Income"), (p.expense, "Expense")]),
+                bar_chart(p, [month_label(m) for m, _, _ in monthly],
+                          [(p.income, [i for _, i, _ in monthly]), (p.expense, [e for _, _, e in monthly])])],
+                spacing=10))
 
         banner = self._update_banner()
         return self._page([*([banner] if banner else []), top, self._periods("Dashboard"), stats, chart,
-                           self._category_card("Expense", start, end, "Expenses by Category")])
+                           self._category_card("Expense", start, end, "Expenses by Category", colours=colours)])
 
     def _category_card(self, kind, start, end, title, account=None, expandable=False, colours=None,
                        heading=None):
@@ -404,7 +426,7 @@ class PhoneApp:
 
     def _toggle_category(self, category):
         self.open_category = None if self.open_category == category else category
-        self.render()
+        self._redraw()
 
     def _show_category(self, category, kind):
         """The transactions of a category, in Transactions, over the same period."""
@@ -472,17 +494,17 @@ class PhoneApp:
 
     def _clear_filter(self, key):
         self.tx_filters[key] = None
-        self.render()
+        self._redraw()
 
     def _search(self, e):
         if e.control.value != self.tx_filters["text"]:
             self.tx_filters["text"] = e.control.value
             self.tx_limit = PAGE_SIZE
-            self.render()
+            self._redraw()
 
     def _more(self, e):
         self.tx_limit += PAGE_SIZE
-        self.render()
+        self._redraw()
 
     def _tx_row(self, tx):
         s, p = self.snap, self.p
@@ -576,7 +598,7 @@ class PhoneApp:
                     ft.FilledButton("Done", on_click=lambda ev: self.page.pop_dialog())],
                    alignment=ft.MainAxisAlignment.END)],
             spacing=12, tight=True), padding=ft.Padding.only(left=20, right=20, top=8, bottom=24)),
-            bgcolor=p.surface, show_drag_handle=True, on_dismiss=lambda ev: self.render())
+            bgcolor=p.surface, show_drag_handle=True, on_dismiss=lambda ev: self._redraw())
         self.page.show_dialog(sheet)
 
     def _set_filter(self, key, value):
@@ -649,17 +671,17 @@ class PhoneApp:
         """A month tapped in the bars: its categories below; tapped again (or ✕): the whole period."""
         self.chart_month = None if self.chart_month == month else month
         self.open_category = None
-        self.render()
+        self._redraw()
 
     def _set_chart_kind(self, e):
         self.chart_kind = list(e.control.selected)[0]
         self.open_category = None
         self.chart_month = None
-        self.render()
+        self._redraw()
 
     def _set_chart_account(self, e):
         self.chart_account = int(e.control.value) if e.control.value else None
-        self.render()
+        self._redraw()
 
     # ── Accounts ─────────────────────────────────────────────────────────────
     def _accounts(self):

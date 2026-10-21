@@ -110,3 +110,27 @@ def test_the_month_chip_in_transactions_goes_back_to_the_period(app):
     phone.tx_range = ("2026-09-01", "2026-09-30", "Sep 26")
     phone._set_period("Transactions", phone.period["Transactions"])
     assert phone.tx_range is None and phone._range("Transactions") != ("2026-09-01", "2026-09-30")
+
+
+# ── 0.2.2: the Dashboard's month, and staying where you were ─────────────────
+def test_the_dashboard_shows_a_donut_for_one_month(app):
+    phone, page, view = app
+    phone.render()
+    phone._set_period("Dashboard", "Last Month")
+    controls = list(_walk(phone._pager.controls[0]))
+    assert any(type(c).__name__ == "Arc" for c in controls)
+    assert any(isinstance(c, ft.Text) and c.value.startswith("Expense in ") for c in controls)
+    phone._set_period("Dashboard", "6 Months")
+    controls = list(_walk(phone._pager.controls[0]))
+    assert not any(type(c).__name__ == "Arc" for c in controls)
+    assert any(isinstance(c, ft.Text) and c.value == "Income vs Expense" for c in controls)
+
+
+def test_a_choice_inside_a_tab_keeps_its_list_where_it_was(app):
+    phone, page, view = app
+    phone.render()
+    lists = list(phone._pager.controls)
+    phone._set_period("Dashboard", "This Month")
+    phone._set_period("Charts", "3 Months")
+    phone._more(None)
+    assert all(a is b for a, b in zip(lists, phone._pager.controls))  # the same lists: not back at the top
