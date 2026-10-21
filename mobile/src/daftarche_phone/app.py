@@ -7,6 +7,7 @@ on the Mac into a folder shared with the phone) and reads it again when asked.
 from __future__ import annotations
 
 import asyncio
+import calendar
 import copy
 import errno
 import os
@@ -17,9 +18,9 @@ from pathlib import Path
 import flet as ft
 
 from . import __version__
-from .charts import LineChart, bar_chart, legend, share_bar
+from .charts import LineChart, bar_chart, donut, legend, share_bar
 from .nav import ASK_EXIT, DASHBOARD, EXIT, RESTORE, BackSteps
-from .snapshot import (PALETTE, PERIODS, SNAPSHOT_NAME, Snapshot, SnapshotError, money, month_label,
+from .snapshot import (MONTHS, PALETTE, PERIODS, SNAPSHOT_NAME, Snapshot, SnapshotError, money, month_label,
                        period_range)
 from .theme import THEME_CHOICES, material_theme, palette_for
 from .update import check as check_for_update
@@ -31,7 +32,19 @@ TABS = (("Dashboard", ft.Icons.DASHBOARD_OUTLINED, ft.Icons.DASHBOARD),
 PAGE_SIZE = 150
 """Transactions shown at first; "Show more" adds as many again."""
 TOP_CATEGORIES = 7
-"""Categories of their own in the stacked bars; the rest are "Other"."""
+"""Categories of their own in the stacked bars and the donut; the rest are "Other"."""
+
+
+def month_range(key):
+    """``"2026-09"`` → ``("2026-09-01", "2026-09-30")``."""
+    y, m = (int(x) for x in key.split("-"))
+    return f"{key}-01", f"{key}-{calendar.monthrange(y, m)[1]:02d}"
+
+
+def long_month(key):
+    """``"2026-09"`` → ``"September 2026"``."""
+    y, m = key.split("-")
+    return f"{MONTHS[int(m) - 1]} {y}"
 NEED_ACCESS = "access"
 """``problem`` when Android has not allowed reading the folder yet."""
 
@@ -52,6 +65,8 @@ class PhoneApp:
         self.tx_limit = PAGE_SIZE
         self.chart_kind = "Expense"
         self.chart_account = None
+        self.chart_month = None  # a month tapped in the Charts bars ("2026-09"): its categories below
+        self.tx_range = None  # Transactions shows one month from Charts: (first day, last day, label)
         self.open_category = None
         self.p = palette_for("system", page.platform_brightness)
         self.android = page.platform in (ft.PagePlatform.ANDROID, ft.PagePlatform.ANDROID_TV) and not page.web
@@ -165,7 +180,8 @@ class PhoneApp:
         """Where the person is now: restored when Back undoes a jump."""
         return copy.deepcopy({"tab": self.tab, "period": self.period, "tx_filters": self.tx_filters,
                               "tx_limit": self.tx_limit, "chart_kind": self.chart_kind,
-                              "chart_account": self.chart_account, "open_category": self.open_category})
+                              "chart_account": self.chart_account, "open_category": self.open_category,
+                              "chart_month": self.chart_month, "tx_range": self.tx_range})
 
     def _jump(self):
         """Call before going somewhere else from a tab (Show transactions, an account)."""
@@ -252,8 +268,13 @@ class PhoneApp:
     def _periods(self, tab):
         p = self.p
         chips = []
+        if tab == "Transactions" and self.tx_range:  # one month, from Charts: ✕ goes back to the chips
+            chips.append(ft.Container(
+                ft.Text(f"{self.tx_range[2]}  ✕", size=13, color="#ffffff", weight=ft.FontWeight.BOLD),
+                bgcolor=p.accent, border_radius=16, padding=ft.Padding.symmetric(horizontal=12, vertical=7),
+                on_click=lambda e: self._set_period(tab, self.period[tab])))
         for name in PERIODS:
-            chosen = self.period[tab] == name
+            chosen = self.period[tab] == name and not (tab == "Transactions" and self.tx_range)
             chips.append(ft.Container(
                 ft.Text(name, size=13, color="#ffffff" if chosen else p.dim,
                         weight=ft.FontWeight.BOLD if chosen else None),
@@ -266,9 +287,14 @@ class PhoneApp:
         self.period[tab] = name
         if tab == "Transactions":
             self.tx_limit = PAGE_SIZE
+            self.tx_range = None
+        if tab == "Charts":
+            self.chart_month = None
         self.render()
 
     def _range(self, tab):
+        if tab == "Transactions" and self.tx_range:
+            return self.tx_range[0], self.tx_range[1]
         return period_range(self.period[tab], date.today())
 
     def _stat(self, label, value, colour):
@@ -336,10 +362,14 @@ class PhoneApp:
         return self._page([*([banner] if banner else []), top, self._periods("Dashboard"), stats, chart,
                            self._category_card("Expense", start, end, "Expenses by Category")])
 
-    def _category_card(self, kind, start, end, title, account=None, expandable=False):
+    def _category_card(self, kind, start, end, title, account=None, expandable=False, colours=None,
+                       heading=None):
+        """``colours``: the chart's colours (a month of it keeps the period's); ``heading``: a
+        control in place of the plain title."""
         s, p = self.snap, self.p
         rows = s.by_category(kind, start, end, account)
-        colours = {c: PALETTE[i % len(PALETTE)] for i, (c, _) in enumerate(rows)}
+        own = {c: PALETTE[i % len(PALETTE)] for i, (c, _) in enumerate(rows)}
+        colours = {c: (colours or {}).get(c, own[c]) for c, _ in rows}
         total = sum(v for _, v in rows if v > 0) or 1
         items = []
         for c, v in rows:
@@ -358,7 +388,7 @@ class PhoneApp:
                                       else self._show_category(c, kind)))
         if not items:
             items = [ft.Text("Nothing in this period", size=13, color=p.dim)]
-        return self._card(ft.Column([self._heading(title), *items], spacing=8))
+        return self._card(ft.Column([heading or self._heading(title), *items], spacing=8))
 
     def _subcategories(self, category, kind, start, end, account, total):
         s, p = self.snap, self.p
@@ -381,6 +411,9 @@ class PhoneApp:
         self._jump()
         source = TABS[self.tab][0]
         self.period["Transactions"] = self.period.get(source, "This Month")
+        self.tx_range = None
+        if source == "Charts" and self.chart_month:  # a month tapped in the bars: that month only
+            self.tx_range = (*month_range(self.chart_month), month_label(self.chart_month))
         self.tx_filters = {"kind": kind, "account": self.chart_account if source == "Charts" else None,
                            "category": category, "tag": None, "text": ""}
         self.tx_limit = PAGE_SIZE
@@ -580,20 +613,48 @@ class PhoneApp:
         if rest:
             groups.append((p.dim, [round(sum(per_cat[c][i] for c in rest), 2) for i in range(len(months))]))
         monthly_total = [round(sum(v[i] for _, v in groups), 2) for i in range(len(months))]
-        average = sum(monthly_total) / len(monthly_total) if monthly_total else 0
-        chart = self._card(ft.Column([
-            self._heading(f"Monthly {kind}", ft.Text(f"average {money(average)}", size=12, color=p.dim)),
-            bar_chart(p, [month_label(m) for m in months], groups, height=190, bar_width=11, stacked=True)],
-            spacing=12))
+        if self.chart_month not in months:
+            self.chart_month = None
 
+        if len(months) == 1:  # one month: how it divides between categories
+            chart = self._card(ft.Column([
+                self._heading(f"{kind} in {long_month(months[0])}"),
+                donut(p, [(c, v[0]) for c, v in groups], money(monthly_total[0]), f"{len(order)} categories")],
+                spacing=12))
+        else:
+            average = sum(monthly_total) / len(monthly_total) if monthly_total else 0
+            picked = months.index(self.chart_month) if self.chart_month else None
+            chart = self._card(ft.Column([
+                self._heading(f"Monthly {kind}", ft.Text(f"average {money(average)}", size=12, color=p.dim)),
+                bar_chart(p, [month_label(m) for m in months], groups, height=190, bar_width=11, stacked=True,
+                          selected=picked, on_tap=lambda i: self._pick_month(months[i]))],
+                spacing=12))
+
+        title, heading = "By Category  (tap for details)", None
+        if self.chart_month:  # the tapped month's categories, in the period's colours
+            start, end = month_range(self.chart_month)
+            heading = ft.Row([
+                ft.Text("By Category", size=15, weight=ft.FontWeight.BOLD, color=p.text, expand=True),
+                ft.Container(ft.Text(f"{long_month(self.chart_month)}  ✕", size=12, color="#ffffff",
+                                     weight=ft.FontWeight.BOLD),
+                             bgcolor=p.accent, border_radius=12,
+                             padding=ft.Padding.symmetric(horizontal=10, vertical=4),
+                             on_click=lambda e: self._pick_month(self.chart_month))])
         return self._page([ft.Row([kinds, accounts], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
                            self._periods("Charts"), chart,
-                           self._category_card(kind, start, end, "By Category  (tap for details)", account,
-                                               expandable=True)])
+                           self._category_card(kind, start, end, title, account, expandable=True,
+                                               colours=colours, heading=heading)])
+
+    def _pick_month(self, month):
+        """A month tapped in the bars: its categories below; tapped again (or ✕): the whole period."""
+        self.chart_month = None if self.chart_month == month else month
+        self.open_category = None
+        self.render()
 
     def _set_chart_kind(self, e):
         self.chart_kind = list(e.control.selected)[0]
         self.open_category = None
+        self.chart_month = None
         self.render()
 
     def _set_chart_account(self, e):
@@ -627,6 +688,7 @@ class PhoneApp:
 
     def _show_account(self, account_id):
         self._jump()
+        self.tx_range = None
         self.tx_filters = {"kind": None, "account": account_id, "category": None, "tag": None, "text": ""}
         self.tx_limit = PAGE_SIZE
         self._jump_to_transactions()
