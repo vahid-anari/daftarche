@@ -26,6 +26,8 @@ from daftarche.style import get_settings
 from daftarche.tag_picker import TagsDialog
 from daftarche.icons import emoji_icon, set_category_icons
 
+NO_MERCHANT = "(no merchant)"
+"""The Merchant filter's first line: the transactions without one."""
 LOAN_OUT = "Out (I lent, or paid back)"
 LOAN_IN = "In (I borrowed, or was paid back)"
 
@@ -290,7 +292,7 @@ class TransactionsTab(QWidget):
         self._came_from = None  # (label, go back) of the place that sent you here
         self._review = False  # the To review list: no category, sorted by type
         self._only_ids = None  # just these transactions (e.g. those just imported)
-        self._only_merchants = None  # just these merchants (from Manage → Merchants)
+
         self._period_before = None  # the period you had before a jump changed it: back after it
         self._current_rows = []
         self._sort_config = [
@@ -384,30 +386,37 @@ class TransactionsTab(QWidget):
         row2 = QHBoxLayout()
         row2.setSpacing(8)
 
-        self.f_type = self._make_check_combo("All Types")
-        self.f_account = self._make_check_combo("All Accounts")
-        self.f_category = self._make_check_combo("All Categories", searchable=True)
-        self.f_subcat = self._make_check_combo("All Sub-Cats", searchable=True)
-        self.f_tags = self._make_check_combo("All Tags", searchable=True)
+        self.f_type = self._make_check_combo("All")
+        self.f_account = self._make_check_combo("All")
+        self.f_category = self._make_check_combo("All", searchable=True)
+        self.f_subcat = self._make_check_combo("All", searchable=True)
+        self.f_merchant = self._make_check_combo("All", searchable=True)
+        self.f_tags = self._make_check_combo("All", searchable=True)
 
         for lbl_txt, combo, stretch in [
             ("Type:", self.f_type, 1),
             ("Account:", self.f_account, 2),
             ("Category:", self.f_category, 2),
             ("Sub-Cat:", self.f_subcat, 2),
+            ("Merchant:", self.f_merchant, 2),
             ("Tags:", self.f_tags, 2),
         ]:
             lbl = QLabel(lbl_txt)
             lbl.setProperty("class", "filter-label")
+            lbl.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)  # the boxes give way, not the names
             row2.addWidget(lbl)
             row2.addWidget(combo, stretch)
-            row2.addSpacing(20)
+            row2.addSpacing(12)
 
-        btn_reset = QPushButton("🧹 Reset")
+        # six boxes share the row: Reset is a small button (its emoji drawn whole, as in Manage)
+        btn_reset = QPushButton()
+        btn_reset.setIcon(emoji_icon("🧹"))
+        btn_reset.setIconSize(QSize(20, 20))
+        btn_reset.setFixedWidth(44)
+        btn_reset.setToolTip("Reset Filters: all types, accounts, categories, merchants and tags")
+        btn_reset.setAccessibleName("Reset Filters")
         btn_reset.setProperty("class", "secondary")
-        btn_reset.setMinimumWidth(80)
         btn_reset.clicked.connect(self.reset_filters)
-        row2.addStretch(1)
         row2.addWidget(btn_reset)
         layout.addLayout(row2)
 
@@ -443,7 +452,7 @@ class TransactionsTab(QWidget):
         self.model.on_note_edited = self._save_note
         self.table.setSortingEnabled(False)
         self.table.setAlternatingRowColors(True)
-        self.table.setSelectionBehavior(QAbstractItemView.SelectItems)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)  # every action works on whole rows
         self.table.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.selectionModel().selectionChanged.connect(self._update_rows_info)
@@ -558,7 +567,14 @@ class TransactionsTab(QWidget):
         self._apply_filters()
 
     def _get_filters(self):
-        return {**self._shown_filters(), "ids": self._only_ids, "merchant": self._only_merchants}
+        return {**self._shown_filters(), "ids": self._only_ids}
+
+    def _merchant_filter(self):
+        """The merchants ticked ("" for "(no merchant)"), as the database filters them."""
+        return ["" if m == NO_MERCHANT else m for m in self.f_merchant.get_selected()]
+
+    def _tick_merchants(self, merchants):
+        self.f_merchant.set_selected([NO_MERCHANT if not m else m for m in merchants])
 
     def _shown_filters(self):
         from_date, to_date = self._period.get_range()
@@ -570,6 +586,7 @@ class TransactionsTab(QWidget):
                 "account": self.f_account.get_selected(),
                 "category": self.f_category.get_selected(),
                 "subcategory": self.f_subcat.get_selected(),
+                "merchant": self._merchant_filter(),
                 "tags": self.f_tags.get_selected(),
                 "search": self.f_search.text().strip(),
                 "search_fields": self._search_fields,
@@ -585,6 +602,7 @@ class TransactionsTab(QWidget):
             "account": self.f_account.get_selected(),
             "category": self.f_category.get_selected(),
             "subcategory": self.f_subcat.get_selected(),
+            "merchant": self._merchant_filter(),
             "tags": self.f_tags.get_selected(),
             "search": self.f_search.text().strip(),
             "search_fields": self._search_fields,
@@ -593,7 +611,7 @@ class TransactionsTab(QWidget):
     # ── Refresh ───────────────────────────────────────────────────────────────
     def refresh(self):
         self._period.refresh_style()
-        for combo in (self.f_type, self.f_account, self.f_category, self.f_subcat, self.f_tags):
+        for combo in (self.f_type, self.f_account, self.f_category, self.f_subcat, self.f_merchant, self.f_tags):
             combo.refresh_style()
         self._updating = True
         try:
@@ -607,11 +625,13 @@ class TransactionsTab(QWidget):
             self.f_category.populate(options.get("category", []))
             self.f_subcat.populate(options.get("subcategory", []))
             self.f_tags.populate([t["name"] for t in self.db.get_tags()])
+            self.f_merchant.populate([NO_MERCHANT] + self.db.get_merchants(with_transactions=True))
 
             # restore type & account
             self.f_type.set_selected(saved_filters["type"])
             self.f_account.set_selected(saved_filters["account"])
             self.f_tags.set_selected(saved_filters.get("tags", []))
+            self._tick_merchants(saved_filters.get("merchant") or [])
 
             # cascade category using saved type+account directly
             filtered_options = self.db.get_filter_options({
@@ -668,7 +688,6 @@ class TransactionsTab(QWidget):
         self._came_from = None
         self._review = False
         self._only_ids = None
-        self._only_merchants = None
         self.nav_bar.hide()
         if self._period_before is not None and not keep_period:
             self._period.restore(self._period_before)  # the jump's dates were for the moment only
@@ -738,9 +757,13 @@ class TransactionsTab(QWidget):
         finally:
             self._navigating = False
         shown = [", ".join(v) for v in (types, accounts, categories, subcategories, merchants) if v]
-        if merchants:
-            self._only_merchants = list(merchants)
-            self._apply_filters()
+        if merchants:  # ticked in the Merchant box: seen, and cleared or widened like any filter
+            self._navigating = True
+            try:
+                self._tick_merchants(merchants)
+                self._on_any_filter_changed()
+            finally:
+                self._navigating = False
         if came_from or text:
             self._set_navigation(text or ("Showing: " + " · ".join(shown) if shown else "Showing everything"),
                                  came_from)
@@ -751,7 +774,7 @@ class TransactionsTab(QWidget):
             self.f_search.blockSignals(True)
             self.f_search.clear()
             self.f_search.blockSignals(False)
-            for combo in (self.f_type, self.f_account, self.f_category, self.f_subcat, self.f_tags):
+            for combo in (self.f_type, self.f_account, self.f_category, self.f_subcat, self.f_merchant, self.f_tags):
                 combo.clear_selection()
             if from_day and to_day:
                 self._period.set_custom_range(date.fromisoformat(from_day), date.fromisoformat(to_day))
@@ -776,7 +799,7 @@ class TransactionsTab(QWidget):
             self.f_search.blockSignals(True)
             self.f_search.clear()
             self.f_search.blockSignals(False)
-            for combo in (self.f_type, self.f_account, self.f_category, self.f_subcat, self.f_tags):
+            for combo in (self.f_type, self.f_account, self.f_category, self.f_subcat, self.f_merchant, self.f_tags):
                 combo.clear_selection()
         finally:
             self._updating = False
@@ -865,6 +888,7 @@ class TransactionsTab(QWidget):
         menu.addAction(QAction("🏷️  Add Tags", self, triggered=self._add_tags_to_selected))
         menu.addSeparator()
         menu.addAction(QAction(f"📋  Copy {n} row{'s' if n > 1 else ''}", self, triggered=self._copy_selected))
+        menu.addAction(QAction("📋  Copy Cell", self, triggered=lambda: self._copy_cell(idx)))
         menu.addAction(QAction("✅  Select All", self, triggered=self.table.selectAll))
         menu.addSeparator()
         menu.addAction(QAction(f"🗑️  Delete {n} row{'s' if n > 1 else ''}", self, triggered=self._delete_selected))
@@ -892,6 +916,10 @@ class TransactionsTab(QWidget):
             QMessageBox.warning(self, "Make It a Loan", str(e))
             return
         self._notify_change()
+
+    def _copy_cell(self, index):
+        """The one value under the mouse, as shown (whole rows are selected, so ⌘C copies rows)."""
+        QApplication.clipboard().setText(str(self.model.data(index, Qt.DisplayRole) or ""))
 
     def _get_selected_row_indices(self):
         return sorted(set(idx.row() for idx in self.table.selectedIndexes()))

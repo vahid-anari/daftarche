@@ -1743,11 +1743,13 @@ class Database:
                  AND NOT EXISTS (SELECT 1 FROM transaction_splits sp WHERE sp.transaction_id = t.id)""",
             (type_name, UNCATEGORIZED_CAT)).fetchall()
 
-    def get_merchants(self):
-        """Every merchant name in use (transactions and rules), A to Z."""
-        rows = self.conn.execute("""
-            SELECT merchant FROM transactions WHERE merchant IS NOT NULL AND TRIM(merchant) <> ''
-            UNION SELECT merchant FROM import_mappings WHERE merchant IS NOT NULL AND TRIM(merchant) <> ''
+    def get_merchants(self, with_transactions=False):
+        """Every merchant name in use (transactions and rules), A to Z; ``with_transactions``:
+        only those some transaction has (the Merchant filter in Transactions)."""
+        rules = "" if with_transactions else """
+            UNION SELECT merchant FROM import_mappings WHERE merchant IS NOT NULL AND TRIM(merchant) <> ''"""
+        rows = self.conn.execute(f"""
+            SELECT merchant FROM transactions WHERE merchant IS NOT NULL AND TRIM(merchant) <> ''{rules}
         """).fetchall()
         return sorted({r[0] for r in rows}, key=str.casefold)
 

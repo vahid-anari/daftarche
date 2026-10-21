@@ -472,14 +472,16 @@ class CheckComboBox(QToolButton):
 
     def _update_display(self):
         n, total = len(self._checked), len(self._items)
-        if n == 0:
-            self.setText("None  ▼")
+        if n == 0:  # nothing ticked: its placeholder ("All" for a filter, "No tags" for a transaction's tags)
+            self.setText(f"{self._placeholder}  ▼")
         elif n == total:
             self.setText("All  ▼")
         elif n == 1:
             self.setText(f"{plain_label(next(iter(self._checked)))}  ▼")  # "Coffee & Snacks", not "Coffee _Snacks"
         else:
             self.setText(f"{n} selected  ▼")
+        # what is ticked, in full (a narrow box shows only "2 …")
+        self.setToolTip("\n".join(sorted(self._checked, key=str.casefold)) if 1 < n < total else "")
 
 
 # StepSpinBox  — custom spin box with visible ▲▼ buttons (macOS-safe)

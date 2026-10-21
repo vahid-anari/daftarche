@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.26.1 — 2026-10-21
+
+- Transactions has a Merchant filter, next to Sub-Cat, with a search box inside: tick one or
+  several merchants, or "(no merchant)" for the transactions without one. Opening a
+  merchant's or a person's transactions from Manage → Merchants or from Loans now ticks it
+  there, so you can see why the list is short and widen or clear it like any filter.
+- A click in Transactions selects the whole line (⇧-click and ⌘-click for several), as every
+  action there works on whole transactions anyway. Right-click → Copy Cell copies just the
+  value under the mouse; ⌘C still copies the lines.
+- The filter boxes say "All" when nothing is ticked (they said "None", though everything was
+  shown), and show the ticked names on hover; the Reset button is now the broom at the end
+  of the row, so six boxes fit the narrowest window.
+- Manage: the small buttons under the lists (✏️ 😀 🔀 🗑️) are no longer cut off, and each
+  says what it does on hover.
+
 ## 0.26.0 — 2026-10-20
 
 - The phone snapshot, first step towards Daftarche on the phone: choose a phone folder in

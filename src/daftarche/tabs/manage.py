@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
     QColorDialog, QCheckBox, QFormLayout, QLineEdit,
     QDialogButtonBox, QFrame, QSizePolicy, QAbstractScrollArea
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QColor, QBrush, QPalette
 
 from daftarche.style import get_settings
@@ -409,7 +409,7 @@ class CatsRulesPanel(QWidget):
             ("＋", self._add_type),
             ("✏️", self._rename_type),
             ("🗑️", self._delete_type),
-        ]))
+        ], "Type"))
         lists_row.addWidget(type_w)
         lists_row.addWidget(self._vline())
 
@@ -421,7 +421,7 @@ class CatsRulesPanel(QWidget):
             ("✏️", self._rename_cat),
             ("😀", self._set_cat_icon),
             ("🗑️", self._delete_cat),
-        ]))
+        ], "Category"))
         lists_row.addWidget(cat_w)
         lists_row.addWidget(self._vline())
 
@@ -435,7 +435,7 @@ class CatsRulesPanel(QWidget):
             ("😀", self._set_sub_icon),
             ("🔀", self._reparent_sub),
             ("🗑️", self._delete_sub),
-        ]))
+        ], "Sub-Category"))
         lists_row.addWidget(sub_w)
         lists_row.addWidget(self._vline())
 
@@ -446,7 +446,7 @@ class CatsRulesPanel(QWidget):
             ("＋", self._add_map),
             ("✏️", self._edit_map),
             ("🗑️", self._delete_map),
-        ]))
+        ], "Rule"))
         lists_row.addWidget(map_w, 1)
 
     # ── Helpers ───────────────────────────────────────────────────────────────
@@ -488,15 +488,22 @@ class CatsRulesPanel(QWidget):
 
         return tbl, col, w
 
-    def _make_btns(self, pairs):
+    def _make_btns(self, pairs, what):
+        """A row of small buttons under a list. The emoji are drawn as pictures (as the category
+        icons are): as text, they were taller than the button's line and got cut off."""
+        tips = {"＋": f"Add {what}", "✏️": f"Edit {what}" if what == "Rule" else f"Rename {what}",
+                "😀": "Icon…", "🔀": "Move to Another Category", "🗑️": f"Delete {what}"}
         row = QHBoxLayout()
         row.setSpacing(6)
         for label, slot in pairs:
-            btn = QPushButton(label)
+            btn = QPushButton(label if label == "＋" else "")  # ＋ is a plain sign: text, in the theme's colour
+            if label != "＋":
+                btn.setIcon(emoji_icon(label))
+                btn.setIconSize(QSize(20, 20))
             btn.setFixedHeight(34)
             btn.setFixedWidth(50)
-            if label == "😀":
-                btn.setToolTip("Icon…")
+            btn.setToolTip(tips.get(label, ""))
+            btn.setAccessibleName(tips.get(label, label))
             if "🗑" in label:
                 btn.setProperty("class", "danger")
             elif "＋" not in label:
