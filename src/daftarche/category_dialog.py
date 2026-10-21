@@ -4,7 +4,8 @@ Used by the Transactions tab and the Import tab. Nothing is saved before OK: a n
 sub-category (marked "New") is created then, together with the rule changes. Rules added here
 can also be applied to other uncategorized transactions (the caller's ``candidates``).
 
-A rule sets the merchant and the category. Rules kept under Uncategorized set only the merchant:
+A rule sets the merchant (every new rule has one) and the category. Rules kept under Uncategorized set
+only the merchant:
 for a shop whose purchases go to different categories (Amazon), or a friend who pays back, the
 category is chosen by hand each time (the transaction waits in To review).
 """
@@ -422,9 +423,9 @@ class CategoryDialog(QDialog):
                     QMessageBox.warning(self, "Rule", f"A rule of {where} has no name and no memo. "
                                                       "Write one, or remove the rule with ×.")
                     return
-                if key[1] == UNCATEGORIZED_CAT and not e["values"][3]:
-                    QMessageBox.warning(self, "Rule", "A rule without a category only sets the merchant: "
-                                                      "write the merchant, or remove the rule with ×.")
+                if not e["values"][3] and (e["id"] is None or e["values"] != e["orig"]):
+                    QMessageBox.warning(self, "Rule", f"A rule of {where} has no merchant: every rule sets one. "
+                                                      "Write it, or remove the rule with ×.")
                     return
         new_rule_ids = []
         with self.db.transaction():

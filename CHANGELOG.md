@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.27.0 — 2026-10-21
+
+- Rules now live with their merchant: Manage → Merchants shows a shop's rules beside it (the
+  bank text each one looks for, what it sets, type and account), with add, edit and delete
+  there. Every rule sets a merchant; rules without one are listed under "(no merchant)" at the
+  bottom, where you can select several and give them one at once.
+- The rule window has its own Merchant, Type, Category and Sub-Category boxes (it used to take
+  them from what was selected), and says as you type how many of your transactions the words
+  match, with examples. "— you choose (To review)" is the category for a shop that sells many
+  things: the rule then sets only the merchant. Saving words another rule already has asks
+  before replacing it.
+- Manage → Categories (no longer "Categories & Rules"): the fourth list shows the merchants
+  whose money goes to the chosen category or sub-category, with their transactions, total and
+  rules. Double-click a merchant to see its rules, its numbers to see those transactions. The
+  "(merchant only)" line is gone: those rules are under their merchant.
+- Fixed: an e-transfer caught by a Transfer rule always went to External Transfer, without the
+  rule's merchant. It now gets the person, and the rule's category: a rule to Transfer › Loans
+  puts the e-transfer in the Loans window. Re-apply Mappings in Import does the same.
+- A rule's words match in any letter case, so saving "kobo" when "KOBO" is there now changes
+  that rule (after asking) instead of adding a second one that quietly took over.
+- Edit Merchant / Category asks for the merchant of a rule added or changed there.
+
 ## 0.26.1 — 2026-10-21
 
 - Transactions has a Merchant filter, next to Sub-Cat, with a search box inside: tick one or

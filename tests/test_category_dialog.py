@@ -96,12 +96,16 @@ def test_rules_of_the_chosen_subcategory(qapp, db, food):
 
     entry, account, name, memo, merchant = d._rule_rows[0]
     name.setText("COSTCO|GAS")  # edit one
+    assert press_ok(d) == (False, True)  # 0.27.0: a rule changed here needs its merchant
+    merchant.setText("Costco")
     d._remove_rule(d._rule_rows[1][0])  # remove one
     d.new_name.setText("LOBLAWS")
+    d.new_rule_merchant.setText("Loblaws")
     d._add_rule()  # add one
     d.f_subcat.setCurrentText(UNCAT := "Uncategorized")  # switching away and back keeps the edits
     d.f_subcat.setCurrentText("Groceries")
-    assert [e["values"] for e, *_ in d._rule_rows] == [(None, "COSTCO|GAS", "", ""), (None, "LOBLAWS", "", "")]
+    assert [e["values"] for e, *_ in d._rule_rows] == [(None, "COSTCO|GAS", "", "Costco"),
+                                                       (None, "LOBLAWS", "", "Loblaws")]
     assert UNCAT
     assert press_ok(d) == (True, False)
     rules = {(r["account_name"], r["name"]) for r in db.get_rules_for_subcategory(groceries)}
@@ -129,6 +133,7 @@ def test_new_rule_applies_to_matching_uncategorized(qapp, db, food):
     assert d.new_name.text() == "COSTCO WHOLESALE #512" and d.new_account.currentText() == "All"
     assert d.chk_apply.isHidden()
     d.new_name.setText("COSTCO")
+    d.new_rule_merchant.setText("Costco")
     d._add_rule()
     assert not d.chk_apply.isHidden() and "2 matching" in d.chk_apply.text()
     assert press_ok(d) == (True, False)
@@ -148,6 +153,7 @@ def test_transactions_tab_applies_the_new_rule(qapp, db, food, tmp_path):
         d.f_category.setCurrentText("Food")
         d.f_subcat.setCurrentText("Groceries")
         d.new_name.setText("COSTCO")
+        d.new_rule_merchant.setText("Costco")
         d._add_rule()
         d._accept()
         return True
@@ -194,3 +200,14 @@ def test_quitting_after_the_dialog_does_not_crash(tmp_path):
     for _ in range(3):  # the crash came at Python's shutdown, about 4 runs in 5
         run = subprocess.run([sys.executable, "-c", QUIT_AFTER_DIALOG], env=env, capture_output=True, timeout=60)
         assert run.returncode == 0, run.stderr.decode()[-500:]
+
+
+def test_a_new_rule_needs_a_merchant(qapp, db, food):
+    d = dialog(db, preset_cat="Food", preset_sub="Groceries")
+    d.new_name.setText("COSTCO")
+    d.new_rule_merchant.setText("")
+    d._add_rule()
+    assert press_ok(d) == (False, True)
+    d._rule_rows[0][4].setText("Costco")
+    assert press_ok(d) == (True, False)
+    assert [r["merchant"] for r in db.get_rules("Costco")] == ["Costco"]

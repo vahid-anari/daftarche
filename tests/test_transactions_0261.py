@@ -89,7 +89,8 @@ def test_manage_buttons_are_pictures_with_tooltips(qapp, db):
     from PySide6.QtWidgets import QPushButton
     from daftarche.tabs.manage import ManageDialog
     dlg = keep(ManageDialog(db, lambda: None))
-    buttons = [b for b in dlg.cats_panel.findChildren(QPushButton) if b.width() == 50 or b.maximumWidth() == 50]
+    buttons = [b for panel in (dlg.cats_panel, dlg.merchants_panel) for b in panel.findChildren(QPushButton)
+               if b.width() == 50 or b.maximumWidth() == 50]
     assert buttons
     for b in buttons:
         if b.text():

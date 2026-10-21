@@ -1708,10 +1708,8 @@ class Database:
         account_id = acc["id"] if acc else None
         name = (name or "").strip() or None
         memorandum = (memorandum or "").strip() or None
-        same = self.conn.execute(
-            "SELECT id FROM import_mappings WHERE type_id IS ? AND account_id IS ? AND name IS ? AND memorandum IS ?",
-            (type_id, account_id, name, memorandum)).fetchone()
-        if same:
+        same = self._same_rule(type_id, account_id, name, memorandum)
+        if same:  # matching ignores letter case, so "kobo" is the rule "KOBO": that one is changed
             self.conn.execute("UPDATE import_mappings SET subcategory_id=?, category_id=?, merchant=? WHERE id=?",
                               (subcategory_id, category_id, merchant, same["id"]))
         else:
@@ -1720,15 +1718,89 @@ class Database:
                 "merchant) VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (type_id, account_id, name, memorandum, subcategory_id, category_id, merchant))
 
+    def _same_rule(self, type_id, account_id, name, memorandum):
+        """The rule with this type, account, name and memo (letter case and spaces aside: a rule
+        matches them the same way), or None."""
+        def norm(text):
+            return " ".join((text or "").split()).casefold()
+        for row in self.conn.execute("SELECT id, name, memorandum FROM import_mappings "
+                                     "WHERE type_id IS ? AND account_id IS ? ORDER BY id DESC",
+                                     (type_id, account_id)):
+            if norm(row["name"]) == norm(name) and norm(row["memorandum"]) == norm(memorandum):
+                return row
+        return None
+
     def get_rule_id(self, type_name, account_name, name=None, memorandum=None):
-        """The id of the rule with exactly this type, account (None = all), name and memo."""
+        """The id of the rule with this type, account (None = all), name and memo (letter case aside)."""
         type_id = self.get_type_id(type_name) if type_name else None
         acc = self.get_account_by_name(account_name) if account_name else None
-        row = self.conn.execute(
-            "SELECT id FROM import_mappings WHERE type_id IS ? AND account_id IS ? AND name IS ? AND memorandum IS ?",
-            (type_id, acc["id"] if acc else None, (name or "").strip() or None,
-             (memorandum or "").strip() or None)).fetchone()
+        row = self._same_rule(type_id, acc["id"] if acc else None, (name or "").strip() or None,
+                              (memorandum or "").strip() or None)
         return row["id"] if row else None
+
+    def get_rules(self, merchant=None, no_merchant=False):
+        """The rules of one merchant, or (``no_merchant``) those with none, with the names of
+        their type, account, category and sub-category; by type, then bank text."""
+        where, params = ("(m.merchant IS NULL OR TRIM(m.merchant) = '')", ()) if no_merchant else \
+            ("m.merchant = ?", (merchant,))
+        return [dict(r) for r in self.conn.execute(f"""
+            SELECT m.id, m.type_id, ty.name AS type, m.account_id, a.name AS account_name, m.name,
+                   m.memorandum, m.category_id, c.name AS category, m.subcategory_id, s.name AS subcategory,
+                   m.merchant
+            FROM import_mappings m LEFT JOIN types ty ON ty.id = m.type_id
+                 LEFT JOIN accounts a ON a.id = m.account_id
+                 LEFT JOIN categories c ON c.id = m.category_id
+                 LEFT JOIN subcategories s ON s.id = m.subcategory_id
+            WHERE {where}
+            ORDER BY m.type_id, IFNULL(m.name, '') COLLATE NOCASE, IFNULL(m.memorandum, '') COLLATE NOCASE,
+                     IFNULL(a.name, '')""", params)]
+
+    def get_no_merchant_counts(self):
+        """(transactions, rules) with no merchant."""
+        none = "merchant IS NULL OR TRIM(merchant) = ''"
+        return (self.conn.execute(f"SELECT COUNT(*) FROM transactions WHERE {none}").fetchone()[0],
+                self.conn.execute(f"SELECT COUNT(*) FROM import_mappings WHERE {none}").fetchone()[0])
+
+    @atomic
+    def set_rules_merchant(self, rule_ids, merchant):
+        """Give these rules a merchant (one already used, in any letter case, keeps its spelling).
+        Their transactions keep theirs. Returns the name used."""
+        merchant = " ".join((merchant or "").split())
+        if not merchant:
+            raise ValueError("A rule needs a merchant.")
+        name = next((m for m in self.get_merchants() if m.casefold() == merchant.casefold()), merchant)
+        self.conn.executemany("UPDATE import_mappings SET merchant=? WHERE id=?", [(name, i) for i in rule_ids])
+        return name
+
+    def get_rule_texts(self, type_name, account_name=None):
+        """(name, memo) of the transactions a rule of this type and account (None: all) could
+        match: for counting what a rule being written matches."""
+        type_id = self.get_type_id(type_name) if type_name else None
+        q, params = "SELECT name, memorandum FROM transactions WHERE type_id IS ?", [type_id]
+        if account_name:
+            acc = self.get_account_by_name(account_name)
+            q += " AND (account_id IS ? OR to_account_id IS ?)"
+            params += [acc["id"] if acc else -1] * 2
+        return [(r["name"], r["memorandum"]) for r in self.conn.execute(q, params)]
+
+    def get_merchants_in(self, category_id, subcategory_id=None):
+        """The merchants of a sub-category (or a whole category), all time, split parts in their
+        own category with their own amount: [{merchant ("" for none), count, total, rules}]
+        (rules: how many of the merchant's rules send money here). Most transactions first;
+        merchants that only have a rule here come with count 0; no merchant last."""
+        where, key = ("subcategory_id = ?", subcategory_id) if subcategory_id else ("category_id = ?", category_id)
+        out = {}
+        for r in self.conn.execute(f"""
+                SELECT IFNULL(TRIM(merchant), '') AS merchant, COUNT(DISTINCT id) AS n, SUM(amount) AS total
+                FROM tx_lines WHERE {where} GROUP BY IFNULL(TRIM(merchant), '')""", (key,)):
+            out[r["merchant"]] = {"merchant": r["merchant"], "count": r["n"], "total": round2(r["total"] or 0),
+                                  "rules": 0}
+        for r in self.conn.execute(f"""
+                SELECT IFNULL(TRIM(merchant), '') AS merchant, COUNT(*) AS n FROM import_mappings
+                WHERE {where} GROUP BY IFNULL(TRIM(merchant), '')""", (key,)):
+            out.setdefault(r["merchant"], {"merchant": r["merchant"], "count": 0, "total": 0.0, "rules": 0})
+            out[r["merchant"]]["rules"] = r["n"]
+        return sorted(out.values(), key=lambda m: (m["merchant"] == "", -m["count"], m["merchant"].casefold()))
 
     def get_uncategorized_rows(self, type_name):
         """Transactions of a type with no category (To review). One with a category but no
@@ -1751,7 +1823,7 @@ class Database:
         rows = self.conn.execute(f"""
             SELECT merchant FROM transactions WHERE merchant IS NOT NULL AND TRIM(merchant) <> ''{rules}
         """).fetchall()
-        return sorted({r[0] for r in rows}, key=str.casefold)
+        return sorted({r[0] for r in rows}, key=lambda m: (m.casefold(), m))
 
     def get_merchant_overview(self):
         """Every merchant: transactions, total, rules, and what its rules set
