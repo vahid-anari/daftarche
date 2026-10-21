@@ -78,6 +78,8 @@ class PhoneApp:
         self.tx_filters = no_filters()
         self.tx_limit = PAGE_SIZE
         self.chart_kind = "Expense"
+        self.dash_kind = "Expense"  # the Dashboard's donut and list: Expense or Income
+        self.accounts_open = False  # the Dashboard's accounts under the total (remembered)
         self.chart_account = None
         self.chart_month = None  # a month tapped in the Charts bars ("2026-09"): its categories below
         self.tx_range = None  # Transactions shows one month from Charts: (first day, last day, label)
@@ -101,6 +103,7 @@ class PhoneApp:
         except (ValueError, TypeError):
             self.pairing = None
         self.theme_choice = (await self.prefs.get("theme")) or "system"
+        self.accounts_open = (await self.prefs.get("accounts_open")) == "1"
         # Android's Back comes to the app (see nav.py) instead of always leaving it
         view = page.views[0]
         view.can_pop = False
@@ -463,12 +466,15 @@ class PhoneApp:
                             ft.Text(a["name"], size=14, color=p.text, expand=True, no_wrap=True),
                             ft.Text(money(a["balance"]), size=14, weight=ft.FontWeight.BOLD,
                                     color=p.signed(a["balance"]))], spacing=10)
-                    for a in s.accounts if a.get("visible", True)]
+                    for a in s.accounts if a.get("visible", True)] if self.accounts_open else []
         top = self._card(ft.Column([
-            ft.Text("Total Balance", size=13, color=p.dim),
-            ft.Text(money(total), size=30, weight=ft.FontWeight.BOLD, color=p.signed(total)),
-            ft.Divider(height=14, color=p.border),
-            *accounts], spacing=6), padding=16)
+            ft.Row([ft.Column([ft.Text("Total Balance", size=13, color=p.dim),
+                               ft.Text(money(total), size=30, weight=ft.FontWeight.BOLD, color=p.signed(total))],
+                              spacing=2, expand=True),
+                    ft.Icon(ft.Icons.EXPAND_LESS if self.accounts_open else ft.Icons.EXPAND_MORE, color=p.dim,
+                            tooltip="Hide the accounts" if self.accounts_open else "Show the accounts")]),
+            *([ft.Divider(height=14, color=p.border)] if accounts else []),
+            *accounts], spacing=6), padding=16, on_click=self._toggle_accounts)
 
         sm = s.summary(start, end)
         stats = ft.Column([
@@ -477,18 +483,20 @@ class PhoneApp:
             ft.Row([self._stat("Net", money(sm["net"], sign=True), p.signed(sm["net"]) if sm["net"] else p.text),
                     self._stat("Transactions", f"{sm['count']:,}", p.transfer)], spacing=10)], spacing=10)
 
-        rows = s.by_category("Expense", start, end)
+        kind = self.dash_kind
+        rows = s.by_category(kind, start, end)
         colours = {c: PALETTE[i % len(PALETTE)] for i, (c, _) in enumerate(rows)}
         monthly = s.monthly(start, end)
-        if len(monthly) <= 1:  # one month (This / Last Month): how its spending divides, as in Charts
+        if len(monthly) <= 1:  # one month (This / Last Month): how it divides between categories, as in Charts
             month = monthly[0][0] if monthly else start[:7]
             shown = [(colours[c], v) for c, v in rows[:TOP_CATEGORIES]]
             rest = round(sum(v for _, v in rows[TOP_CATEGORIES:]), 2)
             if rest > 0:
                 shown.append((p.dim, rest))
             chart = self._card(ft.Column([
-                self._heading(f"Expense in {long_month(month)}"),
-                donut(p, shown, money(sm["expense"]), f"{len(rows)} categor{'y' if len(rows) == 1 else 'ies'}")],
+                self._heading(f"{kind} in {long_month(month)}", self._kind_switch()),
+                donut(p, shown, money(sm[kind.lower()]),
+                      f"{len(rows)} categor{'y' if len(rows) == 1 else 'ies'}")],
                 spacing=12))
         else:
             chart = self._card(ft.Column([
@@ -499,8 +507,35 @@ class PhoneApp:
                 spacing=10))
 
         banner = self._update_banner()
+        title = "Expenses by Category" if kind == "Expense" else "Income by Category"
+        heading = None if len(monthly) <= 1 else self._heading(title, self._kind_switch())  # the switch, once
         return self._page([*([banner] if banner else []), top, self._periods("Dashboard"), stats, chart,
-                           self._category_card("Expense", start, end, "Expenses by Category", colours=colours)])
+                           self._category_card(kind, start, end, title, colours=colours, heading=heading)])
+
+    def _kind_switch(self):
+        """Expense | Income, small: what the Dashboard's donut and list show."""
+        p = self.p
+
+        def chip(name):
+            chosen = self.dash_kind == name
+            return ft.Container(
+                ft.Text(name, size=12, color="#ffffff" if chosen else p.dim,
+                        weight=ft.FontWeight.BOLD if chosen else None),
+                bgcolor=p.accent if chosen else p.raised, border_radius=12,
+                padding=ft.Padding.symmetric(horizontal=10, vertical=4),
+                on_click=lambda e, n=name: self._set_dash_kind(n))
+        return ft.Row([chip("Expense"), chip("Income")], spacing=4, tight=True)
+
+    def _set_dash_kind(self, kind):
+        if kind != self.dash_kind:
+            self.dash_kind = kind
+            self._redraw()
+
+    def _toggle_accounts(self, e=None):
+        """The accounts under the Total Balance, shown or folded; remembered for next time."""
+        self.accounts_open = not self.accounts_open
+        self.page.run_task(self.prefs.set, "accounts_open", "1" if self.accounts_open else "")
+        self._redraw()
 
     def _category_card(self, kind, start, end, title, account=None, expandable=False, colours=None,
                        heading=None):
@@ -814,23 +849,27 @@ class PhoneApp:
         months, series = s.balance_series(start, end)
         shown = s.shown_accounts()
         lines = [(a["color"], series.get(a["id"], [])) for a in shown]
-        chart = self._card(ft.Column([
-            self._heading("Balance by Month"),
-            LineChart(p, [month_label(m) for m in months], lines),
-            legend(p, [(a["color"], a["name"]) for a in shown])], spacing=10))
-
+        # the legend is the list: each account's colour, name, balance and change; a tap shows its transactions
         rows = []
         for a in shown:
             vs = series.get(a["id"], [])
-            change = vs[-1] - vs[0] if len(vs) > 1 else 0.0
-            rows.append(self._card(ft.Row([
-                ft.Column([ft.Text(a["name"], size=15, weight=ft.FontWeight.BOLD, color=a["color"]),
-                           ft.Text(f"{money(change, sign=True)} in this period" if len(vs) > 1 else "",
-                                   size=12, color=p.dim, visible=len(vs) > 1)], spacing=2, expand=True),
-                ft.Text(money(a["balance"]), size=17, weight=ft.FontWeight.BOLD, color=p.signed(a["balance"]))]),
-                accent=a["color"], on_click=lambda e, i=a["id"]: self._show_account(i)))
+            change = vs[-1] - vs[0] if len(vs) > 1 else None
+            rows.append(ft.Container(ft.Row([
+                ft.Container(width=10, height=10, bgcolor=a["color"], border_radius=5),
+                ft.Column([ft.Text(a["name"], size=14, color=p.text, no_wrap=True,
+                                   overflow=ft.TextOverflow.ELLIPSIS),
+                           ft.Text(f"{money(change, sign=True)} in this period", size=12, color=p.dim,
+                                   visible=change is not None)], spacing=1, expand=True),
+                ft.Text(money(a["balance"]), size=15, weight=ft.FontWeight.BOLD, color=p.signed(a["balance"]))],
+                spacing=10), padding=ft.Padding.symmetric(vertical=6),
+                on_click=lambda e, i=a["id"]: self._show_account(i)))
+        chart = self._card(ft.Column([
+            self._heading("Balance by Month"),
+            LineChart(p, [month_label(m) for m in months], lines),
+            ft.Divider(height=8, color=p.border),
+            *rows], spacing=6))
 
-        return self._page([self._periods("Accounts"), chart, *rows, self._loans()])
+        return self._page([self._periods("Accounts"), chart, self._loans()])
 
     def _show_account(self, account_id):
         self._jump()
