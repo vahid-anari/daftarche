@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Connect Daftarche</title>
+<link rel="icon" href="../icon.png">
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<main>
+<header><img src="../icon.png" alt=""><h1>Connect this phone</h1></header>
+
+<div id="ok" hidden>
+  <p>This link connects Daftarche on this phone to Daftarche on your Mac.</p>
+  <p><a id="open" class="button" href="#">Open Daftarche</a></p>
+  <p class="dim">Nothing happens? Install Daftarche on the phone first: the newest <i>Phone</i> release on
+  <a href="https://github.com/vahid-anari/daftarche/releases">GitHub</a>. Then scan the code on the Mac again,
+  or copy the link below and paste it on Daftarche's first screen.</p>
+  <div class="card"><code id="link"></code><br><br>
+  <button id="copy" class="button" type="button">Copy Link</button></div>
+  <p class="dim">The link holds this phone's key to your data: don't share it.</p>
+</div>
+
+<div id="bad" hidden>
+  <p>This page connects Daftarche on a phone to Daftarche on a Mac, but this link is incomplete.
+  On the Mac, open Settings › Phone › Connect a Phone… and scan the code again.</p>
+</div>
+
+<nav><a href="../">About Daftarche</a><a href="../privacy.html">Privacy</a></nav>
+</main>
+<script>
+// The key is in the part after "#", which browsers never send to any server (GitHub included):
+// this page only hands it on to the Daftarche app, on this phone.
+(function () {
+  var fragment = location.hash.replace(/^#/, "");
+  var q = new URLSearchParams(fragment);
+  if (q.get("v") !== "1" || !q.get("f") || !q.get("k")) {
+    document.getElementById("bad").hidden = false;
+    return;
+  }
+  var app = "daftarche://pair?" + fragment;
+  document.getElementById("ok").hidden = false;
+  document.getElementById("open").href = app;
+  document.getElementById("link").textContent = location.href;
+  var whole = location.href;
+  document.getElementById("copy").onclick = function () {
+    navigator.clipboard.writeText(whole).then(function () {
+      document.getElementById("copy").textContent = "Copied";
+    });
+  };
+  location.href = app;  // straight into the app when the browser allows it; else the button
+})();
+</script>
+</body>
+</html>

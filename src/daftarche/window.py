@@ -17,7 +17,7 @@ from daftarche.db import Database
 from daftarche.app_info import APP, APP_NAME, APP_VERSION, USER_GUIDE
 from daftarche.backup import copy_db, copy_for_viewing, mirror_snapshots, restore_backup, startup_backup
 from daftarche.overview import UnmatchedTransfersDialog
-from daftarche.phone import write_snapshot
+from daftarche.phone_sync import PhoneSender
 from daftarche.paths import BACKUP_DIR, DATA_DIR, DB_PATH
 from daftarche.style import build_stylesheet, get_settings, DEFAULTS, THEMES, THEME_NAMES, system_theme
 from daftarche.widgets import StepSpinBox, SingleSelectCombo
@@ -54,6 +54,10 @@ class MainWindow(QMainWindow):
         self.main_layout.addWidget(self._build_tabs(), 1)
         self.setCentralWidget(central)
         self._build_menus()
+        # the phones: sent a minute after changes, after an import and at quit (never a database
+        # opened to look at)
+        self.phone_sender = PhoneSender(lambda: self.db if self.viewing is None else None, APP_VERSION, parent=self)
+        self.phone_sender.changed.connect(self._phone_status)
 
         self._refresh_all()
         # Match macOS: the Mac switching between light and dark (e.g. Auto at sunset) switches too
@@ -94,7 +98,6 @@ class MainWindow(QMainWindow):
         self.backup_action = add(file_menu, "Back Up Database…", self._save_backup, QKeySequence("Ctrl+S"))
         self.restore_action = add(file_menu, "Restore Backup…", self._restore_backup)  # no shortcut: it replaces data
         file_menu.addSeparator()
-        self.phone_action = add(file_menu, "Update Phone Snapshot", lambda: self.write_phone_snapshot(manual=True))
         add(file_menu, "Show Data Folder", self._show_data_folder)
         file_menu.addSeparator()
         add(file_menu, "Quit", QApplication.instance().quit, QKeySequence("Ctrl+Q"))
@@ -216,7 +219,7 @@ class MainWindow(QMainWindow):
         ids = dialog.imported_ids
         if ids:
             self._refresh_all()
-            self.write_phone_snapshot()
+            self.phone_sender.send_now()
             self.tabs.setCurrentWidget(self.transactions_tab)
             n = len(ids)
             self.transactions_tab.show_ids(ids, f"<b>Just imported</b>: {n} transaction{'s' if n != 1 else ''}")
@@ -308,44 +311,15 @@ class MainWindow(QMainWindow):
 
     # ── Dialogs ───────────────────────────────────────────────────────────────
     def open_settings(self):
-        phone_dir = self.settings.get("phone_dir")
         dlg = SettingsDialog(self.settings, self)
         if dlg.exec():
             self._restyle()
-            if self.settings.get("phone_dir") and self.settings.get("phone_dir") != phone_dir:
-                self.write_phone_snapshot()  # a new phone folder: fill it now
+        dlg.deleteLater()  # its Phone part stops listening to the sender
 
-    # ── The phone snapshot (docs/phone-snapshot.md) ───────────────────────────
-    def write_phone_snapshot(self, manual=False):
-        """Write daftarche-phone.json into the phone folder of Settings (after an import, at quit,
-        and from File → Update Phone Snapshot). Quiet unless ``manual``: a problem only shows in the
-        status bar. Never for a database opened with Open Database… (it is not yours)."""
-        if self.viewing is not None:
-            return None
-        folder = self.settings.get("phone_dir")
-        if not folder:
-            if not manual:
-                return None
-            QMessageBox.information(
-                self, "Phone Snapshot",
-                "Choose the folder your phone reads (a Syncthing folder shared with the phone).\n\n"
-                "Daftarche then keeps a read-only copy of your data there for the phone app: after "
-                "every import and when you quit. You can change the folder in Settings.")
-            folder = QFileDialog.getExistingDirectory(self, "Phone Folder")
-            if not folder:
-                return None
-            self.settings.set("phone_dir", folder)
-        try:
-            path = write_snapshot(self.db, folder, APP_VERSION)
-        except Exception as exc:
-            if manual:
-                QMessageBox.warning(self, "Phone Snapshot", f"Could not write the phone snapshot:\n\n{exc}")
-            else:
-                self.statusBar().showMessage(f"⚠️ Phone snapshot not written: {exc}", 15000)
-            return None
-        if manual:
-            QMessageBox.information(self, "Phone Snapshot", f"Phone snapshot written to:\n{path}")
-        return path
+    def _phone_status(self):
+        """A failed send to the phones shows in the status bar (Settings › Phone says more)."""
+        if self.phone_sender.last_error and not self.phone_sender.busy:
+            self.statusBar().showMessage(f"⚠️ Phone not updated: {self.phone_sender.last_error}", 15000)
 
     def _open_manage(self):
         if hasattr(self, "_manage_dlg") and self._manage_dlg is not None:
@@ -379,7 +353,7 @@ class MainWindow(QMainWindow):
             self.view_label.setToolTip(str(self.viewing))
         self.setWindowTitle(f"{APP_NAME} — {self.viewing.name} (copy)" if viewing else APP_NAME)
         self.back_action.setEnabled(viewing)
-        for action in (self.backup_action, self.restore_action, self.phone_action):  # about your own database
+        for action in (self.backup_action, self.restore_action):  # about your own database
             action.setEnabled(not viewing)
         self.setAcceptDrops(not viewing)
 
@@ -387,6 +361,7 @@ class MainWindow(QMainWindow):
         self._close_windows()
         self.db.conn.close()
         self.db = db
+        self.phone_sender.database_switched(changed=False)  # another file: nothing new for the phones
         self._rebuild_tabs()
         self._refresh_all()
         self._update_view_state()
@@ -423,7 +398,10 @@ class MainWindow(QMainWindow):
             shutil.rmtree(copy.parent, ignore_errors=True)
 
     def closeEvent(self, event):
-        self.write_phone_snapshot()
+        if self.phone_sender.pending() and self.phone_sender.active():
+            self.statusBar().showMessage("Sending your changes to the phone…")
+            QApplication.processEvents()
+        self.phone_sender.finish()
         if self.viewing is not None:
             self.db.conn.close()
             self._drop_view_copy(self._view_copy)
@@ -489,6 +467,7 @@ class MainWindow(QMainWindow):
 
         self.db.conn.close()
         self.db = Database(self.db_path)
+        self.phone_sender.database_switched(changed=True)  # new data for the phones
         self._rebuild_tabs()
         self._refresh_all()
         QMessageBox.information(self, "Restored",
@@ -549,7 +528,6 @@ class SettingsDialog(QDialog):
         self._pending_themes = {t: self.settings.theme_colors(t) for t in THEMES}
         self._pending_theme = self.settings.theme()
         self._pending_extra_dir = self.settings.get("backup_extra_dir") or ""
-        self._pending_phone_dir = self.settings.get("phone_dir") or ""
 
         self._build()
         self.setFixedSize(self.sizeHint())
@@ -630,19 +608,9 @@ class SettingsDialog(QDialog):
 
         phone_lbl = QLabel("Phone")
         phone_lbl.setProperty("class", "settings-section")
-        self.lbl_phone_dir = QLabel()
-        self.lbl_phone_dir.setWordWrap(True)
-        self._show_phone_dir()
-        btn_phone_choose = QPushButton("Choose…")
-        btn_phone_choose.clicked.connect(self._choose_phone_dir)
-        btn_phone_clear = QPushButton("Clear")
-        btn_phone_clear.setProperty("class", "secondary")
-        btn_phone_clear.clicked.connect(lambda: self._set_phone_dir(""))
-        phone_row = QHBoxLayout()
-        phone_row.addWidget(QLabel("Phone folder:"))
-        phone_row.addWidget(self.lbl_phone_dir, 1)
-        phone_row.addWidget(btn_phone_choose)
-        phone_row.addWidget(btn_phone_clear)
+        from daftarche.phone_window import PhoneSection
+        sender = getattr(self.parent(), "phone_sender", None)
+        self.phone_section = PhoneSection(sender, self) if sender is not None else None
 
         btn_reset = QPushButton("Reset to Defaults")
         btn_reset.setToolTip("The font, the splash screen, and the colours of the theme shown")
@@ -679,8 +647,9 @@ class SettingsDialog(QDialog):
         layout.addWidget(backups_lbl)
         layout.addLayout(extra_row)
         layout.addWidget(self._sep())
-        layout.addWidget(phone_lbl)
-        layout.addLayout(phone_row)
+        if self.phone_section is not None:
+            layout.addWidget(phone_lbl)
+            layout.addWidget(self.phone_section)
         layout.addWidget(self._sep())
         layout.addLayout(btn_row)
         self._theme_changed()
@@ -717,21 +686,9 @@ class SettingsDialog(QDialog):
         if path:
             self._set_extra_dir(path)
 
-    def _show_phone_dir(self):
-        path = self._pending_phone_dir.replace(os.path.expanduser("~"), "~", 1)
-        self.lbl_phone_dir.setText(path or "none (nothing is kept for the phone)")
-        self.lbl_phone_dir.setToolTip("Daftarche keeps a read-only copy of your data here for the phone app, "
-                                      "after every import and when you quit.\n" + self._pending_phone_dir)
-
-    def _set_phone_dir(self, path):
-        self._pending_phone_dir = path
-        self._show_phone_dir()
+    def fit(self):
+        """The Phone part changed (a phone added, signed in): the window fits it again."""
         self.setFixedSize(self.sizeHint())
-
-    def _choose_phone_dir(self):
-        path = QFileDialog.getExistingDirectory(self, "Phone Folder", self._pending_phone_dir or "")
-        if path:
-            self._set_phone_dir(path)
 
     def _sep(self):
         sep = QFrame()
@@ -766,7 +723,6 @@ class SettingsDialog(QDialog):
             self.settings.set_theme_colors(theme, colors)
 
         self.settings.set("backup_extra_dir", self._pending_extra_dir)
-        self.settings.set("phone_dir", self._pending_phone_dir)
         try:
             mirror_snapshots(self._pending_extra_dir)
         except OSError as exc:

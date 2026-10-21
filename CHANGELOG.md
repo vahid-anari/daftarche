@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.28.0 — 2026-10-21
+
+- The phone connects through your own Google Drive, paired by a QR code, instead of a
+  Syncthing folder. Settings › Phone: **Sign In with Google…** once (Daftarche may only see
+  the files it makes itself), then **Connect a Phone…**, name it, and scan the code with the
+  phone's camera (or Copy Link and paste it in the phone app). Each phone has its own file,
+  locked with its own key before it leaves the Mac; the key is only in the QR code, so
+  Google holds nothing it can read.
+- Your changes go to the phones by themselves, about a minute after the last one, right
+  after an import and when Daftarche closes, and again later if you were offline.
+  Settings › Phone lists the phones with when each was last sent, and has Send Now and
+  Disconnect (which deletes that phone's copy). A failed send shows in the status bar.
+- File › Update Phone Snapshot and the phone folder are gone. New dependency: segno (the
+  QR code).
+
 ## 0.27.0 — 2026-10-21
 
 - Rules now live with their merchant: Manage → Merchants shows a shop's rules beside it (the

@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Daftarche · Privacy</title>
+<link rel="icon" href="icon.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+<header><a href="./"><img src="icon.png" alt=""></a><h1>Privacy</h1></header>
+<p class="dim">Last updated 21 October 2026</p>
+
+<p>Daftarche is made by one person, Vahid Anari, and runs on your own devices. There is no Daftarche
+server, no account with us, no analytics and no advertising. We never see your data.</p>
+
+<h2>On your Mac</h2>
+<p>Your transactions, categories, rules and settings are kept in a folder on your own computer
+(on a Mac: <code>Library/Application Support/Daftarche</code> in your home folder), together with
+automatic backups. Nothing in it is sent anywhere, except the phone copy described below, and only
+when you connect a phone.</p>
+
+<h2>Google Drive, when you connect a phone</h2>
+<p>If you choose <b>Sign In with Google</b> in Daftarche's Settings, Daftarche asks Google for
+permission to see and change <b>only the files it creates itself</b> in your Google Drive
+(the <code>drive.file</code> permission) and for your email address, which it shows in Settings so
+you know which account is connected. It cannot see any other file in your Drive.</p>
+<p>For each phone you connect, Daftarche creates one file in your Drive, named
+<i>Daftarche phone - &lt;the phone's name&gt;</i>, and keeps it up to date with a copy of what the phone
+shows (accounts, balances, categories, transactions, tags and loans; never bank account numbers or
+import rules). Before the copy leaves your Mac it is encrypted with a random key made for that phone.
+The key is only in the QR code shown on your Mac; it is never sent to Google or to anyone else, so the
+file in your Drive cannot be read by Google or by anyone who finds it. The file is shared as
+"anyone with the link" so that your phone can download it without signing in to Google.</p>
+<p><b>Disconnect</b> in Daftarche's Settings deletes that phone's file. <b>Sign Out</b> removes
+Daftarche's access to your Drive; you can also remove it at any time in your Google Account
+(Security › Your connections to third-party apps &amp; services). The sign-in and the phones' keys are
+kept on your Mac only, in a file only your user account can read.</p>
+<p>Daftarche's use and transfer of information received from Google APIs adheres to the
+<a href="https://developers.google.com/terms/api-services-user-data-policy">Google API Services User
+Data Policy</a>, including the Limited Use requirements. Information from your Google account is used
+only to keep your own phone's copy up to date. It is not used for advertising, not sold, not shared
+with anyone, not read by people, and not used to train any AI or machine-learning model.</p>
+
+<h2>On your phone</h2>
+<p>The phone app downloads its file from your Drive, opens it with its key and keeps the last copy in
+its own storage so it works without a connection. It never sends anything back. It checks GitHub once
+a day for a newer version of the app (GitHub sees that a request was made, nothing more).</p>
+
+<h2>Contact</h2>
+<p>Vahid Anari, <a href="mailto:vahid.anari8@gmail.com">vahid.anari8@gmail.com</a>. The source code is
+public at <a href="https://github.com/vahid-anari/daftarche">github.com/vahid-anari/daftarche</a>, so
+all of this can be checked.</p>
+
+<nav><a href="./">Home</a><a href="privacy.html">Privacy</a><a href="terms.html">Terms</a></nav>
+</main>
+</body>
+</html>

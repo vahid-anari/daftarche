@@ -1,19 +1,35 @@
 # Daftarche on the phone: the snapshot file
 
-Daftarche on the Mac (0.26.0 and later) writes everything the phone shows into one file,
-`daftarche-phone.json`, in a folder you choose (a Syncthing folder shared with the
-phone). The phone app only reads this file. It never changes your data and does no
-bookkeeping of its own: balances and loans are worked out on the Mac, by the same
-code the desktop app uses, so the two can never disagree.
+Daftarche on the Mac puts everything the phone shows into one snapshot (JSON, below). The
+phone app only reads it. It never changes your data and does no bookkeeping of its own:
+balances and loans are worked out on the Mac, by the same code the desktop app uses, so the
+two can never disagree.
 
-## When it is written
+## How it gets to the phone (0.28.0 and later)
 
-- after an import, and when Daftarche closes;
-- from **File › Update Phone Snapshot** at any time;
-- only when a phone folder is set in **Settings › Phone** (off by default).
+- The Mac signs in to Google once (Settings › Phone), asking only for `drive.file`: it can
+  see and change the files it made itself, nothing else in your Drive.
+- **Connect a Phone…** makes a file for that phone, *Daftarche phone - <name>*, shared as
+  "anyone with the link" so the phone can download it without signing in, and shows a QR
+  code with the pairing link `https://vahid-anari.github.io/pair/#v=1&f=<file id>&k=<key>&n=<name>`.
+  Any phone camera opens a web link; that page (`docs/site/pair/`) hands everything after `#` to the
+  app as `daftarche://pair?…`. Browsers never send the part after `#` to a server, so the key does
+  not reach GitHub either.
+- The snapshot is **sealed** with that phone's own random 32-byte key before it is uploaded
+  (`src/daftarche/seal.py`): compressed with zlib, encrypted with an HMAC-SHA256 keystream
+  (a fresh 16-byte nonce each time) and authenticated with HMAC-SHA256 (encrypt-then-MAC).
+  Google only ever holds scrambled bytes; the key travels only in the QR code.
+- The Mac sends about a minute after the last change, right after an import and when it
+  closes; it tries again by itself when offline. Never for a database opened to look at.
+- The phone fetches `https://drive.usercontent.google.com/download?id=<file id>` when opened,
+  opens it with its key, and keeps the sealed copy for when there is no connection.
+- **Disconnect** on the Mac deletes the phone's file; the phone, finding it gone, removes its
+  copy and the key.
+- The sign-in and the phones' keys are kept in `phone-link.json` next to the database
+  (readable only by you).
 
-It is written to a temporary file first and then renamed, so Syncthing never
-copies a half-written file.
+Before 0.28.0 the snapshot was a file, `daftarche-phone.json`, in a folder shared with the
+phone by Syncthing; that is gone.
 
 ## What is left out
 

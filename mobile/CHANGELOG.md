@@ -2,6 +2,17 @@
 
 Released with tags `phone-vX.Y.Z`; each release carries the signed APK.
 
+## 0.3.0 — 2026-10-21
+
+- Connected to Daftarche on the Mac by its QR code (Settings › Phone › Connect a Phone… on
+  the Mac, desktop 0.28.0 or later): point the camera at it and tap the link, or paste the
+  link on the first screen. No Syncthing, no folder, no "All files access" permission.
+- The app fetches the newest copy from the Mac's Google Drive when it opens (and ⟳), and
+  keeps the last one for when there is no connection. The copy is locked with this phone's
+  own key; Google cannot read it.
+- Disconnected on the Mac: the app says so and removes its copy. Settings › Disconnect
+  forgets the connection on the phone.
+
 ## 0.2.5 — 2026-10-21
 
 - Transactions → Show only has a Merchant box (type in it to narrow the list), with

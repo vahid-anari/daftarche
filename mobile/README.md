@@ -2,7 +2,7 @@
 
 A read-only view of your account book for Android: the four tabs of Daftarche
 (Dashboard, Transactions, Charts, Accounts) and your loans, from the phone
-snapshot that Daftarche on the Mac writes (`docs/phone-snapshot.md`).
+snapshot that Daftarche on the Mac sends it (`docs/phone-snapshot.md`).
 
 The app never changes your data and does no bookkeeping of its own: balances and
 loans come ready-made from the Mac, and the tests check that its sums match
@@ -15,37 +15,34 @@ Daftarche's own.
    **Phone X.Y.Z** and tap `daftarche-phone-X.Y.Z.apk` to download it.
 2. Open the downloaded file. Android asks once whether your browser may install
    apps: allow it, then tap **Install**.
-3. Open Daftarche, tap **Choose Folder** and pick the folder Syncthing keeps (below).
-   Android then shows **All files access** for Daftarche: turn it on and come back.
-   The app only reads `daftarche-phone.json`; it never changes or sends anything.
+3. **Connect it to your Mac:** in Daftarche on the Mac, Settings › Phone › **Sign In with
+   Google…** (once), then **Connect a Phone…**. Point the phone's camera at the QR code
+   it shows and tap the link: Daftarche opens on the phone, connected. If the camera won't
+   open the link, press **Copy Link** on the Mac, get the text to the phone (a note, a
+   message to yourself) and paste it on the app's first screen.
 
 Later versions: the app looks for one once a day (or Settings › Check for Updates)
-and offers **Download**; open the file and install it over the old one. Your folder
-and settings stay.
+and offers **Download**; open the file and install it over the old one. The connection
+and your settings stay.
 
-## How the data gets to the phone: Syncthing
+## How the data gets to the phone: your own Google Drive
 
-[Syncthing](https://syncthing.net) copies a folder between the Mac and the phone
-directly, with no cloud in between. Both need to be on (and online) at some point;
-the phone keeps the last copy, so the app works offline.
+Daftarche on the Mac keeps one file per connected phone on **your** Google Drive
+(it may only see the files it made itself). The file is locked with that phone's own key
+before it leaves the Mac; the key travels only in the QR code, from the Mac's screen to the
+phone's camera, never through Google, so Google holds nothing it can read. The phone
+downloads the file by its link, without signing in.
 
-1. **Mac:** install Syncthing (`brew install --cask syncthing`, or from syncthing.net)
-   and open it. Its page opens in the browser.
-2. **Phone:** install **Syncthing-Fork** (Google Play or F-Droid).
-3. **Pair them:** on the Mac, *Add Remote Device* and scan or type the phone's device
-   ID (Syncthing-Fork › menu › Show device ID). Accept on the phone.
-4. **Share a folder:** on the Mac, *Add Folder*, e.g. `~/Daftarche-Phone`, label
-   *Daftarche*, and share it with the phone. On the phone, accept it and choose
-   where it goes, e.g. `/storage/emulated/0/Daftarche`. Setting the phone's copy to
-   *Receive Only* is a good idea: the Mac is the one that writes.
-5. **Daftarche on the Mac:** Settings › Phone › Choose… `~/Daftarche-Phone`. The file
-   is written there after every import and when Daftarche closes (or File › Update
-   Phone Snapshot).
-6. **Daftarche on the phone:** Choose Folder › the phone's copy
-   (`/storage/emulated/0/Daftarche`). If the folder picker gives no usable path, type
-   it in Settings and tap **Use Typed Path**.
+The Mac sends your changes by itself about a minute after the last one, right after an
+import, and when Daftarche closes (Settings › Phone shows when, and has **Send Now**).
+The phone fetches the newest copy whenever it is opened, and keeps the last one, so the
+app works offline too. The Mac need not be on.
 
-Coming back to the app reads the file again; the ⟳ button does it at any time.
+**Disconnect** (Settings › Phone on the Mac) deletes that phone's file: the phone then
+says it was disconnected and removes its copy. Disconnect on the phone (its Settings)
+forgets the connection there.
+
+Coming back to the app fetches the newest copy; the ⟳ button does it at any time.
 
 Swipe left or right to change tabs. Android's Back goes back one step: it closes an open
 sheet, returns from "Show transactions" (or an account's transactions) to where you were,
@@ -59,11 +56,11 @@ In an environment of its own (it needs Flet, Daftarche does not):
 conda create -n phone python=3.13 -y && conda activate phone
 pip install "flet[all]==1.0.4"
 cd mobile
-DAFTARCHE_PHONE_FOLDER=~/Desktop/phone-test flet run src/main.py
+DAFTARCHE_PHONE_DATA=~/Desktop/phone-test flet run src/main.py
 ```
 
-`DAFTARCHE_PHONE_FOLDER` is the folder with `daftarche-phone.json`; without it the
-app asks for one.
+Paste a link from **Connect a Phone…** (Copy Link) on its first screen.
+`DAFTARCHE_PHONE_DATA` is where the app keeps its copy (on a phone: the app's own storage).
 
 ## Tests
 
@@ -110,7 +107,9 @@ release, so the desktop app's stays that.
 ## Layout
 
 - `src/main.py`: the entry point.
-- `src/daftarche_phone/snapshot.py`: reading the file and adding it up (no Flet).
+- `src/daftarche_phone/snapshot.py`: reading the snapshot and adding it up (no Flet).
+- `src/daftarche_phone/link.py`: the pairing link, fetching from Google Drive, the copy kept (no Flet).
+- `src/daftarche_phone/seal.py`: opening the locked file (a copy of `src/daftarche/seal.py`).
 - `src/daftarche_phone/app.py`: the screens.
 - `src/daftarche_phone/charts.py`: bars and lines from plain controls and a canvas.
 - `src/daftarche_phone/theme.py`: Daftarche's dark and light colours.

@@ -124,6 +124,15 @@ class Snapshot:
             self.created = None
 
     @classmethod
+    def from_json(cls, raw):
+        """From the snapshot's JSON bytes (opened from the sealed file)."""
+        try:
+            data = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError) as exc:
+            raise SnapshotError(f"Could not read the data: {exc}") from exc
+        return cls(data)
+
+    @classmethod
     def load(cls, path):
         path = Path(path)
         try:
