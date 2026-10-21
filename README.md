@@ -80,6 +80,18 @@ Accounts shows each account's balance (or income, expense, transfers) month by m
 
 <img src="https://raw.githubusercontent.com/vahid-anari/daftarche/main/docs/figures/accounts.png" width="700" alt="Accounts tab: balance of each account by month, as a chart and a table">
 
+## On the phone
+
+Daftarche on the phone (Android) shows the same four tabs and your loans, read-only. Your Mac
+keeps it up to date through your own Google Drive, locked with a key only the phone has:
+Settings › Phone › Connect a Phone…, and scan the code with the phone's camera. Install it from
+the newest *Phone* release on [GitHub](https://github.com/vahid-anari/daftarche/releases); more
+in [`mobile/README.md`](mobile/README.md).
+
+<img src="https://raw.githubusercontent.com/vahid-anari/daftarche/main/docs/figures/phone_dashboard.png" width="240" alt="Phone: total balance, accounts, this month's income and expense, and the expense donut">
+<img src="https://raw.githubusercontent.com/vahid-anari/daftarche/main/docs/figures/phone_charts.png" width="240" alt="Phone: monthly expense by category as stacked bars">
+<img src="https://raw.githubusercontent.com/vahid-anari/daftarche/main/docs/figures/phone_transaction.png" width="240" alt="Phone: one transaction opened, with its date, account, category and merchant">
+
 ## User Guide
 
 Help → User Guide (⌘?) opens the guide in the app: getting started, importing statements,
