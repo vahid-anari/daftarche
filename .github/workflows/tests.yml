@@ -24,7 +24,9 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
           MPLBACKEND: Agg
-      - name: phone app (its sums, against Daftarche's own)
-        run: pytest mobile/tests
+      - name: phone app (its sums against Daftarche's own, its screens)
+        run: |
+          pip install "flet==1.0.4"
+          pytest mobile/tests
         env:
           QT_QPA_PLATFORM: offscreen
