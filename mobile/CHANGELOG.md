@@ -2,6 +2,12 @@
 
 Released with tags `phone-vX.Y.Z`; each release carries the signed APK.
 
+## 0.2.3 — 2026-10-21
+
+- After an update, Open in the installer no longer starts a second Daftarche beside the old
+  one: the app keeps a single window. (The update to this version may still show two once;
+  from then on, one.)
+
 ## 0.2.2 — 2026-10-21
 
 - Home, This Month and Last Month: a donut of the month's spending by category, as in Charts

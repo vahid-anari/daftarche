@@ -74,6 +74,20 @@ jobs:
           fi
           echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/daftarche-phone.jks"
 
+      - name: App shell with one window
+        # Flet's Android shell (Flutter's) gives the app android:taskAffinity="", so the app
+        # opened from the installer after an update started a second copy beside the old one.
+        # The same shell without it: one Daftarche, whoever opens it.
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/template.zip" \
+            "https://github.com/flet-dev/flet/releases/download/v1.0.4/flet-build-template.zip"
+          unzip -q "$RUNNER_TEMP/template.zip" -d "$RUNNER_TEMP/flet-template"
+          manifest="$RUNNER_TEMP/flet-template/build/{{cookiecutter.out_dir}}/android/app/src/main/AndroidManifest.xml"
+          grep -q 'android:taskAffinity=""' "$manifest" || { echo "The template changed: check $manifest" >&2; exit 1; }
+          sed -i '/android:taskAffinity=""/d' "$manifest"
+          ! grep -q taskAffinity "$manifest"
+          echo "FLET_TEMPLATE=$RUNNER_TEMP/flet-template/build" >> "$GITHUB_ENV"
+
       - name: Build the APK
         working-directory: mobile
         env:
@@ -86,7 +100,7 @@ jobs:
           pip install "flet[all]==1.0.4"
           # arm64-v8a only: nearly every phone of the last years, and a fraction of the size
           flet build apk --yes --arch arm64-v8a --build-number "$BUILD_NUMBER" --build-version "$VERSION" \
-            -o dist-apk
+            --template "$FLET_TEMPLATE" -o dist-apk
           ls -l dist-apk
           apk=$(ls dist-apk/*.apk | head -1)
           cp "$apk" "$GITHUB_WORKSPACE/daftarche-phone-$VERSION.apk"
