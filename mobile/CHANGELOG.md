@@ -2,6 +2,13 @@
 
 Released with tags `phone-vX.Y.Z`; each release carries the signed APK.
 
+## 0.2.2 — 2026-10-21
+
+- Home, This Month and Last Month: a donut of the month's spending by category, as in Charts
+  (in the same colours as Expenses by Category below it), instead of the last six months' bars.
+- Choosing a period, a filter, a category or a month no longer jumps back to the top of the
+  tab: it stays where you were.
+
 ## 0.2.1 — 2026-10-21
 
 - Charts follows the period: for one month (This Month, Last Month) a donut shows how it
