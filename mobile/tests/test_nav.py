@@ -77,7 +77,7 @@ class FakeView(SimpleNamespace):
 @pytest.fixture
 def app(tmp_path):
     pytest.importorskip("daftarche")
-    import flet as ft
+    ft = pytest.importorskip("flet")  # the app itself (an environment without Flet skips these)
     from daftarche.db import Database
     from daftarche.phone import write_snapshot
     from daftarche_phone.app import PhoneApp
@@ -141,7 +141,7 @@ def test_swiping_changes_the_tab_and_the_bar_follows(app):
 
 
 def test_sheets_keep_clear_of_androids_buttons(app):
-    import flet as ft
+    import flet as ft  # there: the fixture needs it
     phone, page, view = app
     phone._filter_sheet(None)
     phone._settings()
@@ -153,7 +153,7 @@ def test_sheets_keep_clear_of_androids_buttons(app):
 
 
 def test_androids_bars_take_the_apps_colours():
-    import flet as ft
+    ft = pytest.importorskip("flet")
     from daftarche_phone.theme import DARK, LIGHT, material_theme
     dark, light = material_theme(DARK).system_overlay_style, material_theme(LIGHT).system_overlay_style
     assert dark.system_navigation_bar_color == DARK.surface

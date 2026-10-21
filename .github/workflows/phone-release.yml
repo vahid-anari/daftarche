@@ -59,7 +59,7 @@ jobs:
 
       - name: Tests
         run: |
-          pip install -e . pytest
+          pip install -e . pytest "flet==1.0.4"
           pytest mobile/tests
         env:
           QT_QPA_PLATFORM: offscreen
