@@ -7,8 +7,10 @@ on the Mac into a folder shared with the phone) and reads it again when asked.
 from __future__ import annotations
 
 import asyncio
+import copy
 import errno
 import os
+import time
 from datetime import date
 from pathlib import Path
 
@@ -16,6 +18,7 @@ import flet as ft
 
 from . import __version__
 from .charts import LineChart, bar_chart, legend, share_bar
+from .nav import ASK_EXIT, DASHBOARD, EXIT, RESTORE, BackSteps
 from .snapshot import (PALETTE, PERIODS, SNAPSHOT_NAME, Snapshot, SnapshotError, money, month_label,
                        period_range)
 from .theme import THEME_CHOICES, material_theme, palette_for
@@ -57,6 +60,8 @@ class PhoneApp:
             from flet_permission_handler import PermissionHandler
             self.permissions = PermissionHandler()
         self.update_info = None
+        self.nav = BackSteps()
+        self._pager = None
 
     # ── start ────────────────────────────────────────────────────────────────
     async def start(self):
@@ -67,6 +72,10 @@ class PhoneApp:
         page.on_app_lifecycle_state_change = self._lifecycle
         self.folder = os.environ.get("DAFTARCHE_PHONE_FOLDER") or (await self.prefs.get("folder")) or ""
         self.theme_choice = (await self.prefs.get("theme")) or "system"
+        # Android's Back comes to the app (see nav.py) instead of always leaving it
+        view = page.views[0]
+        view.can_pop = False
+        view.on_confirm_pop = self._back
         self.load()
         self.render()
         page.run_task(self._daily_update_check)
@@ -136,8 +145,47 @@ class PhoneApp:
         page.update()
 
     def _tab_changed(self, e):
+        """A tab tapped in the bar."""
+        self.nav.tab_chosen()
         self.tab = e.control.selected_index
         self.render()
+
+    def _swiped(self, e):
+        """A tab reached by swiping: only the bar follows (the pages are built already)."""
+        index = int(e.data) if e.data is not None else e.control.selected_index
+        if index == self.tab:
+            return
+        self.nav.tab_chosen()
+        self.tab = index
+        self.page.navigation_bar.selected_index = index
+        self.page.navigation_bar.update()
+
+    # ── Back (Android's button or gesture) ───────────────────────────────────
+    def _state(self):
+        """Where the person is now: restored when Back undoes a jump."""
+        return copy.deepcopy({"tab": self.tab, "period": self.period, "tx_filters": self.tx_filters,
+                              "tx_limit": self.tx_limit, "chart_kind": self.chart_kind,
+                              "chart_account": self.chart_account, "open_category": self.open_category})
+
+    def _jump(self):
+        """Call before going somewhere else from a tab (Show transactions, an account)."""
+        self.nav.jumped(self._state())
+
+    async def _back(self, e):
+        action, state = self.nav.back(self.tab, time.monotonic())
+        if action == EXIT:
+            await e.control.confirm_pop(True)
+            return
+        await e.control.confirm_pop(False)
+        if action == RESTORE:
+            for key, value in state.items():
+                setattr(self, key, value)
+            self.render()
+        elif action == DASHBOARD:
+            self.tab = 0
+            self.render()
+        elif action == ASK_EXIT:
+            self._toast("Press Back again to exit")
 
     def _reload(self, e=None):
         problem = self.load(keep=True)
@@ -151,9 +199,18 @@ class PhoneApp:
 
     def _body(self):
         if self.snap is None:
+            self._pager = None
             return self._welcome()
-        builder = (self._dashboard, self._transactions, self._charts, self._accounts)[self.tab]
-        return builder()
+        # all four tabs, side by side: a swipe slides to the next one (the bar follows)
+        self._pager = ft.PageView([self._dashboard(), self._transactions(), self._charts(), self._accounts()],
+                                  selected_index=self.tab, on_change=self._swiped, expand=True)
+        return self._pager
+
+    def _sheet(self, content, **kwargs):
+        """A sheet from the bottom whose content stays above Android's Back / Home buttons (Flet's
+        own sheet keeps clear of the top and sides only); its background still reaches the edge."""
+        return ft.BottomSheet(ft.SafeArea(content, avoid_intrusions_top=False, avoid_intrusions_left=False,
+                                          avoid_intrusions_right=False), **kwargs)
 
     def _welcome(self):
         p = self.p
@@ -321,11 +378,15 @@ class PhoneApp:
 
     def _show_category(self, category, kind):
         """The transactions of a category, in Transactions, over the same period."""
+        self._jump()
         source = TABS[self.tab][0]
         self.period["Transactions"] = self.period.get(source, "This Month")
         self.tx_filters = {"kind": kind, "account": self.chart_account if source == "Charts" else None,
                            "category": category, "tag": None, "text": ""}
         self.tx_limit = PAGE_SIZE
+        self._jump_to_transactions()
+
+    def _jump_to_transactions(self):
         self.tab = 1
         self.render()
 
@@ -453,7 +514,7 @@ class PhoneApp:
             items.append(line("Note", tx["note"]))
         if tx.get("tags"):
             items.append(line("Tags", ", ".join(s.tag[t]["name"] for t in tx["tags"] if t in s.tag)))
-        self.page.show_dialog(ft.BottomSheet(
+        self.page.show_dialog(self._sheet(
             ft.Container(ft.Column(items, spacing=8, tight=True, scroll=ft.ScrollMode.AUTO),
                          padding=ft.Padding.only(left=20, right=20, top=8, bottom=28)),
             bgcolor=p.surface, show_drag_handle=True))
@@ -473,7 +534,7 @@ class PhoneApp:
         categories = [(c["id"], f"{c['name']}  ({c['type'] or 'any'})") for c in
                       sorted(s.categories, key=lambda c: (c["type"], c["name"]))]
         tags = [(t["id"], t["name"]) for t in s.tags]
-        sheet = ft.BottomSheet(ft.Container(ft.Column([
+        sheet = self._sheet(ft.Container(ft.Column([
             ft.Text("Show only", size=17, weight=ft.FontWeight.BOLD, color=p.text),
             dropdown("Type", "kind", kinds), dropdown("Account", "account", accounts),
             dropdown("Category", "category", categories),
@@ -565,10 +626,10 @@ class PhoneApp:
         return self._page([self._periods("Accounts"), chart, *rows, self._loans()])
 
     def _show_account(self, account_id):
+        self._jump()
         self.tx_filters = {"kind": None, "account": account_id, "category": None, "tag": None, "text": ""}
         self.tx_limit = PAGE_SIZE
-        self.tab = 1
-        self.render()
+        self._jump_to_transactions()
 
     def _loans(self):
         s, p = self.snap, self.p
@@ -645,7 +706,7 @@ class PhoneApp:
         self._path_field = path_field = ft.TextField(value=self.folder, label="Folder", dense=True,
                                                      on_submit=self._typed_folder,
                                   hint_text="/storage/emulated/0/Daftarche", text_size=14)
-        sheet = ft.BottomSheet(ft.Container(ft.Column([
+        sheet = self._sheet(ft.Container(ft.Column([
             ft.Text("Settings", size=17, weight=ft.FontWeight.BOLD, color=p.text),
             path_field,
             ft.Row([ft.OutlinedButton("Choose Folder", icon=ft.Icons.FOLDER_OPEN, on_click=self._choose_folder),

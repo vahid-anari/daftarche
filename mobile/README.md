@@ -47,6 +47,10 @@ the phone keeps the last copy, so the app works offline.
 
 Coming back to the app reads the file again; the ⟳ button does it at any time.
 
+Swipe left or right to change tabs. Android's Back goes back one step: it closes an open
+sheet, returns from "Show transactions" (or an account's transactions) to where you were,
+goes to the Dashboard from another tab, and on the Dashboard asks once before leaving.
+
 ## Trying it on the Mac
 
 In an environment of its own (it needs Flet, Daftarche does not):

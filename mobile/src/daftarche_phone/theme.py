@@ -46,9 +46,22 @@ def palette_for(choice, brightness):
     return LIGHT if brightness == ft.Brightness.LIGHT else DARK
 
 
+def system_bars(p: Palette):
+    """Android's own bars in the app's colours: the button strip at the bottom like the tab bar, the
+    status bar like the page, with light symbols on the dark theme and dark ones on the light."""
+    symbols = ft.Brightness.LIGHT if p is DARK else ft.Brightness.DARK
+    return ft.SystemOverlayStyle(
+        system_navigation_bar_color=p.surface, system_navigation_bar_divider_color=p.surface,
+        system_navigation_bar_icon_brightness=symbols, enforce_system_navigation_bar_contrast=False,
+        status_bar_color=p.bg, status_bar_icon_brightness=symbols,
+        status_bar_brightness=ft.Brightness.DARK if p is DARK else ft.Brightness.LIGHT,
+        enforce_system_status_bar_contrast=False)
+
+
 def material_theme(p: Palette):
     """A Material theme in these colours, for the controls Flet draws itself."""
     return ft.Theme(
+        system_overlay_style=system_bars(p),
         color_scheme=ft.ColorScheme(primary=p.accent, on_primary="#ffffff", secondary=p.accent,
                                     surface=p.surface, on_surface=p.text, on_surface_variant=p.dim,
                                     outline=p.border, outline_variant=p.border,
