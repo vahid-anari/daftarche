@@ -1,26 +1,29 @@
 """Daftarche on the phone: four tabs like the desktop app, reading the phone snapshot.
 
-Nothing here changes your data: the app shows ``daftarche-phone.json`` (written by Daftarche
-on the Mac into a folder shared with the phone) and reads it again when asked.
+Nothing here changes your data. Daftarche on the Mac keeps this phone's copy, sealed with this
+phone's own key, in a file on its Google Drive; the phone was given the file and the key by
+the QR code (link.py), fetches the newest copy when opened, and keeps the last one for when
+there is no connection.
 """
 
 from __future__ import annotations
 
 import asyncio
 import calendar
+import urllib.parse
 import copy
-import errno
-import os
+import json
 import time
 from datetime import date
-from pathlib import Path
 
 import flet as ft
 
 from . import __version__
+from . import link
 from .charts import LineChart, bar_chart, donut, legend, share_bar
 from .nav import ASK_EXIT, DASHBOARD, EXIT, RESTORE, BackSteps
-from .snapshot import (MONTHS, NO_MERCHANT, PALETTE, PERIODS, SNAPSHOT_NAME, Snapshot, SnapshotError, money, month_label,
+from .seal import SealError
+from .snapshot import (MONTHS, NO_MERCHANT, PALETTE, PERIODS, Snapshot, SnapshotError, money, month_label,
                        period_range)
 from .theme import THEME_CHOICES, material_theme, palette_for
 from .update import check as check_for_update
@@ -51,8 +54,10 @@ def long_month(key):
     """``"2026-09"`` → ``"September 2026"``."""
     y, m = key.split("-")
     return f"{MONTHS[int(m) - 1]} {y}"
-NEED_ACCESS = "access"
-"""``problem`` when Android has not allowed reading the folder yet."""
+NOT_PAIRED = "not paired"
+"""``problem`` before the phone is connected to the Mac (or after it was disconnected)."""
+DISCONNECTED = ("This phone was disconnected on the Mac, and its copy of your data was removed. To connect it "
+                "again: on the Mac, Settings › Phone › Connect a Phone…, then scan the code.")
 
 
 class PhoneApp:
@@ -60,10 +65,12 @@ class PhoneApp:
         self.page = page
         self._period_rows = {}
         self.prefs = ft.SharedPreferences()
-        self.picker = ft.FilePicker()
         self.snap: Snapshot | None = None
         self.problem = ""
-        self.folder = ""
+        self.pairing = None  # {file, key, name}: this phone's file on the Mac's Google Drive
+        self.disconnected = False
+        self.fetching = False
+        self._generation = 0  # goes up with every new connection: a download for an older one is ignored
         self.theme_choice = "system"
         self.tab = 0
         self.period = {"Dashboard": "This Month", "Transactions": "This Month", "Charts": "6 Months",
@@ -76,11 +83,6 @@ class PhoneApp:
         self.tx_range = None  # Transactions shows one month from Charts: (first day, last day, label)
         self.open_category = None
         self.p = palette_for("system", page.platform_brightness)
-        self.android = page.platform in (ft.PagePlatform.ANDROID, ft.PagePlatform.ANDROID_TV) and not page.web
-        self.permissions = None
-        if self.android:  # an extension the Android build carries (not there in `flet run` on a Mac)
-            from flet_permission_handler import PermissionHandler
-            self.permissions = PermissionHandler()
         self.update_info = None
         self.nav = BackSteps()
         self._pager = None
@@ -92,56 +94,157 @@ class PhoneApp:
         page.padding = 0
         page.on_platform_brightness_change = lambda e: self.render()
         page.on_app_lifecycle_state_change = self._lifecycle
-        self.folder = os.environ.get("DAFTARCHE_PHONE_FOLDER") or (await self.prefs.get("folder")) or ""
+        page.on_route_change = self._route_changed  # the QR code's link, opening the app
+        try:
+            self.pairing = link.parse_pairing("?" + urllib.parse.urlencode(
+                json.loads((await self.prefs.get("pairing")) or "{}")))  # checked as a link is
+        except (ValueError, TypeError):
+            self.pairing = None
         self.theme_choice = (await self.prefs.get("theme")) or "system"
         # Android's Back comes to the app (see nav.py) instead of always leaving it
         view = page.views[0]
         view.can_pop = False
         view.on_confirm_pop = self._back
-        self.load()
-        self.render()
+        arrived = link.parse_pairing(getattr(page, "route", "") or "")
+        if arrived:  # opened by the QR code's link
+            await self._offer(arrived)
+        else:
+            self.load()
+            self.render()
+            if self.pairing:
+                page.run_task(self._fetch)
         page.run_task(self._daily_update_check)
 
     def load(self, keep=False):
-        """Read the snapshot from the folder again.
+        """Open the copy kept on the phone (the newest one fetched). Returns the problem, or "".
 
-        ``keep``: when it cannot be read now (Syncthing in the middle of copying it, say), keep
-        showing the one read before. Returns the problem, or "".
-        """
+        ``keep``: when it cannot be opened, keep showing the one shown before."""
         before = self.snap
         self.snap, self.problem = None, ""
-        if not self.folder:
-            self.problem = "Choose the folder Daftarche on your Mac writes to (Settings › Phone)."
+        if not self.pairing:
+            self.problem = NOT_PAIRED
             return self.problem
-        path = Path(self.folder) / SNAPSHOT_NAME
-        try:
-            self.snap = Snapshot.load(path)
-        except FileNotFoundError:
-            self.problem = (f"No {SNAPSHOT_NAME} in this folder yet. On the Mac, choose this folder in "
-                            "Daftarche's Settings › Phone, or File › Update Phone Snapshot.")
-        except PermissionError:
-            self.problem = NEED_ACCESS
-        except OSError as exc:
-            self.problem = NEED_ACCESS if exc.errno in (errno.EACCES, errno.EPERM) else str(exc)
-        except SnapshotError as exc:
-            self.problem = str(exc)
+        blob = link.load_cache()
+        if blob is None:
+            self.problem = "Getting your data from Daftarche on the Mac…" if self.fetching else \
+                "No data yet: connect to the internet, then tap ⟳."
+        else:
+            try:
+                self.snap = Snapshot.from_json(link.open_blob(blob, self.pairing["key"]))
+            except (SealError, SnapshotError) as exc:
+                self.problem = str(exc)
         if self.snap is None and keep and before is not None:
             self.snap = before
         return self.problem
 
-    def _lifecycle(self, e):
-        """Back in the app (from Android's settings, or later in the day): read the file again."""
-        if getattr(e, "state", None) == ft.AppLifecycleState.RESUME:
-            self.load(keep=True)
-            self.render()
+    async def _fetch(self, manual=False):
+        """The newest copy from the Mac's Google Drive (in the background); kept for next time."""
+        if not self.pairing or self.fetching:
+            return
+        self.fetching = True
+        generation, pairing = self._generation, self.pairing
+        problem = None
+        try:
+            blob = await asyncio.to_thread(link.fetch, pairing["file"])
+            link.open_blob(blob, pairing["key"])  # it opens: keep it
+        except link.Disconnected:
+            blob, problem = None, "disconnected"
+        except (link.FetchError, SealError) as exc:
+            blob, problem = None, str(exc)
+        if generation != self._generation:  # connected anew meanwhile: this answer is about the old one
+            return
+        self.fetching = False
+        if problem == "disconnected":
+            await self._forget(disconnected=True)
+            return
+        if problem:
+            if manual or self.snap is None:
+                self._toast(f"Could not get the newest data: {problem}")
+            if self.snap is None:
+                self.load()
+                self.render()
+            return
+        link.save_cache(blob)
+        self.load(keep=True)
+        self.render()
+        if manual:
+            self._toast("Up to date")
 
-    async def _allow_access(self, e=None):
-        """Android's "All files access" page for this app; the file is read again on return."""
-        if self.permissions is not None:
-            from flet_permission_handler import Permission
-            await self.permissions.request(Permission.MANAGE_EXTERNAL_STORAGE)
+    def _lifecycle(self, e):
+        """Back in the app (later in the day): fetch the newest copy."""
+        if getattr(e, "state", None) == ft.AppLifecycleState.RESUME and self.pairing:
+            self.page.run_task(self._fetch)
+
+    # ── connecting to the Mac ────────────────────────────────────────────────
+    async def _route_changed(self, e):
+        arrived = link.parse_pairing(getattr(e, "route", "") or "")
+        if arrived:
+            await self._offer(arrived)
+
+    async def _offer(self, arrived):
+        """A pairing link arrived. Already connected to another file: ask first (a link from
+        anywhere else must not quietly replace yours)."""
+        try:  # back to "/", so the same link can come again later (Flet ignores a repeated route)
+            await self.page.push_route("/")
+        except Exception:
+            pass
+        if not self.pairing or self.pairing["file"] == arrived["file"]:
+            await self._pair(arrived)
+            return
+
+        async def replace(e):
+            self.page.pop_dialog()
+            await self._pair(arrived)
+
+        p = self.p
+        self.page.show_dialog(ft.AlertDialog(
+            title=ft.Text("Connect to another copy?"),
+            content=ft.Text(f"This phone is connected to “{self.pairing.get('name') or 'your Mac'}”. Connect it to "
+                            f"“{arrived['name'] or 'the new one'}” instead? Only do this if the link came from "
+                            "Daftarche on your own Mac.", color=p.text),
+            actions=[ft.TextButton("Cancel", on_click=lambda e: self.page.pop_dialog()),
+                     ft.FilledButton("Connect", on_click=replace)]))
+
+    async def _pair(self, arrived):
+        """Connected by the QR code's link (or a pasted one): fetch this phone's copy."""
+        self._generation += 1
+        self.pairing = arrived
+        self.disconnected = False
+        await self.prefs.set("pairing", json.dumps({"v": "1", "f": arrived["file"], "k": arrived["key"],
+                                                    "n": arrived["name"]}))
+        link.forget_cache()
+        self.snap = None
+        self.fetching = False
+        self.load()
+        self.problem = "Getting your data from Daftarche on the Mac…"
+        self.render()
+        await self._fetch()
+
+    async def _paste(self, e=None):
+        arrived = link.parse_pairing(self._paste_field.value if self._paste_field else "")
+        if not arrived:
+            self._toast("That is not Daftarche's link: copy the whole link from the Mac (Copy Link).")
+            return
+        await self._offer(arrived)
+
+    async def _forget(self, disconnected=False):
+        """Not connected any more: the copy and the key are removed from the phone."""
+        self._generation += 1
+        self.fetching = False
+        self.pairing = None
+        self.disconnected = disconnected
+        await self.prefs.set("pairing", "")
+        link.forget_cache()
+        self.snap = None
         self.load()
         self.render()
+
+    async def _disconnect_here(self, e=None):
+        try:
+            self.page.pop_dialog()
+        except Exception:
+            pass
+        await self._forget()
 
     # ── the frame ────────────────────────────────────────────────────────────
     def render(self):
@@ -155,7 +258,7 @@ class PhoneApp:
             title=ft.Column([ft.Text("Daftarche", size=20, weight=ft.FontWeight.BOLD, color=p.text),
                              ft.Text(updated, size=11, color=p.dim, visible=bool(updated))], spacing=0),
             bgcolor=p.bg, toolbar_height=60,
-            actions=[ft.IconButton(ft.Icons.REFRESH, icon_color=p.dim, tooltip="Read again", on_click=self._reload),
+            actions=[ft.IconButton(ft.Icons.REFRESH, icon_color=p.dim, tooltip="Get the newest data", on_click=self._reload),
                      ft.IconButton(ft.Icons.SETTINGS_OUTLINED, icon_color=p.dim, tooltip="Settings",
                                    on_click=self._settings)])
         page.navigation_bar = ft.NavigationBar(
@@ -211,11 +314,9 @@ class PhoneApp:
             self._toast("Press Back again to exit")
 
     def _reload(self, e=None):
-        problem = self.load(keep=True)
-        self.render()
-        if problem == NEED_ACCESS:
-            return
-        self._toast(f"Could not read it now: {problem}" if problem and self.snap else problem or "Read again")
+        """⟳: the newest copy from the Mac, now."""
+        if self.pairing:
+            self.page.run_task(self._fetch, True)
 
     def _toast(self, text):
         self.page.show_dialog(ft.SnackBar(ft.Text(text), duration=2500))
@@ -250,22 +351,25 @@ class PhoneApp:
 
     def _welcome(self):
         p = self.p
-        if self.problem == NEED_ACCESS:
-            text = ("Daftarche needs your permission to read the folder with your data. On the next page, "
-                    "turn on \u201cAllow access to manage all files\u201d for Daftarche, then come back.\n\n"
-                    "The app only reads daftarche-phone.json; it never changes or sends anything.")
-            button = ft.FilledButton("Allow Access", icon=ft.Icons.LOCK_OPEN, on_click=self._allow_access)
+        self._paste_field = None
+        if self.problem == NOT_PAIRED:
+            title = "Your account book, on the phone"
+            text = (DISCONNECTED if self.disconnected else
+                    "Connect this phone to Daftarche on your Mac: there, open Settings › Phone › Connect a "
+                    "Phone…, then point this phone's camera at the code it shows and tap the link.")
+            self._paste_field = ft.TextField(label="Or paste the link from the Mac", dense=True, text_size=13,
+                                             on_submit=self._paste)
+            extra = [self._paste_field, ft.FilledButton("Connect", icon=ft.Icons.LINK, on_click=self._paste)]
         else:
+            title = "Daftarche"
             text = self.problem
-            button = ft.FilledButton("Choose Folder", icon=ft.Icons.FOLDER_OPEN, on_click=self._choose_folder)
+            extra = [ft.FilledButton("Try Again", icon=ft.Icons.REFRESH, on_click=self._reload,
+                                     visible=not self.fetching)]
         return ft.Container(ft.Column([
             ft.Icon(ft.Icons.MENU_BOOK_ROUNDED, size=56, color=p.accent),
-            ft.Text("Your account book, on the phone", size=20, weight=ft.FontWeight.BOLD, color=p.text,
-                    text_align=ft.TextAlign.CENTER),
+            ft.Text(title, size=20, weight=ft.FontWeight.BOLD, color=p.text, text_align=ft.TextAlign.CENTER),
             ft.Text(text, size=14, color=p.dim, text_align=ft.TextAlign.CENTER),
-            button,
-            ft.TextButton("Choose another folder", on_click=self._choose_folder,
-                          visible=self.problem == NEED_ACCESS),
+            *extra,
         ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=16, tight=True),
             padding=32, alignment=ft.Alignment.CENTER, expand=True)
 
@@ -789,8 +893,8 @@ class PhoneApp:
         return self._card(ft.Column([
             ft.Text(f"Daftarche {info['version']} is available", size=15, weight=ft.FontWeight.BOLD, color=p.text),
             ft.Text("\n".join(notes[:6]), size=12, color=p.dim, visible=bool(notes)),
-            ft.Text("Download it, then open the file to install it over this one: your folder and "
-                    "settings stay.", size=12, color=p.dim),
+            ft.Text("Download it, then open the file to install it over this one: the connection to "
+                    "your Mac and your settings stay.", size=12, color=p.dim),
             ft.Row([ft.TextButton("Later", on_click=self._dismiss_update),
                     ft.FilledButton("Download", icon=ft.Icons.DOWNLOAD, on_click=self._download_update)],
                    alignment=ft.MainAxisAlignment.END)], spacing=6), accent=p.accent)
@@ -807,15 +911,12 @@ class PhoneApp:
         s, p = self.snap, self.p
         about = (f"App {__version__}  ·  data from Daftarche {s.app_version}" if s and s.app_version
                  else f"App {__version__}")
-        self._path_field = path_field = ft.TextField(value=self.folder, label="Folder", dense=True,
-                                                     on_submit=self._typed_folder,
-                                  hint_text="/storage/emulated/0/Daftarche", text_size=14)
+        name = (self.pairing or {}).get("name") or "this phone"
         sheet = self._sheet(ft.Container(ft.Column([
             ft.Text("Settings", size=17, weight=ft.FontWeight.BOLD, color=p.text),
-            path_field,
-            ft.Row([ft.OutlinedButton("Choose Folder", icon=ft.Icons.FOLDER_OPEN, on_click=self._choose_folder),
-                    ft.TextButton("Use Typed Path", on_click=self._typed_folder)],
-                   wrap=True),
+            ft.Row([ft.Text(f"Connected to Daftarche on the Mac as “{name}”." if self.pairing
+                            else "Not connected.", size=13, color=p.dim, expand=True),
+                    ft.TextButton("Disconnect", on_click=self._disconnect_here, visible=bool(self.pairing))]),
             ft.Text("Theme", size=13, color=p.dim),
             ft.SegmentedButton(segments=[ft.Segment(value=k, label=ft.Text(v)) for k, v in THEME_CHOICES.items()],
                                selected=[self.theme_choice], show_selected_icon=False, on_change=self._set_theme),
@@ -831,28 +932,6 @@ class PhoneApp:
     async def _set_theme(self, e):
         self.theme_choice = list(e.control.selected)[0]
         await self.prefs.set("theme", self.theme_choice)
-        self.render()
-
-    async def _choose_folder(self, e=None):
-        folder = await self.picker.get_directory_path(dialog_title="Folder with daftarche-phone.json")
-        if folder:
-            await self._use_folder(folder)
-
-    async def _typed_folder(self, e=None):
-        folder = (self._path_field.value or "").strip()
-        if folder:
-            await self._use_folder(folder)
-
-    async def _use_folder(self, folder):
-        self.folder = folder
-        await self.prefs.set("folder", folder)
-        try:
-            self.page.pop_dialog()
-        except Exception:  # no sheet open (the welcome page)
-            pass
-        if self.load() == NEED_ACCESS and self.permissions is not None:
-            await self._allow_access()
-            return
         self.render()
 
 

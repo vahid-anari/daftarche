@@ -1,4 +1,5 @@
-"""0.26: the phone snapshot (docs/phone-snapshot.md): what it holds, how it is written, and when."""
+"""0.26: the phone snapshot (docs/phone-snapshot.md): what it holds. 0.28: sent to the phones' files on
+Google Drive, sealed, a minute after a change (with a fake Drive)."""
 
 import json
 from datetime import datetime, timezone
@@ -6,7 +7,7 @@ from datetime import datetime, timezone
 import pytest
 
 from conftest import keep
-from daftarche.phone import SNAPSHOT_NAME, VERSION, build_snapshot, write_snapshot
+from daftarche.phone import VERSION, build_snapshot
 
 
 @pytest.fixture(scope="module")
@@ -85,47 +86,218 @@ def test_nothing_private_that_the_phone_does_not_need(db, book):
     assert "fitid" not in text and "memorandum" not in text
 
 
-def test_written_whole_or_not_at_all(db, book, tmp_path):
-    phone = tmp_path / "phone"
-    phone.mkdir()
-    path = write_snapshot(db, phone, "0.26.0")
-    assert path == phone / SNAPSHOT_NAME
-    assert [p.name for p in phone.iterdir()] == [SNAPSHOT_NAME]  # no temporary file left
-    assert json.loads(path.read_text(encoding="utf-8"))["app_version"] == "0.26.0"
-    with pytest.raises(FileNotFoundError):
-        write_snapshot(db, tmp_path / "gone")
-
-
 def test_an_empty_book(db):
     snap = build_snapshot(db)
     assert snap["transactions"] == [] and snap["loans"] == [] and snap["balances"]["months"] == []
 
 
-def test_the_window_writes_it_into_the_phone_folder(qapp, tmp_path, monkeypatch):
-    from daftarche import window as W
-    from daftarche.db import Database
-    mine = tmp_path / "mine.db"
-    db = Database(mine)
+class FakeDrive:
+    files, fail = {}, None
+
+    def __init__(self, token):
+        assert token == "R"
+
+    def create(self, name, data):
+        fid = f"F{len(self.files) + 1}"
+        self.files[fid] = data
+        return fid
+
+    def update(self, file_id, data):
+        if FakeDrive.fail:
+            raise FakeDrive.fail
+        if file_id not in self.files:
+            from daftarche.phone_link import FileGone
+            raise FileGone("gone")
+        self.files[file_id] = data
+
+    def delete(self, file_id):
+        self.files.pop(file_id, None)
+
+
+@pytest.fixture
+def sender(qapp, db, book, tmp_path):
+    from daftarche.phone_sync import PhoneSender, PhoneStore
+    FakeDrive.files, FakeDrive.fail = {}, None
+    store = PhoneStore(tmp_path / "phone-link.json")
+    s = PhoneSender(lambda: db, "0.28.0", store=store, drive_factory=FakeDrive)
+    s.timer.stop()
+    s.signed_in({"refresh_token": "R", "email": "v@example.com"})
+    return s
+
+
+def _wait(sender):
+    from PySide6.QtWidgets import QApplication
+    import time
+    end = time.monotonic() + 5
+    while sender.busy and time.monotonic() < end:
+        QApplication.processEvents()
+        time.sleep(0.01)
+    assert not sender.busy
+
+
+def _opened(sender, phone):
+    from daftarche.seal import key_from_text, open_sealed
+    return json.loads(open_sealed(FakeDrive.files[phone["file"]], key_from_text(phone["key"])))
+
+
+def test_connecting_a_phone_puts_its_sealed_copy_on_the_drive(sender, tmp_path):
+    import os
+    from daftarche.phone_link import parse_pairing_link
+    phone, link = sender.connect_phone("Pixel")
+    sender.add_phone(phone)
+    paired = parse_pairing_link(link)
+    assert (paired["file"], paired["key"], paired["name"]) == (phone["file"], phone["key"], "Pixel")
+    assert b"Groceries" not in FakeDrive.files[phone["file"]]  # Google sees only scrambled bytes
+    assert _opened(sender, phone)["app_version"] == "0.28.0"
+    assert oct(os.stat(tmp_path / "phone-link.json").st_mode & 0o777) == "0o600"  # it holds the keys
+
+
+def test_changes_go_a_minute_after_the_last_one(sender, db):
+    phone, _ = sender.connect_phone("Pixel")
+    sender.add_phone(phone)
+    sender.tick(now=1000.0)
+    assert not sender.pending()
     uc, us = db.get_uncategorized_ids()
-    db.add_transaction(2026, "June", 1, "Expense", "Card", 5, us, uc, name="MY SHOP")
-    db.conn.close()
-    monkeypatch.setattr(W, "DB_PATH", mine)
-    phone = tmp_path / "phone"
-    phone.mkdir()
-    win = keep(W.MainWindow())
-    monkeypatch.setitem(win.settings._data, "phone_dir", "")
-    assert win.write_phone_snapshot() is None  # no folder chosen: nothing, and no question
-    monkeypatch.setitem(win.settings._data, "phone_dir", str(phone))
-    assert win.write_phone_snapshot() == phone / SNAPSHOT_NAME
-    names = [t["name"] for t in json.loads((phone / SNAPSHOT_NAME).read_text())["transactions"]]
-    assert names == ["MY SHOP"]
+    db.add_transaction(2026, "June", 9, "Expense", "Card", 7, us, uc, name="LATE SHOP")
+    sender.tick(now=1000.0)
+    assert sender.pending() and not sender.busy  # noted, not sent yet
+    sender.tick(now=1030.0)
+    assert not sender.busy
+    sender.tick(now=1061.0)
+    _wait(sender)
+    assert not sender.pending() and "LATE SHOP" in [t["name"] for t in _opened(sender, phone)["transactions"]]
+    assert sender.store.phones[0]["sent"] and not sender.store.phones[0]["error"]
 
-    (phone / SNAPSHOT_NAME).unlink()
-    win.viewing = mine  # Open Database…: not your own data, never sent to the phone
-    assert win.write_phone_snapshot() is None and not (phone / SNAPSHOT_NAME).exists()
-    win.viewing = None
 
-    monkeypatch.setitem(win.settings._data, "phone_dir", str(tmp_path / "unplugged"))
-    assert win.write_phone_snapshot() is None  # a missing folder: said in the status bar only
-    assert "not written" in win.statusBar().currentMessage()
-    monkeypatch.setitem(win.settings._data, "phone_dir", "")
+def test_offline_tries_again_later_and_says_so(sender, db):
+    from daftarche.phone_link import LinkError
+    phone, _ = sender.connect_phone("Pixel")
+    sender.add_phone(phone)
+    FakeDrive.fail = LinkError("Could not reach Google: offline")
+    sender.send_now()
+    _wait(sender)
+    assert sender.pending() and "offline" in sender.store.phones[0]["error"] and "offline" in sender.last_error
+    FakeDrive.fail = None
+    sender.send_now()
+    _wait(sender)
+    assert not sender.pending() and sender.store.phones[0]["error"] is None
+
+
+def test_a_revoked_sign_in_signs_out(sender):
+    from daftarche.phone_link import SignedOut
+    phone, _ = sender.connect_phone("Pixel")
+    sender.add_phone(phone)
+    FakeDrive.fail = SignedOut("Google no longer accepts Daftarche's sign-in")
+    sender.send_now()
+    _wait(sender)
+    assert sender.store.google is None and "sign-in" in sender.last_error and not sender.active()
+
+
+def test_disconnect_deletes_the_file(sender):
+    phone, _ = sender.connect_phone("Pixel")
+    sender.add_phone(phone)
+    assert sender.disconnect_phone(phone["id"]) is None
+    assert phone["file"] not in FakeDrive.files and sender.store.phones == []
+
+
+def test_never_a_database_opened_to_look_at(qapp, db, book, tmp_path):
+    from daftarche.phone_sync import PhoneSender, PhoneStore
+    store = PhoneStore(tmp_path / "p.json")
+    store.data = {"google": {"refresh_token": "R"}, "phones": [{"id": "1", "name": "P", "file": "F", "key": "k"}]}
+    s = PhoneSender(lambda: None, store=store, drive_factory=FakeDrive)
+    s.timer.stop()
+    assert not s.active()
+    s.send_now()
+    assert not s.busy
+
+
+def test_settings_shows_the_phones(sender, qapp):
+    from daftarche.phone_window import PhoneSection, ago
+    phone, _ = sender.connect_phone("Pixel")
+    sender.add_phone(phone)
+    section = keep(PhoneSection(sender))
+    texts = [w.text() for w in section.findChildren(__import__("PySide6.QtWidgets", fromlist=["QLabel"]).QLabel)]
+    assert any("Pixel" in t for t in texts) and any("v@example.com" in t for t in texts)
+    assert section.btn_account.text() == "Sign Out" and not section.btn_send.isHidden()
+    from datetime import datetime
+    now = datetime(2026, 10, 21, 12, 0)
+    assert ago("2026-10-21T11:55:00", now) == "5 minutes ago" and ago("2026-10-20T09:05:00", now) == \
+        "yesterday at 09:05" and ago(None) == "never"
+
+
+def test_the_qr_code_draws(qapp):
+    from daftarche.phone_window import qr_pixmap
+    pix = qr_pixmap("daftarche://pair?v=1&f=F&k=K&n=P")
+    assert not pix.isNull() and pix.width() == pix.height()
+
+
+# ── from the review ──────────────────────────────────────────────────────────
+def test_quitting_waits_for_a_send_and_sends_what_came_after(sender, db):
+    import threading
+    phone, _ = sender.connect_phone("Pixel")
+    sender.add_phone(phone)
+    gate = threading.Event()
+    real_update = FakeDrive.update
+
+    def slow(self, file_id, data):
+        gate.wait(5)
+        real_update(self, file_id, data)
+    FakeDrive.update = slow
+    try:
+        sender.send_now()
+        assert sender.busy
+        uc, us = db.get_uncategorized_ids()
+        db.add_transaction(2026, "June", 9, "Expense", "Card", 7, us, uc, name="WHILE SENDING")
+        gate.set()
+        sender.finish()  # Daftarche closing
+    finally:
+        FakeDrive.update = real_update
+    assert not sender.busy and not sender.pending()
+    assert "WHILE SENDING" in [t["name"] for t in _opened(sender, phone)["transactions"]]
+    assert sender.store.data["dirty"] is False
+
+
+def test_unsent_changes_are_remembered_across_a_quit(sender, db, tmp_path):
+    from daftarche.phone_sync import PhoneSender, PhoneStore
+    from daftarche.phone_link import LinkError
+    phone, _ = sender.connect_phone("Pixel")
+    sender.add_phone(phone)
+    sender.store.phones[0]["error"] = None
+    sender.store.save()
+    FakeDrive.fail = LinkError("offline")
+    uc, us = db.get_uncategorized_ids()
+    db.add_transaction(2026, "June", 9, "Expense", "Card", 7, us, uc, name="OFFLINE")
+    sender.finish()
+    again = PhoneSender(lambda: db, store=PhoneStore(tmp_path / "phone-link.json"), drive_factory=FakeDrive)
+    again.timer.stop()
+    assert again.pending()  # the next start knows there is something to send
+
+
+def test_a_restored_backup_is_sent(sender, db):
+    phone, _ = sender.connect_phone("Pixel")
+    sender.add_phone(phone)
+    sender.database_switched(changed=True)
+    _wait(sender)
+    assert not sender.pending() and sender.store.phones[0]["sent"]
+    sender.database_switched(changed=False)  # Open Database… / Back to My Database: nothing new
+    sender.tick(now=10**9)
+    assert not sender.busy
+
+
+def test_disconnect_while_signed_out_says_so(sender):
+    phone, _ = sender.connect_phone("Pixel")
+    sender.add_phone(phone)
+    sender.sign_out()
+    assert "signed out" in sender.disconnect_phone(phone["id"])
+    assert phone["file"] in FakeDrive.files  # still there: to delete by hand, as said
+
+
+def test_connect_is_off_while_viewing_another_database(qapp, tmp_path):
+    from daftarche.phone_sync import PhoneSender, PhoneStore
+    from daftarche.phone_window import PhoneSection
+    store = PhoneStore(tmp_path / "p.json")
+    store.data["google"] = {"refresh_token": "R", "email": "v@example.com"}
+    s = PhoneSender(lambda: None, store=store, drive_factory=FakeDrive)
+    s.timer.stop()
+    section = keep(PhoneSection(s))
+    assert not section.btn_connect.isEnabled()

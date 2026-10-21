@@ -5,19 +5,15 @@ loans are worked out here, by the same code the desktop app uses, so the two nev
 the phone only adds up transaction amounts. Bank account numbers, import rules and bank
 transaction ids are left out: the phone does not need them.
 
-No Qt here: the window calls :func:`write_snapshot`, the tests call :func:`build_snapshot`.
+No Qt here: phone_sync.py seals it (seal.py) and sends it to the phones' files on Google Drive.
 """
 
 from __future__ import annotations
 
-import json
-import os
 from datetime import datetime
-from pathlib import Path
 
 from daftarche.db import MONTH_NUM, round2
 
-SNAPSHOT_NAME = "daftarche-phone.json"
 FORMAT = "daftarche-phone"
 VERSION = 1
 """Raised only when the shape changes in a way an older phone app cannot read."""
@@ -102,21 +98,3 @@ def build_snapshot(db, app_version="", now=None):
     return {"format": FORMAT, "version": VERSION, "created": now.isoformat(timespec="seconds"),
             "app_version": app_version, "accounts": accounts, "balances": balances,
             "categories": categories, "tags": tags, "transactions": transactions, "loans": loans}
-
-
-def write_snapshot(db, folder, app_version=""):
-    """Write ``folder/daftarche-phone.json`` and return its path.
-
-    Written to a temporary file in the same folder and then swapped in, so a sync program
-    never copies half a file.
-    """
-    folder = Path(folder).expanduser()
-    if not folder.is_dir():
-        raise FileNotFoundError(f"The phone folder {folder} does not exist.")
-    path = folder / SNAPSHOT_NAME
-    tmp = folder / f".{SNAPSHOT_NAME}.tmp"
-    data = build_snapshot(db, app_version)
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
-    os.replace(tmp, path)
-    return path
