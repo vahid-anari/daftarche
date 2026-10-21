@@ -2,6 +2,13 @@
 
 Released with tags `phone-vX.Y.Z`; each release carries the signed APK.
 
+## 0.2.5 — 2026-10-21
+
+- Transactions → Show only has a Merchant box (type in it to narrow the list), with
+  "(no merchant)" for the transactions without one.
+- In the list of transactions the account has a line of its own under the category, so its
+  name is no longer cut off.
+
 ## 0.2.4 — 2026-10-21
 
 - The row of periods no longer slides back to the start when you tap one at its end.

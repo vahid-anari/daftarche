@@ -146,3 +146,28 @@ def test_the_period_chips_stay_scrolled_where_they_were(app):
     assert again is row  # the same row, so it does not jump back to the left
     chosen = [c.content.value for c in again.controls if c.content.weight == ft.FontWeight.BOLD]
     assert chosen == [phone.period["Dashboard"]]
+
+
+# ── 0.2.5: the Merchant filter, the account on its own line ──────────────────
+def test_the_merchant_filter(app):
+    from daftarche_phone.snapshot import NO_MERCHANT
+    phone, page, view = app
+    s = phone.snap
+    merchant = s.merchants()[0]
+    assert all(t["merchant"] == merchant for t in s.filter(merchant=merchant)) and s.filter(merchant=merchant)
+    assert all(not t.get("merchant") for t in s.filter(merchant=NO_MERCHANT))
+    phone._set_filter("merchant", merchant)
+    assert phone.tx_filters["merchant"] == merchant
+    phone._filter_sheet(None)
+    labels = [c.label for c in _walk(page.dialogs[-1].content) if isinstance(c, ft.Dropdown)]
+    assert "Merchant" in labels
+    phone._clear_filter("merchant")
+    assert phone.tx_filters["merchant"] is None
+
+
+def test_the_account_has_a_line_of_its_own(app):
+    phone, page, view = app
+    tx = next(t for t in phone.snap.transactions if t["type"] == "Expense")
+    texts = [c.value for c in _walk(phone._tx_row(tx)) if isinstance(c, ft.Text)]
+    name = phone.snap.account_name(tx["account"])
+    assert name in texts and not any("·" in t and name in t for t in texts)

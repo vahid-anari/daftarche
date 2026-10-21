@@ -20,7 +20,7 @@ import flet as ft
 from . import __version__
 from .charts import LineChart, bar_chart, donut, legend, share_bar
 from .nav import ASK_EXIT, DASHBOARD, EXIT, RESTORE, BackSteps
-from .snapshot import (MONTHS, PALETTE, PERIODS, SNAPSHOT_NAME, Snapshot, SnapshotError, money, month_label,
+from .snapshot import (MONTHS, NO_MERCHANT, PALETTE, PERIODS, SNAPSHOT_NAME, Snapshot, SnapshotError, money, month_label,
                        period_range)
 from .theme import THEME_CHOICES, material_theme, palette_for
 from .update import check as check_for_update
@@ -33,6 +33,12 @@ PAGE_SIZE = 150
 """Transactions shown at first; "Show more" adds as many again."""
 TOP_CATEGORIES = 7
 """Categories of their own in the stacked bars and the donut; the rest are "Other"."""
+
+
+def no_filters(**chosen):
+    """Transactions' "Show only" choices, all off but ``chosen``."""
+    return {"kind": None, "account": None, "category": None, "tag": None, "merchant": None, "text": "",
+            **chosen}
 
 
 def month_range(key):
@@ -62,7 +68,7 @@ class PhoneApp:
         self.tab = 0
         self.period = {"Dashboard": "This Month", "Transactions": "This Month", "Charts": "6 Months",
                        "Accounts": "All"}
-        self.tx_filters = {"kind": None, "account": None, "category": None, "tag": None, "text": ""}
+        self.tx_filters = no_filters()
         self.tx_limit = PAGE_SIZE
         self.chart_kind = "Expense"
         self.chart_account = None
@@ -444,8 +450,8 @@ class PhoneApp:
         self.tx_range = None
         if source == "Charts" and self.chart_month:  # a month tapped in the bars: that month only
             self.tx_range = (*month_range(self.chart_month), month_label(self.chart_month))
-        self.tx_filters = {"kind": kind, "account": self.chart_account if source == "Charts" else None,
-                           "category": category, "tag": None, "text": ""}
+        self.tx_filters = no_filters(kind=kind, account=self.chart_account if source == "Charts" else None,
+                                     category=category)
         self.tx_limit = PAGE_SIZE
         self._jump_to_transactions()
 
@@ -457,13 +463,13 @@ class PhoneApp:
     def _transactions(self):
         s, p, f = self.snap, self.p, self.tx_filters
         start, end = self._range("Transactions")
-        txs = s.filter(start, end, f["kind"], f["account"], f["category"], f["tag"], f["text"])
+        txs = s.filter(start, end, f["kind"], f["account"], f["category"], f["tag"], f["text"], f["merchant"])
 
         search = ft.TextField(value=f["text"], hint_text="Search", prefix_icon=ft.Icons.SEARCH, dense=True,
                               border_radius=24, filled=True, fill_color=p.surface, border_color=p.surface,
                               expand=True, on_submit=self._search, on_blur=self._search,
                               content_padding=ft.Padding.symmetric(horizontal=12, vertical=8))
-        n_filters = sum(1 for k in ("kind", "account", "category", "tag") if f[k] is not None)
+        n_filters = sum(1 for k in ("kind", "account", "category", "merchant", "tag") if f[k] is not None)
         filter_btn = ft.IconButton(ft.Icons.TUNE, icon_color=p.accent if n_filters else p.dim,
                                    badge=str(n_filters) if n_filters else None, on_click=self._filter_sheet)
         chips = self._filter_chips()
@@ -492,6 +498,7 @@ class PhoneApp:
         s, p, f = self.snap, self.p, self.tx_filters
         names = {"kind": f["kind"], "account": s.account_name(f["account"]) if f["account"] is not None else None,
                  "category": s.category_name(f["category"]) if f["category"] is not None else None,
+                 "merchant": f["merchant"],
                  "tag": s.tag.get(f["tag"], {}).get("name") if f["tag"] is not None else None}
         chips = [ft.Container(ft.Row([ft.Text(v, size=12, color=p.text),
                                       ft.Icon(ft.Icons.CLOSE, size=14, color=p.dim)], spacing=4, tight=True),
@@ -524,13 +531,16 @@ class PhoneApp:
             cat = "Split" if tx.get("parts") else s.category_name(tx["category"])
             sub_name = "" if tx.get("parts") else s.subcategory_name(tx["subcategory"])
             sub = f"{cat} › {sub_name}" if sub_name else cat
-            sub += f"  ·  {s.account_name(tx['account'])}"
         emoji = "✂️" if tx.get("parts") else s.icon(tx["category"], tx["subcategory"])
+        # the account on a line of its own: sharing the category's line, it was cut off
+        account = "" if tx["type"] == "Transfer" else s.account_name(tx["account"]) or ""
         return ft.Container(ft.Row([
             self._badge(emoji, p.kind(tx["type"])),
             ft.Column([ft.Text(s.title(tx), size=14, color=p.text, no_wrap=True,
                                overflow=ft.TextOverflow.ELLIPSIS),
-                       ft.Text(sub, size=12, color=p.dim, no_wrap=True, overflow=ft.TextOverflow.ELLIPSIS)],
+                       ft.Text(sub, size=12, color=p.dim, no_wrap=True, overflow=ft.TextOverflow.ELLIPSIS),
+                       ft.Text(account, size=11, color=p.dim, no_wrap=True, overflow=ft.TextOverflow.ELLIPSIS,
+                               visible=bool(account))],
                       spacing=1, expand=True),
             self._amount_text(tx)], spacing=10),
             bgcolor=p.surface, border_radius=12, padding=ft.Padding.symmetric(horizontal=10, vertical=8),
@@ -585,9 +595,10 @@ class PhoneApp:
     def _filter_sheet(self, e):
         s, p, f = self.snap, self.p, self.tx_filters
 
-        def dropdown(label, key, options):
+        def dropdown(label, key, options, search=False):
             current = f[key]
             return ft.Dropdown(label=label, value="" if current is None else str(current), expand=True,
+                               editable=search, enable_filter=search, menu_height=360 if search else None,
                                options=[ft.DropdownOption(key="", text="All")] +
                                [ft.DropdownOption(key=str(k), text=t) for k, t in options],
                                on_select=lambda ev, k=key: self._set_filter(k, ev.control.value))
@@ -601,6 +612,8 @@ class PhoneApp:
             ft.Text("Show only", size=17, weight=ft.FontWeight.BOLD, color=p.text),
             dropdown("Type", "kind", kinds), dropdown("Account", "account", accounts),
             dropdown("Category", "category", categories),
+            dropdown("Merchant", "merchant", [(NO_MERCHANT, NO_MERCHANT)] + [(m, m) for m in s.merchants()],
+                     search=True),  # many: typing narrows the list
             *([dropdown("Tag", "tag", tags)] if tags else []),
             ft.Row([ft.TextButton("Clear all", on_click=lambda ev: self._clear_filters(sheet)),
                     ft.FilledButton("Done", on_click=lambda ev: self.page.pop_dialog())],
@@ -610,15 +623,14 @@ class PhoneApp:
         self.page.show_dialog(sheet)
 
     def _set_filter(self, key, value):
-        if key == "kind":
+        if key in ("kind", "merchant"):
             self.tx_filters[key] = value or None
         else:
             self.tx_filters[key] = int(value) if value else None
         self.tx_limit = PAGE_SIZE
 
     def _clear_filters(self, sheet):
-        self.tx_filters = {"kind": None, "account": None, "category": None, "tag": None,
-                           "text": self.tx_filters["text"]}
+        self.tx_filters = no_filters(text=self.tx_filters["text"])
         self.page.pop_dialog()
 
     # ── Charts ───────────────────────────────────────────────────────────────
@@ -719,7 +731,7 @@ class PhoneApp:
     def _show_account(self, account_id):
         self._jump()
         self.tx_range = None
-        self.tx_filters = {"kind": None, "account": account_id, "category": None, "tag": None, "text": ""}
+        self.tx_filters = no_filters(account=account_id)
         self.tx_limit = PAGE_SIZE
         self._jump_to_transactions()
 
