@@ -52,6 +52,7 @@ NEED_ACCESS = "access"
 class PhoneApp:
     def __init__(self, page: ft.Page):
         self.page = page
+        self._period_rows = {}
         self.prefs = ft.SharedPreferences()
         self.picker = ft.FilePicker()
         self.snap: Snapshot | None = None
@@ -218,6 +219,7 @@ class PhoneApp:
             self._pager = None
             return self._welcome()
         # all four tabs, side by side: a swipe slides to the next one (the bar follows)
+        self._period_rows = {}  # built afresh with the tabs
         self._pager = ft.PageView([self._dashboard(), self._transactions(), self._charts(), self._accounts()],
                                   selected_index=self.tab, on_change=self._swiped, expand=True)
         return self._pager
@@ -293,7 +295,13 @@ class PhoneApp:
                 bgcolor=p.accent if chosen else p.surface, border_radius=16,
                 padding=ft.Padding.symmetric(horizontal=12, vertical=7),
                 on_click=lambda e, n=name: self._set_period(tab, n)))
-        return ft.Row(chips, spacing=6, scroll=ft.ScrollMode.HIDDEN)
+        # the same row each time, with new chips: it stays scrolled where it was (a new row
+        # started at the left, hiding the chip just tapped at the end)
+        row = self._period_rows.get(tab)
+        if row is None:
+            row = self._period_rows[tab] = ft.Row(spacing=6, scroll=ft.ScrollMode.HIDDEN)
+        row.controls = chips
+        return row
 
     def _set_period(self, tab, name):
         self.period[tab] = name
