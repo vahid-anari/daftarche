@@ -301,3 +301,22 @@ def test_connect_is_off_while_viewing_another_database(qapp, tmp_path):
     s.timer.stop()
     section = keep(PhoneSection(s))
     assert not section.btn_connect.isEnabled()
+
+
+# ── 0.28.1: Settings in tabs ─────────────────────────────────────────────────
+def test_settings_in_tabs_opens_on_the_last_one(sender, qapp):
+    from PySide6.QtWidgets import QWidget
+    from daftarche.style import get_settings
+    from daftarche.window import SettingsDialog
+    parent = keep(QWidget())
+    parent.phone_sender = sender
+    settings = get_settings()
+    settings.set("settings_tab", 2)
+    d = keep(SettingsDialog(settings, parent))
+    assert [d.tabs.tabText(i) for i in range(d.tabs.count())] == ["Appearance", "Backups", "Phone"]
+    assert d.tabs.currentIndex() == 2 and d.btn_reset.isHidden()  # Reset is about Appearance only
+    d.tabs.setCurrentIndex(0)
+    assert not d.btn_reset.isHidden() and settings.get("settings_tab") == 0
+    size = d.size()
+    d.tabs.setCurrentIndex(1)
+    assert d.size() == size  # the same size on every tab

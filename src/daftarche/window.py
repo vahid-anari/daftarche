@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
     QDialogButtonBox, QPushButton, QColorDialog, QFrame, QGridLayout,
     QMessageBox, QFileDialog
 )
-from PySide6.QtCore import Qt, QTimer, QUrl
+from PySide6.QtCore import QSize, Qt, QTimer, QUrl
 from PySide6.QtGui import QAction, QColor, QDesktopServices, QFont, QKeySequence, QPalette
 from sciwidgets.app.help import AppHelp
 
@@ -530,14 +530,13 @@ class SettingsDialog(QDialog):
         self._pending_extra_dir = self.settings.get("backup_extra_dir") or ""
 
         self._build()
-        self.setFixedSize(self.sizeHint())
+        for combo in (self.f_font, self.f_theme):  # their width, now (they set it when first painted)
+            combo._after_add()
+        self.fit()
 
     def _build(self):
         fs = self.settings.get("font_size")
         ff = self.settings.get("font_family")
-
-        title = QLabel("Appearance Settings")
-        title.setProperty("class", "settings-title")
 
         self.f_font = SingleSelectCombo()
         self.f_font.addItems([
@@ -590,8 +589,6 @@ class SettingsDialog(QDialog):
         color_grid.setColumnMinimumWidth(2, 40)
         color_grid.setColumnMinimumWidth(4, 60)
 
-        backups_lbl = QLabel("Backups")
-        backups_lbl.setProperty("class", "settings-section")
         self.lbl_extra_dir = QLabel()
         self.lbl_extra_dir.setWordWrap(True)
         self._show_extra_dir()
@@ -606,8 +603,6 @@ class SettingsDialog(QDialog):
         extra_row.addWidget(btn_extra_choose)
         extra_row.addWidget(btn_extra_clear)
 
-        phone_lbl = QLabel("Phone")
-        phone_lbl.setProperty("class", "settings-section")
         from daftarche.phone_window import PhoneSection
         sender = getattr(self.parent(), "phone_sender", None)
         self.phone_section = PhoneSection(sender, self) if sender is not None else None
@@ -633,26 +628,73 @@ class SettingsDialog(QDialog):
         btn_row.addWidget(btn_reset)
         btn_row.addStretch()
         btn_row.addWidget(btns)
+        self.btn_reset = btn_reset
+        keep = btn_reset.sizePolicy()
+        keep.setRetainSizeWhenHidden(True)  # the window keeps its width on every tab
+        btn_reset.setSizePolicy(keep)
+
+        # three tabs, each short: Appearance (the tallest, it sets the height), Backups, Phone
+        appearance = QWidget()
+        page = QVBoxLayout(appearance)
+        page.setContentsMargins(4, 12, 4, 4)
+        page.setSpacing(16)
+        page.addLayout(form)
+        page.addWidget(self._sep())
+        page.addWidget(colors_lbl)
+        page.addLayout(theme_row)
+        page.addLayout(color_grid)
+        page.addStretch()
+
+        backups = QWidget()
+        page = QVBoxLayout(backups)
+        page.setContentsMargins(4, 12, 4, 4)
+        page.setSpacing(12)
+        auto = QLabel("Daftarche backs up your data by itself, on this Mac: a copy each time it starts, and a snapshot "
+                      "each month, kept for a year (File › Show Data Folder › backups). An extra folder, such as one "
+                      "in iCloud Drive or on an external disk, gets a copy of the monthly snapshots too.")
+        auto.setProperty("class", "dim-label")
+        auto.setWordWrap(True)
+        page.addWidget(auto)
+        page.addLayout(extra_row)
+        page.addStretch()
+
+        self.tabs = QTabWidget()
+        self.tabs.setDocumentMode(True)
+        self.tabs.addTab(appearance, "Appearance")
+        self.tabs.addTab(backups, "Backups")
+        if self.phone_section is not None:
+            phone = QWidget()
+            page = QVBoxLayout(phone)
+            page.setContentsMargins(4, 12, 4, 4)
+            page.setSpacing(12)
+            page.addWidget(self.phone_section)
+            now = QLabel("Changes here happen at once: OK and Cancel are for the other tabs.")
+            now.setProperty("class", "dim-label")
+            now.setWordWrap(True)
+            page.addWidget(now)
+            page.addStretch()
+            self.tabs.addTab(phone, "Phone")
+        last = self.settings.get("settings_tab") or 0
+        self.tabs.setCurrentIndex(last if isinstance(last, int) and 0 <= last < self.tabs.count() else 0)
+        self.tabs.currentChanged.connect(self._tab_changed)
+        self._tab_changed(self.tabs.currentIndex())
 
         layout = QVBoxLayout(self)
-        layout.setSpacing(16)
-
-        layout.addWidget(title)
-        layout.addLayout(form)
-        layout.addWidget(self._sep())
-        layout.addWidget(colors_lbl)
-        layout.addLayout(theme_row)
-        layout.addLayout(color_grid)
-        layout.addWidget(self._sep())
-        layout.addWidget(backups_lbl)
-        layout.addLayout(extra_row)
-        layout.addWidget(self._sep())
-        if self.phone_section is not None:
-            layout.addWidget(phone_lbl)
-            layout.addWidget(self.phone_section)
-        layout.addWidget(self._sep())
+        layout.setSpacing(12)
+        layout.addWidget(self.tabs)
         layout.addLayout(btn_row)
         self._theme_changed()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if not getattr(self, "_fitted", False):  # once, with everything styled
+            self._fitted = True
+            self.fit()
+
+    def _tab_changed(self, index):
+        """Reset to Defaults is about Appearance only; Settings opens on the tab used last."""
+        self.btn_reset.setVisible(index == 0)
+        self.settings.set("settings_tab", index)
 
     def _editing(self):
         """The theme whose colours the buttons show and change ("system": the one on screen now)."""
@@ -668,7 +710,7 @@ class SettingsDialog(QDialog):
         self.lbl_editing.setText(f"(editing the {THEME_NAMES[self._editing()]} colours: the Mac shows that one now)"
                                  if self._pending_theme == "system" else "")
         if self.isVisible():
-            self.setFixedSize(self.sizeHint())
+            self.fit()
 
     def _show_extra_dir(self):
         path = self._pending_extra_dir.replace(os.path.expanduser("~"), "~", 1)
@@ -679,7 +721,7 @@ class SettingsDialog(QDialog):
     def _set_extra_dir(self, path):
         self._pending_extra_dir = path
         self._show_extra_dir()
-        self.setFixedSize(self.sizeHint())
+        self.fit()
 
     def _choose_extra_dir(self):
         path = QFileDialog.getExistingDirectory(self, "Extra Backup Folder", self._pending_extra_dir or "")
@@ -687,8 +729,23 @@ class SettingsDialog(QDialog):
             self._set_extra_dir(path)
 
     def fit(self):
-        """The Phone part changed (a phone added, signed in): the window fits it again."""
-        self.setFixedSize(self.sizeHint())
+        """The window's size, the same on every tab: Appearance's, the tallest (and again when
+        the Phone part changes: a phone added, signed in)."""
+        self.ensurePolished()  # sizes with the style sheet's fonts
+        for w in self.findChildren(QWidget):
+            w.ensurePolished()
+        shown = self.tabs.currentIndex()
+        self.tabs.blockSignals(True)
+        self.setMinimumSize(0, 0)
+        self.setMaximumSize(16777215, 16777215)
+        size = QSize(0, 0)
+        for i in range(self.tabs.count()):  # the largest of the tabs (wrapped text measures itself when shown)
+            self.tabs.setCurrentIndex(i)
+            self.layout().activate()
+            size = size.expandedTo(self.sizeHint())
+        self.tabs.setCurrentIndex(shown)
+        self.tabs.blockSignals(False)
+        self.setFixedSize(size)
 
     def _sep(self):
         sep = QFrame()
