@@ -170,7 +170,10 @@ def sign_in(open_browser, timeout_s=300, opener=None, cancelled=lambda: False):
     cid, secret = client()
     if not cid:
         raise LinkError("This copy of Daftarche has no Google client set up.")
-    server = http.server.HTTPServer(("127.0.0.1", 0), _CatchCode)
+    # each visit in a thread of its own: an idle connection (a browser's preconnect) never holds up
+    # Google's answer, which may come on another connection
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _CatchCode)
+    server.daemon_threads = True
     server.result = None
     server.timeout = 0.5
     redirect = f"http://127.0.0.1:{server.server_address[1]}"
