@@ -134,3 +134,15 @@ def test_a_choice_inside_a_tab_keeps_its_list_where_it_was(app):
     phone._set_period("Charts", "3 Months")
     phone._more(None)
     assert all(a is b for a, b in zip(lists, phone._pager.controls))  # the same lists: not back at the top
+
+
+def test_the_period_chips_stay_scrolled_where_they_were(app):
+    phone, page, view = app
+    phone.render()
+    row = phone._periods("Dashboard")
+    phone._set_period("Dashboard", "1 Year" if "1 Year" in [c.content.value for c in row.controls] else
+                      row.controls[-1].content.value)
+    again = phone._periods("Dashboard")
+    assert again is row  # the same row, so it does not jump back to the left
+    chosen = [c.content.value for c in again.controls if c.content.weight == ft.FontWeight.BOLD]
+    assert chosen == [phone.period["Dashboard"]]

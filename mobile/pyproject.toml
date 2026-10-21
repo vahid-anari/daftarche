@@ -1,6 +1,6 @@
 [project]
 name = "daftarche-phone"
-version = "0.2.3"
+version = "0.2.4"
 description = "Daftarche on the phone: a read-only view of your account book"
 readme = "README.md"
 license = "MIT"

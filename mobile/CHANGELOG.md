@@ -2,6 +2,10 @@
 
 Released with tags `phone-vX.Y.Z`; each release carries the signed APK.
 
+## 0.2.4 — 2026-10-21
+
+- The row of periods no longer slides back to the start when you tap one at its end.
+
 ## 0.2.3 — 2026-10-21
 
 - After an update, Open in the installer no longer starts a second Daftarche beside the old
