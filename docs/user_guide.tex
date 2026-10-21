@@ -216,6 +216,19 @@ for \texttt{ALI} does not catch \texttt{NATALIE}. When several rules match, the 
 A rule can also set only the merchant and leave the category to you, which is useful for a shop
 where you buy many different things.
 
+Every rule belongs to a merchant. To see or change them, open \menu{Edit \then Manage…} and the
+\textbf{Merchants} tab: choose a shop on the left, and its rules are on the right. Each line shows the
+bank's words it looks for, and what it sets (a category, or \emph{you choose}: the transaction waits
+in To Review). \button{+} adds a rule: pick the merchant, the type and, if the words say enough, the
+category; as you type the words, the window says how many of your transactions they match. Rules
+that have no merchant yet are under \textbf{(no merchant)} at the bottom: select them and give them
+one with the shop button.
+
+\begin{tip}[E-transfers to people]
+A \emph{Transfer} rule works on e-transfers: \texttt{ALI} with the merchant \emph{Ali} and the category
+\emph{Loans} puts every e-transfer to or from Ali straight into the Loans window.
+\end{tip}
+
 \subsection{Tags and notes}
 \textbf{Tags} are labels that cut across categories, such as \emph{“Vacation 2026”} or \emph{“Work expense”}:
 right-click and choose \menu{Add Tags}, type a new tag and press Enter to create it. A
@@ -329,11 +342,14 @@ In the Loans window, \button{Starting Balance…} sets what was owed before your
 \begin{itemize}
   \item \textbf{Accounts}: rename an account, give it a colour, hide it from the Dashboard, or mark it
         inactive once it is closed.
-  \item \textbf{Categories \& Rules}: rename, move or merge categories and edit their rules. Renaming a
-        category to a name that already exists merges the two. The smiley button gives a category
-        an icon (an emoji), and \button{Suggest Icons…} proposes icons for all of them at once.
-  \item \textbf{Merchants}: every shop and person, with how much you spent there. Rename or merge them,
-        or give a merchant a category for all its transactions at once.
+  \item \textbf{Categories}: rename, move or merge categories. Renaming a category to a name that
+        already exists merges the two. The smiley button gives a category an icon (an emoji), and
+        \button{Suggest Icons…} proposes icons for all of them at once. On the right, the merchants
+        whose money goes there; double-click one to see its rules, or its numbers to see those
+        transactions.
+  \item \textbf{Merchants}: every shop and person, with how much you spent there, and the rules that
+        recognise each one. Rename or merge them, edit their rules, or give a merchant a category
+        for all its transactions at once.
   \item \textbf{Tags}: add, rename or delete tags.
 \end{itemize}
 

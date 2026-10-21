@@ -20,7 +20,10 @@ from daftarche.widgets import (
     amount_color_key, money, EditableTableView, ReadOnlyCopyDelegate, SingleSelectCombo,
 )
 from daftarche.db import (
+    CAT_EXTERNAL_TRANSFER,
+    CAT_INTERNAL_TRANSFER,
     MONTHS_ORDER,
+    SUB_UNMATCHED,
     TRANSFER_MATCHED,
     TRANSFER_UNMATCHED,
     UNCATEGORIZED_CAT,
@@ -843,8 +846,9 @@ class ImportTab(QWidget):
                 if ext_mapping and ext_mapping["subcategory_id"]:
                     r["type"] = "Transfer"
                     r["is_transfer"] = True
-                    r["category"] = transfer_cat_external
-                    r["subcategory"] = transfer_sub_unmatched_ext
+                    r["merchant"] = ext_mapping["merchant"]  # the person
+                    r["category"], r["subcategory"] = self._transfer_rule_category(
+                        ext_mapping, transfer_cat_external, transfer_sub_unmatched_ext)
                     fitid_t = r.get("fitid")
                     r["_status"] = "⏭️ Duplicate" if self._is_dup(fitid_t) else "🆕 New"
                     continue
@@ -881,6 +885,17 @@ class ImportTab(QWidget):
         self.model.set_rows(self.parsed_rows)
         self._apply_new_filter(self.chk_new_only.isChecked())
         self._update_status_bar()
+
+    def _transfer_rule_category(self, rule, external, external_unmatched):
+        """Where a Transfer rule sends an e-transfer: its own Transfer category (Transfer › Loans:
+        money lent or paid back), else External Transfer, unmatched until matched."""
+        cat = self.db.get_category_by_id(rule["category_id"]) if rule["category_id"] else None
+        sub = self.db.get_subcategory_by_id(rule["subcategory_id"]) if rule["subcategory_id"] else None
+        transfer_id = self.db.get_type_id("Transfer")
+        if (cat and sub and sub["category_id"] == cat["id"] and cat["type_id"] == transfer_id
+                and cat["name"] not in (CAT_INTERNAL_TRANSFER, CAT_EXTERNAL_TRANSFER)):
+            return cat, sub
+        return external, external_unmatched
 
     def _update_status_bar(self):
         rows = self.parsed_rows
@@ -1101,9 +1116,28 @@ class ImportTab(QWidget):
         account = self._current_account
         uncat_cat_id, uncat_sub_id = self.db.get_uncategorized_ids()
 
+        transfer_ext = self.db.get_category_by_name(CAT_EXTERNAL_TRANSFER)
+        transfer_unmatched = self.db.get_subcategory_by_name(SUB_UNMATCHED, transfer_ext["id"]) if transfer_ext else None
         updated = 0
         for i, r in enumerate(self.parsed_rows):
-            if r.get("is_transfer") or r.get("_manual"):
+            if r.get("_manual"):
+                continue
+            internal = r.get("category") and r["category"]["name"] == CAT_INTERNAL_TRANSFER
+            if r.get("is_etransfer") and not internal:  # as when parsing: a Transfer rule makes it a transfer, to its person
+                rule = self.db.lookup_mapping(type_name="Transfer", account_name=account,
+                                              name=(r.get("name") or r.get("description") or None),
+                                              memorandum=(r.get("memorandum") or r.get("memo") or None))
+                if rule and rule["subcategory_id"]:
+                    before = (r["type"], r.get("merchant"), r.get("category"), r.get("subcategory"))
+                    r["type"], r["is_transfer"], r["amount"] = "Transfer", True, abs(r["amount"])
+                    r["merchant"] = rule["merchant"] or r.get("merchant")
+                    r["category"], r["subcategory"] = self._transfer_rule_category(rule, transfer_ext,
+                                                                                   transfer_unmatched)
+                    if (r["type"], r.get("merchant"), r.get("category"), r.get("subcategory")) != before:
+                        self._refresh_status_for_row(i)
+                        updated += 1
+                    continue
+            if r.get("is_transfer"):
                 continue
             sub = r.get("subcategory")
             if sub and sub["id"] != uncat_sub_id:

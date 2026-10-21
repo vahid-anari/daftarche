@@ -1,4 +1,4 @@
-"""0.20.1: Manage → Merchants, the "(merchant only)" rules, typing a new tag."""
+"""0.20.1: Manage → Merchants, the rules that only set the merchant, typing a new tag."""
 
 from unittest import mock
 
@@ -50,27 +50,22 @@ def test_set_category_for_rules_and_uncategorized_only(db, shops):
     assert db.lookup_mapping("Expense", "Card", "WALMART")["category_id"] == shops
 
 
-def test_merchants_tab_and_merchant_only_line(qapp, db, shops):
-    from daftarche.tabs.manage import ManageDialog
+def test_merchants_tab_lists_merchants_and_their_rules(qapp, db, shops):
+    from daftarche.tabs.manage import YOU_CHOOSE, ManageDialog
     shown = []
     dlg = keep(ManageDialog(db, lambda: None, show_merchant=shown.append))
     panel = dlg.merchants_panel
     names = [panel.table.item(r, 0).text() for r in range(panel.table.rowCount())]
     assert names == ["Walmart", "walmart.ca"]
-    assert panel.table.item(0, panel.COL_CAT).text() == "(merchant only)"
     panel.table.selectRow(0)
     panel.open_transactions()
     assert shown == ["Walmart"]
-    cats = dlg.cats_panel
+    assert panel.rules.rowCount() == 1
+    assert [panel.rules.item(0, c).text() for c in range(4)] == ["WALMART", YOU_CHOOSE, "Expense", "All"]
+    cats = dlg.cats_panel  # no "(merchant only)" line any more: those rules live under their merchant
     expense_row = next(r for r in range(cats.type_table.rowCount()) if cats.type_table.item(r, 0).text() == "Expense")
     cats.type_table.selectRow(expense_row)
-    assert cats.cat_table.item(0, 0).text() == "(merchant only)" and cats.cat_table.item(0, 2).text() == "1"
-    cats.cat_table.selectRow(0)
-    cats.sub_table.selectRow(0)
-    assert [cats.map_table.item(r, 3).text() for r in range(cats.map_table.rowCount())] == ["Walmart"]
-    with mock.patch("daftarche.tabs.manage.QMessageBox") as box:
-        cats._delete_cat()  # not a category to delete
-    assert box.information.called and db.get_category_by_name("Uncategorized")
+    assert "(merchant only)" not in [cats.cat_table.item(r, 0).text() for r in range(cats.cat_table.rowCount())]
 
 
 def test_window_shows_a_merchant_and_goes_back_to_manage(qapp, db, shops, monkeypatch, tmp_path):

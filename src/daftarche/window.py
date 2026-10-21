@@ -142,12 +142,18 @@ class MainWindow(QMainWindow):
         self.transactions_tab.show_matching(came_from=came_from, **filters)
 
     def _show_merchant(self, merchant):
-        """Manage → Merchants: that merchant's transactions; Back brings Manage to the front."""
+        """Manage → Merchants: that merchant's transactions ("": those with none)."""
+        text = f"<b>{html.escape(merchant)}</b>: all its transactions" if merchant else \
+            "Transactions with <b>no merchant</b>"
+        self._show_from_manage(text, "merchants", merchants=[merchant])
+
+    def _show_from_manage(self, text, panel, **filters):
+        """Transactions from a Manage tab (``panel``: "merchants", "cats"); Back brings Manage,
+        on that tab, to the front."""
         def back():
             self._open_manage()
-            self._manage_dlg.tabs.setCurrentWidget(self._manage_dlg.merchants_panel)
-        self._show_transactions(came_from=("Manage", back), merchants=[merchant],
-                                text=f"<b>{html.escape(merchant)}</b>: all its transactions")
+            self._manage_dlg.tabs.setCurrentWidget(getattr(self._manage_dlg, f"{panel}_panel"))
+        self._show_transactions(came_from=("Manage", back), text=text, **filters)
 
     def open_loans(self):
         """View → Loans: a window, like Manage; double-clicking a person shows their loan rows."""
@@ -346,7 +352,8 @@ class MainWindow(QMainWindow):
             self._manage_dlg.raise_()
             self._manage_dlg.activateWindow()
             return
-        self._manage_dlg = ManageDialog(self.db, self._refresh_all, self, show_merchant=self._show_merchant)
+        self._manage_dlg = ManageDialog(self.db, self._refresh_all, self, show_merchant=self._show_merchant,
+                                        show_transactions=self._show_from_manage)
         self._manage_dlg.finished.connect(lambda: setattr(self, "_manage_dlg", None))
         self._manage_dlg.show()
 
