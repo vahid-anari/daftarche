@@ -8,6 +8,16 @@ The app never changes your data and does no bookkeeping of its own: balances and
 loans come ready-made from the Mac, and the tests check that its sums match
 Daftarche's own.
 
+<img src="https://raw.githubusercontent.com/vahid-anari/daftarche/main/docs/figures/phone_dashboard.png" width="200" alt="Dashboard: total balance, accounts, this month's numbers">
+<img src="https://raw.githubusercontent.com/vahid-anari/daftarche/main/docs/figures/phone_donut.png" width="200" alt="Dashboard: this month's expense by category as a donut">
+<img src="https://raw.githubusercontent.com/vahid-anari/daftarche/main/docs/figures/phone_transactions.png" width="200" alt="Transactions of this month">
+
+<img src="https://raw.githubusercontent.com/vahid-anari/daftarche/main/docs/figures/phone_transaction.png" width="200" alt="One transaction opened">
+<img src="https://raw.githubusercontent.com/vahid-anari/daftarche/main/docs/figures/phone_charts.png" width="200" alt="Charts: monthly expense by category">
+<img src="https://raw.githubusercontent.com/vahid-anari/daftarche/main/docs/figures/phone_accounts.png" width="200" alt="Accounts: balance by month">
+
+The screenshots show invented data (`tools/make_demo_db.py`).
+
 ## Installing it on an Android phone
 
 1. On the phone, open the repository's
