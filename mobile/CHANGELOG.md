@@ -2,6 +2,18 @@
 
 Released with tags `phone-vX.Y.Z`; each release carries the signed APK.
 
+## 0.2.1 — 2026-10-21
+
+- Charts follows the period: for one month (This Month, Last Month) a donut shows how it
+  divides between categories, with the month's total in the middle; for several months,
+  the stacked bars as before.
+- Tap a month's bar to see that month's categories below (the other months dim); tap it
+  again, or the month's ✕, for the whole period. Show transactions from there shows that
+  month, and Back returns to it.
+- With a few months the bars share the card's width, wider and easier to tap, instead of
+  sitting at the left; with many, they scroll sideways and open at the newest month. The
+  Dashboard's Income vs Expense bars too.
+
 ## 0.2.0 — 2026-10-21
 
 - Android's Back goes back one step instead of leaving the app: it closes an open sheet,

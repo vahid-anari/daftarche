@@ -1,4 +1,4 @@
-"""Small charts drawn with plain Flet controls and a canvas: bars and lines.
+"""Small charts drawn with plain Flet controls and a canvas: bars, a donut and lines.
 
 Plain controls keep the app free of chart packages (and of their build steps); these charts
 only need to be clear on a phone, not interactive.
@@ -36,11 +36,20 @@ def short_money(value):
     return f"{sign}${a:.0f}"
 
 
-def bar_chart(p, labels, groups, height=170, bar_width=10, gap=3, stacked=False):
+SPREAD = 8
+"""Up to this many months, the bars share the card's width out; more scroll sideways."""
+
+
+def bar_chart(p, labels, groups, height=170, bar_width=10, gap=3, stacked=False, selected=None, on_tap=None):
     """Bars over months.
 
     ``groups``: ``[(colour, [value per label])]``, side by side, or one on top of the other
     with ``stacked``. Negative values (money back) are drawn as 0.
+
+    Up to ``SPREAD`` months each get an equal share of the width, their bar in the middle of
+    it (wider when there are few); more months keep narrow bars in a row that scrolls
+    sideways and opens at the newest. ``on_tap(index)``: a month was tapped; ``selected``: the
+    index of the month to show at full colour (the others are dimmed).
     """
     n = len(labels)
     if n == 0:
@@ -48,6 +57,9 @@ def bar_chart(p, labels, groups, height=170, bar_width=10, gap=3, stacked=False)
     totals = ([sum(max(v[i], 0) for _, v in groups) for i in range(n)] if stacked
               else [max((max(v[i], 0) for _, v in groups), default=0) for i in range(n)])
     top = nice_max(max(totals, default=0))
+    spread = n <= SPREAD
+    if spread:  # a few months: wider bars, easier to read and to tap
+        bar_width = round(bar_width * (1.6 if n <= 4 else 1.25))
 
     columns = []
     for i, label in enumerate(labels):
@@ -59,15 +71,51 @@ def bar_chart(p, labels, groups, height=170, bar_width=10, gap=3, stacked=False)
             bar = ft.Row([ft.Container(width=bar_width, height=max(v[i], 0) / top * height, bgcolor=c,
                                        border_radius=ft.BorderRadius.only(top_left=3, top_right=3))
                           for c, v in groups],
-                         spacing=gap, vertical_alignment=ft.CrossAxisAlignment.END, height=height)
-        columns.append(ft.Column([bar, ft.Text(label, size=10, color=p.dim)], spacing=4,
-                                 horizontal_alignment=ft.CrossAxisAlignment.CENTER))
+                         spacing=gap, vertical_alignment=ft.CrossAxisAlignment.END, height=height, tight=True)
+        chosen = selected == i
+        column = ft.Container(
+            ft.Column([bar, ft.Text(label, size=10, color=p.text if chosen else p.dim,
+                                    weight=ft.FontWeight.BOLD if chosen else None)],
+                      spacing=4, horizontal_alignment=ft.CrossAxisAlignment.CENTER, tight=True),
+            opacity=0.35 if selected is not None and not chosen else 1.0,
+            on_click=(lambda e, i=i: on_tap(i)) if on_tap else None,
+            alignment=ft.Alignment.BOTTOM_CENTER, expand=1 if spread else None,
+            padding=ft.Padding.symmetric(horizontal=0 if spread else 5))
+        columns.append(column)
     axis = ft.Column([ft.Text(short_money(top * f), size=10, color=p.dim) for f in (1, 0.5, 0)],
                      alignment=ft.MainAxisAlignment.SPACE_BETWEEN, height=height,
                      horizontal_alignment=ft.CrossAxisAlignment.END)
-    bars = ft.Row(columns, spacing=10, scroll=ft.ScrollMode.AUTO, vertical_alignment=ft.CrossAxisAlignment.END)
+    if spread:
+        bars = ft.Row(columns, spacing=0, vertical_alignment=ft.CrossAxisAlignment.END)
+    else:  # newest on the right, and shown first: the list runs from the right
+        bars = ft.ListView(list(reversed(columns)), horizontal=True, reverse=True, spacing=0,
+                           height=height + 20)
     return ft.Row([ft.Column([axis, ft.Container(height=16)], spacing=0), ft.Container(bars, expand=True)],
                   vertical_alignment=ft.CrossAxisAlignment.START, spacing=8)
+
+
+def donut(p, slices, middle, caption, size=200, ring=30):
+    """A ring of ``slices`` ``[(colour, value)]`` (only values above 0), ``middle`` and
+    ``caption`` written inside it: one month's share by category."""
+    shown = [(c, v) for c, v in slices if v > 0]
+    whole = sum(v for _, v in shown)
+    if not shown or whole <= 0:
+        return ft.Text("Nothing in this period", color=p.dim, size=13)
+    shapes, angle = [], -math.pi / 2
+    gap = 0.02 if len(shown) > 1 else 0.0  # a hairline between slices
+    inner = size - ring
+    for colour, value in shown:
+        sweep = value / whole * 2 * math.pi
+        shapes.append(cv.Arc(ring / 2, ring / 2, inner, inner, angle + gap / 2, max(sweep - gap, 0.001),
+                             paint=ft.Paint(color=colour, stroke_width=ring, style=ft.PaintingStyle.STROKE)))
+        angle += sweep
+    text = ft.Column([ft.Text(middle, size=19, weight=ft.FontWeight.BOLD, color=p.text),
+                      ft.Text(caption, size=12, color=p.dim)],
+                     spacing=2, tight=True, horizontal_alignment=ft.CrossAxisAlignment.CENTER)
+    ring_view = ft.Stack([ft.Container(cv.Canvas(shapes=shapes, width=size, height=size), width=size, height=size),
+                          ft.Container(text, width=size, height=size, alignment=ft.Alignment.CENTER)],
+                         width=size, height=size)
+    return ft.Row([ring_view], alignment=ft.MainAxisAlignment.CENTER)
 
 
 class LineChart(ft.Container):
@@ -144,4 +192,4 @@ def legend(p, items):
                   wrap=True, spacing=12, run_spacing=4)
 
 
-__all__ = ["bar_chart", "LineChart", "share_bar", "legend", "nice_max", "short_money", "money"]
+__all__ = ["bar_chart", "donut", "LineChart", "share_bar", "legend", "nice_max", "short_money", "money"]
