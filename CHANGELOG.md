@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.28.1 — 2026-10-21
+
+- Settings is in three tabs, Appearance, Backups and Phone, instead of one tall window, and opens
+  on the tab used last. Reset to Defaults shows on Appearance, the only tab it changes; the
+  Backups tab says where the automatic backups are kept.
+
 ## 0.28.0 — 2026-10-21
 
 - The phone connects through your own Google Drive, paired by a QR code, instead of a
