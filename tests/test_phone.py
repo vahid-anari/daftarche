@@ -2,6 +2,7 @@
 Google Drive, sealed, a minute after a change (with a fake Drive)."""
 
 import json
+import threading
 from datetime import datetime, timezone
 
 import pytest
@@ -284,10 +285,14 @@ def test_a_restored_backup_is_sent(sender, db):
     assert not sender.busy
 
 
-def test_disconnect_while_signed_out_says_so(sender):
+def test_disconnect_while_signed_out_says_so(sender, monkeypatch):
+    from daftarche import phone_link
+    revoked = threading.Event()
+    monkeypatch.setattr(phone_link, "sign_out", lambda token: revoked.set())  # never Google itself
     phone, _ = sender.connect_phone("Pixel")
     sender.add_phone(phone)
     sender.sign_out()
+    assert revoked.wait(5)  # the sign-in is forgotten at Google too
     assert "signed out" in sender.disconnect_phone(phone["id"])
     assert phone["file"] in FakeDrive.files  # still there: to delete by hand, as said
 
