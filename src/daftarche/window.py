@@ -10,8 +10,9 @@ from PySide6.QtWidgets import (
     QMessageBox, QFileDialog
 )
 from PySide6.QtCore import QSize, Qt, QTimer, QUrl
-from PySide6.QtGui import QAction, QColor, QDesktopServices, QFont, QKeySequence, QPalette
+from PySide6.QtGui import QAction, QActionGroup, QColor, QDesktopServices, QFont, QKeySequence, QPalette
 from sciwidgets.app.help import AppHelp
+from sciwidgets.style import set_color_scheme
 
 from daftarche.db import Database
 from daftarche.app_info import APP, APP_NAME, APP_VERSION, USER_GUIDE
@@ -42,6 +43,8 @@ class MainWindow(QMainWindow):
         self.viewing = None  # the file shown by Open Database… (a temporary copy of it is open)
         self._view_copy = None
         self.settings = get_settings()
+        system_theme()  # the Mac's own scheme, before the app may set its own
+        self._shown_theme = None
 
         self._auto_backup()
         self._apply_style()
@@ -60,12 +63,19 @@ class MainWindow(QMainWindow):
         self.phone_sender.changed.connect(self._phone_status)
 
         self._refresh_all()
-        # Match macOS: the Mac switching between light and dark (e.g. Auto at sunset) switches too
+        # Same as System: the Mac switching between light and dark (e.g. Auto at sunset) switches too
         QApplication.styleHints().colorSchemeChanged.connect(self._system_theme_changed)
 
     def _system_theme_changed(self, *_):
-        if self.settings.theme() == "system":
+        if self.settings.theme() == "system" and self.settings.active_theme() != self._shown_theme:
             self._restyle()
+
+    def set_theme(self, theme):
+        """View → Appearance: the same setting as Settings › Theme."""
+        if theme not in THEME_NAMES:
+            return
+        self.settings.set("theme", theme)
+        self._restyle()
 
     def _restyle(self):
         """New colours: the style, then every tab (the one on screen now, the others when shown)."""
@@ -114,6 +124,16 @@ class MainWindow(QMainWindow):
         review.setShortcuts([QKeySequence("Ctrl+Shift+R"), QKeySequence("Ctrl+Alt+U")])
         add(view_menu, "Unmatched Transfers…", self.show_unmatched_transfers, QKeySequence("Ctrl+Shift+U"))
         add(view_menu, "Loans…", self.open_loans, QKeySequence("Ctrl+Shift+L"))
+        view_menu.addSeparator()
+        appearance = view_menu.addMenu("Appearance")
+        self.appearance_actions = {}
+        group = QActionGroup(self)
+        for theme in ("system", "light", "dark"):
+            action = add(appearance, THEME_NAMES[theme], lambda t=theme: self.set_theme(t))
+            action.setCheckable(True)
+            group.addAction(action)
+            self.appearance_actions[theme] = action
+        self._show_theme_choice()
         view_menu.addSeparator()
         add(view_menu, "Refresh", self._refresh_now, QKeySequence("Ctrl+R"))
 
@@ -274,7 +294,17 @@ class MainWindow(QMainWindow):
         old_tabs.deleteLater()
 
     # ── Styling ───────────────────────────────────────────────────────────────
+    def _show_theme_choice(self):
+        """Check the chosen theme under View → Appearance."""
+        for theme, action in getattr(self, "appearance_actions", {}).items():
+            action.setChecked(theme == self.settings.theme())
+
     def _apply_style(self):
+        # Qt and the sciwidgets parts are told the theme too: the title bar, native dialogs and
+        # whatever the style sheet does not cover are then dark or light with the rest
+        set_color_scheme(QApplication.instance(), self.settings.theme())
+        self._shown_theme = self.settings.active_theme()
+        self._show_theme_choice()
         self.setStyleSheet(build_stylesheet(self.settings))
 
         font_family = self.settings.get("font_family")

@@ -1,4 +1,4 @@
-"""0.23: Dark, Light and Match macOS themes, each with its own colour changes."""
+"""0.23: Dark, Light and Same as System themes, each with its own colour changes; 0.29: Qt is told the theme."""
 
 import json
 from unittest import mock
@@ -46,7 +46,7 @@ def test_a_colour_change_belongs_to_the_theme_on_screen(settings):
     assert Settings().theme_colors("light")["income"] == "#00aa00"  # kept in the file
 
 
-def test_match_macos_follows_the_system(settings):
+def test_same_as_system_follows_the_system(settings):
     from daftarche.style import DARK_COLORS, LIGHT_COLORS
     Settings, _ = settings
     s = Settings()
@@ -77,7 +77,7 @@ def test_settings_window_switches_and_resets_a_theme(qapp, settings):
     assert s.get("accent") == LIGHT_COLORS["accent"]
 
 
-def test_the_window_follows_the_mac_only_on_match_macos(qapp, settings, tmp_path, monkeypatch):
+def test_the_window_follows_the_mac_only_on_same_as_system(qapp, settings, tmp_path, monkeypatch):
     from daftarche import window as W
     Settings, _ = settings
     monkeypatch.setattr(W, "DB_PATH", tmp_path / "w.db")
@@ -88,8 +88,62 @@ def test_the_window_follows_the_mac_only_on_match_macos(qapp, settings, tmp_path
         w._system_theme_changed()
         assert not restyle.called  # Dark: stays dark
         w.settings.set("theme", "system")
+        w._shown_theme = None  # the Mac changed while the dark theme was shown
         w._system_theme_changed()
         assert restyle.called
     w.settings.set("theme", "light")
     w._restyle()  # every tab is redrawn with the new colours, nothing breaks
     assert w.styleSheet()
+
+
+@pytest.fixture
+def window(qapp, settings, tmp_path, monkeypatch):
+    from sciwidgets.style import set_color_scheme
+    from daftarche import window as W
+    Settings, _ = settings
+    monkeypatch.setattr(W, "DB_PATH", tmp_path / "w.db")
+    monkeypatch.setattr(W, "get_settings", Settings)
+    with mock.patch.object(W, "startup_backup"):
+        w = keep(W.MainWindow())
+    yield w
+    set_color_scheme(qapp, "system")
+
+
+def test_qt_is_told_the_theme(qapp, window):
+    from sciwidgets.style import color_scheme, is_dark
+    window.set_theme("dark")
+    assert color_scheme() == "dark" and is_dark()  # title bar, dialogs and sciwidgets parts dark too
+    window.set_theme("light")
+    assert color_scheme() == "light" and not is_dark()
+    window.set_theme("system")
+    assert color_scheme() == "system"
+
+
+def test_the_accent_highlight_stays_after_a_switch(qapp, window):
+    from PySide6.QtGui import QColor, QPalette
+    window.set_theme("light")
+    accent = QColor(window.settings.get("accent"))
+    highlight = qapp.palette().color(QPalette.Highlight)
+    assert (highlight.red(), highlight.green(), highlight.blue()) == (accent.red(), accent.green(), accent.blue())
+
+
+def test_view_appearance_menu(qapp, window):
+    from daftarche.style import THEME_NAMES
+    view = next(a.menu() for a in window.menuBar().actions() if a.text() == "View")
+    appearance = next(a.menu() for a in view.actions() if a.text() == "Appearance")
+    assert [a.text() for a in appearance.actions()] == ["Same as System", "Light", "Dark"]
+    assert THEME_NAMES["system"] == "Same as System"
+    window.appearance_actions["light"].trigger()
+    assert window.settings.theme() == "light"
+    assert [a.isChecked() for a in appearance.actions()] == [False, True, False]
+    window.settings.set("theme", "dark")  # as Settings › Theme does, then the window restyles
+    window._restyle()
+    assert [a.isChecked() for a in appearance.actions()] == [False, False, True]
+
+
+def test_the_macs_scheme_is_remembered_while_the_app_sets_its_own(qapp, window):
+    from daftarche import style
+    window.set_theme("system")
+    mac = style.system_theme()
+    window.set_theme("dark" if mac == "light" else "light")  # Qt now reports the app's choice
+    assert style.system_theme() == mac

@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.29.0 — 2026-10-23
+
+- The whole window follows the theme: in Dark on a Mac set to Light, the title bar, the system's
+  dialogs and the parts outside Daftarche's own colours were light; they are now dark too (and
+  light in Light). The Help windows (About, updates) follow it as well.
+- View → Appearance switches the theme from the menu: Same as System, Light or Dark, the same
+  setting as Settings › Theme.
+- "Match macOS" is now called "Same as System", as in the author's other apps; a saved choice is
+  kept.
+- `tools/figures.py` retakes the pictures and the animation of the docs from a new demo database
+  (sciwidgets.devtools); the README shows the animation.
+- Needs sciwidgets 0.14.3.
+
 ## 0.28.1 — 2026-10-21
 
 - Settings is in three tabs, Appearance, Backups and Phone, instead of one tall window, and opens

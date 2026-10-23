@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "daftarche"
-version = "0.28.1"
+version = "0.29.0"
 description = "Daftarche: personal bookkeeping for bank transactions imported from QFX and Excel statements"
 readme = "README.md"
 license = "MIT"
@@ -30,12 +30,12 @@ dependencies = [
     "PySide6>=6.6",
     "pandas>=2.0",
     "openpyxl>=3.1",
-    "sciwidgets~=0.12.2",
+    "sciwidgets~=0.14.3",
     "segno>=1.5",  # the QR code that connects a phone
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=7", "ruff", "build", "twine"]
+dev = ["pytest>=7", "ruff", "build", "twine", "pyobjc-framework-Quartz; sys_platform == 'darwin'"]
 icon = ["Pillow", "numpy"]
 
 [project.scripts]

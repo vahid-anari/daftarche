@@ -45,26 +45,40 @@ LIGHT_COLORS: dict = {
     "danger": "#c0392b",
 }
 THEMES = {"dark": DARK_COLORS, "light": LIGHT_COLORS}
-THEME_NAMES = {"dark": "Dark", "light": "Light", "system": "Match macOS"}
+THEME_NAMES = {"dark": "Dark", "light": "Light", "system": "Same as System"}
 COLOR_KEYS = tuple(DARK_COLORS)
 
 DEFAULTS: dict = {
     "font_family": "Helvetica Neue",
     "font_size": 14,
     "splash_seconds": 3.5,   # how long the splash stays at least; 0 = no splash
-    "theme": "dark",         # dark, light, or system (follows the Mac's Appearance)
+    "theme": "dark",         # dark, light, or system (follows the system's appearance)
     **DARK_COLORS,           # the colours as they were before themes (old settings files)
 }
 
 
+_platform_theme = None  # the system's own scheme, last seen while the app followed it
+
+
 def system_theme() -> str:
-    """"light" or "dark", as the Mac (or the system) shows windows now; "dark" when unknown."""
+    """"light" or "dark", as the Mac (or the system) shows windows now; "dark" when unknown.
+
+    While the app is set to Dark or Light, Qt reports that choice instead of the Mac's
+    (sciwidgets.style.set_color_scheme), so the Mac's scheme as last seen is given then.
+    """
+    global _platform_theme
     try:
         from PySide6.QtCore import Qt
         from PySide6.QtGui import QGuiApplication
+        from sciwidgets.style import color_scheme
         if QGuiApplication.instance() is None:
             return "dark"
-        return "light" if QGuiApplication.styleHints().colorScheme() == Qt.ColorScheme.Light else "dark"
+        if color_scheme() != "system" and _platform_theme is not None:
+            return _platform_theme
+        theme = "light" if QGuiApplication.styleHints().colorScheme() == Qt.ColorScheme.Light else "dark"
+        if color_scheme() == "system":
+            _platform_theme = theme
+        return theme
     except (ImportError, AttributeError):
         return "dark"
 

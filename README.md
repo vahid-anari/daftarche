@@ -17,6 +17,8 @@ tested with CIBC's QFX downloads; other banks' QFX/OFX files use the same format
 
 <img src="https://raw.githubusercontent.com/vahid-anari/daftarche/main/docs/figures/dashboard.png" width="700" alt="Daftarche dashboard: account balances, income and expense per month, expenses by category">
 
+![Daftarche in use: the four tabs, Groceries in the charts, and a switch to the light theme](https://raw.githubusercontent.com/vahid-anari/daftarche/main/docs/figures/tour.gif)
+
 The screenshots show invented data (`tools/make_demo_db.py`).
 
 ## Installation
@@ -65,7 +67,8 @@ merchant and category. Edit what is left in the preview, then Import New; the
 new rows then show in Transactions, and those still without a category wait in
 To review (⇧⌘R). Match Transfers in the Transactions tab pairs the two sides of
 a transfer between your accounts. Edit → Manage… (⇧⌘M) edits the types, accounts,
-categories and tags; Edit → Settings… (⌘,) changes the font, colours and theme.
+categories and tags; Edit → Settings… (⌘,) changes the font, colours and theme, and
+View → Appearance switches between Same as System, Light and Dark.
 View → To Review (⇧⌘R) and View → Unmatched Transfers… (⇧⌘U) show what is
 still left to sort, all time; double-click a line to see those transactions.
 
@@ -133,6 +136,9 @@ folder. `python tools/make_icon.py` redraws the icon and the splash image.
 `python tools/make_demo_db.py` makes a demo database with a year of invented transactions in
 its own folder (default `~/Desktop/daftarche-demo`), for screenshots or trying the app without
 your own data: `DAFTARCHE_HOME=~/Desktop/daftarche-demo daftarche`.
+`python tools/figures.py` retakes the pictures and the animation in `docs/figures/` from a
+new demo database (`--list` for the names); on macOS with the title bar and shadow, which
+needs Screen Recording permission for the terminal.
 
 Two one-off tools fill in notes for past online purchases: `python tools/export_shop_charges.py`
 writes the Amazon and AliExpress transactions (only those, and only the columns needed) to
