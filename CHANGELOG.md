@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.29.1 — 2026-10-24
+
+- Built on sciwidgets 0.15.4 (was 0.14.3), the same version as the author's other apps, so they
+  can be installed side by side. With it, Check for Updates also works with Python from
+  python.org on macOS before its "Install Certificates" step has been run.
+- The tests no longer ask Google to forget the sign-in when they sign out (this crashed them on
+  Python 3.14).
+
 ## 0.29.0 — 2026-10-23
 
 - The whole window follows the theme: in Dark on a Mac set to Light, the title bar, the system's
