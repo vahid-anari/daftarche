@@ -19,7 +19,7 @@ def _fresh_settings():
     from daftarche.style import get_settings
     from daftarche.tabs.manage import FILLED_KEY, GEOMETRY_KEY
     from daftarche.tx_list import SHOW_KEY
-    keys = (SHOW_KEY, FILLED_KEY, GEOMETRY_KEY)
+    keys = (SHOW_KEY, FILLED_KEY, GEOMETRY_KEY, "transactions_columns", "transactions_column_order")
     s = get_settings()
     before = {k: s._data.get(k) for k in keys}
     for k in keys:
@@ -172,3 +172,34 @@ def test_merchants_tab_shows_a_merchants_transactions(qapp, db, food):
     assert panel == "merchants" and filters["types"] == ["Income"] and filters["from_day"] == "2026-05-20"
     m.select("")
     assert m.lines.title.text().startswith("(no merchant) — 1 transaction ")
+
+
+# ── 0.31.1: the columns of Transactions, and the lists as wide as their text ──
+def test_the_columns_are_those_of_transactions(qapp, db, food):
+    from daftarche.style import get_settings
+    db.add_tag("Party")
+    tag_id = db.conn.execute("SELECT id FROM tags WHERE name = 'Party'").fetchone()[0]
+    sunrise = db.conn.execute("SELECT id FROM transactions WHERE name = 'SUNRISE 1'").fetchone()[0]
+    db.set_tags_for_transaction(sunrise, [tag_id])
+    assert next(x for x in db.get_lines(food["cat"]) if x["name"] == "SUNRISE 1")["tags"] == "Party"
+    s = get_settings()
+    s._data["transactions_columns"] = {"memo": False, "fitid": False}
+    s._data["transactions_column_order"] = ["amount", "date", "name", "tags", "merchant", "type", "category",
+                                            "subcategory", "account", "memo", "note", "fitid"]
+    dlg, p, _ = panel_on(db)
+    assert p.lines.columns == ["amount", "date", "name", "tags", "merchant", "subcategory", "account", "note"]
+    assert dlg.merchants_panel.lines.columns == ["amount", "date", "name", "tags", "type", "category",
+                                                 "subcategory", "account", "note"]  # the merchant left out
+    names = [p.lines.table.item(r, 2).text() for r in range(p.lines.table.rowCount())]
+    row = names.index("SUNRISE 1")
+    assert p.lines.table.item(row, 3).text() == "Party"
+    s._data["transactions_columns"] = {"memo": False, "fitid": False, "note": False}  # changed in Transactions
+    p.refresh()
+    assert "note" not in p.lines.columns
+
+
+def test_the_merchants_are_only_as_wide_as_their_text(qapp, db, food):
+    from PySide6.QtWidgets import QSizePolicy
+    dlg, p, _ = panel_on(db)
+    assert p.merchant_table.sizePolicy().horizontalPolicy() == QSizePolicy.Maximum
+    assert dlg.merchants_panel.rules.sizePolicy().horizontalPolicy() == QSizePolicy.Maximum

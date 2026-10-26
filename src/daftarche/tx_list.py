@@ -46,16 +46,32 @@ class _SortItem(QTableWidgetItem):
         return super().__lt__(other)
 
 
+def transactions_columns():
+    """The columns Transactions shows, in its order (its Columns button), as keys of db.get_lines
+    lines: the lists in Manage show the same."""
+    from daftarche.tabs.transactions import column_settings
+    s = get_settings()
+    saved, order = s.get("transactions_columns"), s.get("transactions_column_order")
+    visible, order = column_settings(saved if isinstance(saved, dict) else None,
+                                     order if isinstance(order, list) else None)
+    return [k for k in order if visible.get(k)]
+
+
 class TransactionList(QWidget):
-    """``columns``: some of "date", "account", "merchant", "category", "subcategory", "amount".
+    """``columns``: keys such as "date", "account", "amount" (None: as Transactions shows them);
+    ``leave_out``: columns never needed here (the merchant, under one merchant's rules).
     ``open_line(line)``: what a double-click does. Fill it with ``set_lines(lines, title)``."""
 
-    COLUMN_TITLES = {"date": "Date", "account": "Account", "merchant": "Merchant", "category": "Category",
-                     "subcategory": "Sub-Category", "amount": "Amount"}
+    COLUMN_TITLES = {"date": "Date", "type": "Type", "account": "Account", "amount": "Amount",
+                     "merchant": "Merchant", "category": "Category", "subcategory": "Sub-Category",
+                     "tags": "Tags", "name": "Name", "memo": "Memorandum", "fitid": "FITID", "note": "Note"}
+    FIELDS = {"memo": "memorandum"}  # column key → its name in a line
 
-    def __init__(self, columns=("date", "merchant", "subcategory", "amount"), open_line=None, parent=None):
+    def __init__(self, columns=None, open_line=None, leave_out=(), parent=None):
         super().__init__(parent)
-        self.columns = list(columns)
+        self._fixed_columns = list(columns) if columns else None
+        self.leave_out = set(leave_out)
+        self.columns = []
         self.open_line = open_line
         self.lines = []
         layout = QVBoxLayout(self)
@@ -74,33 +90,42 @@ class TransactionList(QWidget):
         head.addWidget(self.btn_all)
         layout.addLayout(head)
 
-        self.table = QTableWidget(0, len(self.columns))
-        self.table.setHorizontalHeaderLabels([self.COLUMN_TITLES[c] for c in self.columns])
+        self.table = QTableWidget(0, 0)
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setAlternatingRowColors(True)
+        self.table.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
+        self.table.horizontalHeader().setStretchLastSection(True)
         self.table.cellDoubleClicked.connect(self._double_clicked)
         layout.addWidget(self.table, 1)
-        hint = QLabel("Double-click a transaction to open it in Transactions; "
-                      + ("the bank's text shows" if "account" in self.columns else "the account and the bank's "
-                         "text show") + " when you hold the pointer over it.")
+        hint = QLabel("Double-click a transaction to open it in Transactions; hold the pointer over it for its "
+                      "account and the bank's text. The columns are those Transactions shows (its Columns button).")
         hint.setProperty("class", "dim-label")
         hint.setWordWrap(True)
         layout.addWidget(hint)
+        self._set_columns()
+
+    def _set_columns(self):
+        """The columns to show now (Transactions' may have changed since)."""
+        columns = [c for c in (self._fixed_columns or transactions_columns())
+                   if c in self.COLUMN_TITLES and c not in self.leave_out]
+        if columns != self.columns:
+            self.columns = columns
+            self.table.setColumnCount(len(columns))
+            self.table.setHorizontalHeaderLabels([self.COLUMN_TITLES[c] for c in columns])
 
     def set_lines(self, lines, title, hide=(), total=None, total_label=""):
         """Show these lines (from db.get_lines), with ``title`` and their count and total above
         (``total``: another sum, e.g. net spent, named by ``total_label``); ``hide``: columns not
         needed now (the merchant, when they are all one merchant's)."""
+        self._set_columns()
         self.lines = list(lines)
-        shown = [c for c in self.columns if c not in hide]
-        wide = next((c for c in ("merchant", "account", "subcategory", "category") if c in shown), None)
         header = self.table.horizontalHeader()
         for col, c in enumerate(self.columns):
             self.table.setColumnHidden(col, c in hide)
-            header.setSectionResizeMode(col, QHeaderView.Stretch if c == wide else QHeaderView.ResizeToContents)
+            header.setSectionResizeMode(col, QHeaderView.ResizeToContents)
         if total is None:
             total = sum(line["amount"] or 0 for line in self.lines)
         n = len(self.lines)
@@ -125,7 +150,7 @@ class TransactionList(QWidget):
                 elif c == "date":
                     item = _SortItem(line["date"] or "", (line["date"] or "", line["id"], line["part"]))
                 else:
-                    text = line.get(c) or ("—" if c == "subcategory" else "")
+                    text = line.get(self.FIELDS.get(c, c)) or ("—" if c == "subcategory" else "")
                     item = _SortItem(text, text.casefold())
                 item.setData(Qt.UserRole, row)
                 if tip:

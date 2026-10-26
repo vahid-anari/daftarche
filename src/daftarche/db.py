@@ -1847,7 +1847,7 @@ class Database:
         """The transactions of a sub-category (or a whole category) and/or a merchant ("": those
         with none; None: any), all time, newest first, a split one as its part(s) there with their
         own amount: [{id, part, date, type, account, merchant, category, subcategory, amount, name,
-        memorandum, note}]. For the transaction lists in Manage."""
+        memorandum, note, fitid, tags}] (tags: their names, A to Z). For the transaction lists in Manage."""
         where, params = [], []
         if subcategory_id is not None:
             where.append("l.subcategory_id = ?")
@@ -1864,7 +1864,10 @@ class Database:
         rows = self.conn.execute(f"""
             SELECT l.id, l.part, l.date, ty.name AS type, COALESCE(a.name, ta.name) AS account,
                    IFNULL(TRIM(l.merchant), '') AS merchant, c.name AS category, s.name AS subcategory,
-                   l.amount, l.name, l.memorandum, l.note
+                   l.amount, l.name, l.memorandum, l.note, l.fitid,
+                   (SELECT GROUP_CONCAT(tg.name, ', ') FROM (
+                        SELECT g.name FROM transaction_tags tt JOIN tags g ON g.id = tt.tag_id
+                        WHERE tt.transaction_id = l.id ORDER BY g.name COLLATE NOCASE) tg) AS tags
             FROM tx_lines l LEFT JOIN types ty ON ty.id = l.type_id
                  LEFT JOIN accounts a ON a.id = l.account_id
                  LEFT JOIN accounts ta ON ta.id = l.to_account_id

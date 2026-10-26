@@ -534,15 +534,14 @@ class CatsRulesPanel(QWidget):
 
         self.merchant_table, m_col, m_w = self._make_table_col("Merchants", ["Merchant", "Tx", "Total", "Rules"])
         self.merchant_title = m_col.itemAt(0).widget()
-        h = self.merchant_table.horizontalHeader()
-        h.setSectionResizeMode(self.M_NAME, QHeaderView.Stretch)
-        self.merchant_table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.merchant_table.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Expanding)  # as wide as its text
         self.merchant_table.cellDoubleClicked.connect(self._merchant_double_clicked)
         self.merchant_table.itemSelectionChanged.connect(self._update_lines)
         hint = QLabel("Double-click a merchant to see and edit its rules (Merchants tab); double-click its "
                       "numbers to see those transactions. Rules: how many of its rules send money here.")
         hint.setProperty("class", "dim-label")
         hint.setWordWrap(True)
+        hint.setMaximumWidth(420)
         # the column in two rows: the merchants, and (when ticked) the transactions there
         m_col.removeWidget(self.merchant_title)
         m_col.removeWidget(self.merchant_table)
@@ -555,12 +554,13 @@ class CatsRulesPanel(QWidget):
         head.addWidget(self.chk_lines)
         m_col.addLayout(head)
         top = QWidget()
-        top_col = QVBoxLayout(top)
-        top_col.setContentsMargins(0, 0, 0, 0)
-        top_col.setSpacing(6)
-        top_col.addWidget(self.merchant_table, 1)
-        top_col.addWidget(hint)
-        self.lines = TransactionList(open_line=self._open_line)
+        top_row = QHBoxLayout(top)
+        top_row.setContentsMargins(0, 0, 0, 0)
+        top_row.setSpacing(14)
+        top_row.addWidget(self.merchant_table)
+        top_row.addWidget(hint, 0, Qt.AlignTop)
+        top_row.addStretch(1)
+        self.lines = TransactionList(open_line=self._open_line, leave_out=("type", "category"))
         self.lines.btn_all.clicked.connect(self.merchant_table.clearSelection)
         self.split = QSplitter(Qt.Vertical)
         self.split.setChildrenCollapsible(False)
@@ -604,7 +604,7 @@ class CatsRulesPanel(QWidget):
         tbl.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 
         _apply_selection_palette(tbl)
-        col.addWidget(tbl, 1)
+        col.addWidget(tbl, 1, Qt.AlignLeft)  # as wide as its text, even under a wider row of buttons
 
         w = QWidget()
         w.setLayout(col)
@@ -1625,8 +1625,8 @@ class MerchantsPanel(QWidget):
         self.rules.setHorizontalHeaderLabels(["Bank text", "Sets", "Type", "Account"])
         h = self.rules.horizontalHeader()
         h.setSectionResizeMode(QHeaderView.ResizeToContents)
-        h.setSectionResizeMode(self.R_TEXT, QHeaderView.Stretch)
-        h.setSectionResizeMode(self.R_SETS, QHeaderView.Stretch)
+        self.rules.setSizeAdjustPolicy(QAbstractScrollArea.AdjustToContents)
+        self.rules.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Expanding)  # as wide as its text
         self.rules.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.rules.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.rules.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -1634,11 +1634,16 @@ class MerchantsPanel(QWidget):
         self.rules.setAlternatingRowColors(True)
         self.rules.cellDoubleClicked.connect(lambda r, c: self.edit_rule())
         _apply_selection_palette(self.rules)
-        top_col.addWidget(self.rules, 1)
+        rules_row = QHBoxLayout()
+        rules_row.setSpacing(14)
+        rules_row.addWidget(self.rules)
         self.rules_hint = QLabel()
         self.rules_hint.setProperty("class", "dim-label")
         self.rules_hint.setWordWrap(True)
-        top_col.addWidget(self.rules_hint)
+        self.rules_hint.setMaximumWidth(420)
+        rules_row.addWidget(self.rules_hint, 0, Qt.AlignTop)
+        rules_row.addStretch(1)
+        top_col.addLayout(rules_row, 1)
         row, buttons = _icon_buttons([
             ("＋", "Add Rule", self.add_rule),
             ("✏️", "Edit Rule", self.edit_rule),
@@ -1646,8 +1651,7 @@ class MerchantsPanel(QWidget):
             ("🗑️", "Delete Rule", self.delete_rules)])
         self.btn_set_merchant = buttons[2]
         top_col.addLayout(row)
-        self.lines = TransactionList(("date", "account", "category", "subcategory", "amount"),
-                                     open_line=self._open_line)
+        self.lines = TransactionList(open_line=self._open_line, leave_out=("merchant",))
         self.split = QSplitter(Qt.Vertical)
         self.split.setChildrenCollapsible(False)
         self.split.addWidget(top)

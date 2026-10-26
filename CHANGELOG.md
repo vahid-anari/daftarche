@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.31.1 — 2026-10-26
+
+- The transactions in Manage › Categories and Merchants show the same columns as Transactions,
+  in its order (its Columns button), with a scroll bar when they do not fit; a column with one value
+  for all of them there is left out.
+- The lists above them are only as wide as their text, so the transactions get the rest of a big
+  screen; the hints sit beside them. Type, Category and Sub-Category no longer show an empty
+  header beside their columns.
+
 ## 0.31.0 — 2026-10-26
 
 - Manage › Categories and Manage › Merchants can show the transactions themselves: tick **Show
