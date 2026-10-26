@@ -418,17 +418,24 @@ QLineEdit:hover,    QTextEdit:hover    {{ border-color: {dim}; }}
 QLineEdit:focus,    QTextEdit:focus    {{ border-color: {ac}; }}
 QLineEdit:disabled, QTextEdit:disabled {{ color: {dim}; border-color: {bdr}; }}
 
-/* ── QCheckBox ────────────────────────────────────── */
+/* ── QCheckBox, QRadioButton ──────────────────────── */
 
-QCheckBox {{ color: {txt}; spacing: 8px; }}
-QCheckBox::indicator {{
+QCheckBox, QRadioButton {{ color: {txt}; spacing: 8px; }}
+QCheckBox::indicator, QRadioButton::indicator {{
     width: 16px; height: 16px;
     background: {surf};
     border: 1px solid {bdr};
     border-radius: 3px;
 }}
-QCheckBox::indicator:hover   {{ border-color: {dim}; }}
+QCheckBox::indicator:hover, QRadioButton::indicator:hover {{ border-color: {dim}; }}
 QCheckBox::indicator:checked {{ background: {ac}; border-color: {ac}; }}
+QRadioButton::indicator {{ border-radius: 8px; }}
+QRadioButton::indicator:checked {{
+    background: qradialgradient(cx: 0.5, cy: 0.5, radius: 0.5, fx: 0.5, fy: 0.5,
+                                stop: 0 white, stop: 0.32 white, stop: 0.42 {ac}, stop: 1 {ac});
+    border-color: {ac};
+}}
+QRadioButton:disabled {{ color: {dim}; }}
 
 /* ── QComboBox ────────────────────────────────────── */
 

@@ -1783,6 +1783,66 @@ class Database:
             params += [acc["id"] if acc else -1] * 2
         return [(r["name"], r["memorandum"]) for r in self.conn.execute(q, params)]
 
+    def rule_apply_rows(self, type_name, exclude_rule_id=None):
+        """The transactions of ``type_name`` a rule being written could be applied to (split ones
+        left out), each with the key of the best saved rule that matches it, as lookup_mapping
+        ranks them (``exclude_rule_id``: the rule being edited does not count):
+        [{id, account_id, name, memo, merchant, uncategorized, best}] (best None: no rule)."""
+        type_id = self.get_type_id(type_name) if type_name else None
+        if type_id is None:
+            return []
+        uncat_cat, _ = self.get_uncategorized_ids()
+        rules = self.conn.execute("SELECT id, account_id, name, memorandum FROM import_mappings "
+                                  "WHERE type_id = ? AND id IS NOT ?", (type_id, exclude_rule_id)).fetchall()
+        out = []
+        for t in self.conn.execute(
+                """SELECT t.id, COALESCE(t.account_id, t.to_account_id) AS account_id, t.name, t.memorandum,
+                          t.merchant, t.category_id
+                   FROM transactions t WHERE t.type_id = ?
+                     AND NOT EXISTS (SELECT 1 FROM transaction_splits sp WHERE sp.transaction_id = t.id)""",
+                (type_id,)):
+            best = None
+            for r in rules:
+                if r["account_id"] is not None and r["account_id"] != t["account_id"]:
+                    continue
+                name_len = rule_match_length(t["name"], r["name"])
+                memo_len = rule_match_length(t["memorandum"], r["memorandum"])
+                if name_len is None or memo_len is None:
+                    continue
+                key = (name_len + memo_len, r["account_id"] is not None, r["id"])
+                if best is None or key > best:
+                    best = key
+            out.append({"id": t["id"], "account_id": t["account_id"], "name": t["name"], "memo": t["memorandum"],
+                        "merchant": (t["merchant"] or "").strip(),
+                        "uncategorized": t["category_id"] is None or t["category_id"] == uncat_cat,
+                        "best": best})
+        return out
+
+    @atomic
+    def apply_rule_to_transactions(self, ids, merchant, category_id, subcategory_id, everything=False):
+        """Give these transactions a rule's merchant and category. ``everything`` False: only what
+        they miss (no merchant, no category); a rule that only sets the merchant (Uncategorized)
+        never changes a category. Split transactions are left alone. Returns how many changed."""
+        uncat_cat, _ = self.get_uncategorized_ids()
+        merchant_only = category_id is None or category_id == uncat_cat
+        not_split = "NOT EXISTS (SELECT 1 FROM transaction_splits sp WHERE sp.transaction_id = transactions.id)"
+        missing_merchant = "" if everything else " AND (merchant IS NULL OR TRIM(merchant) = '')"
+        missing_category = "" if everything else " AND (category_id IS NULL OR category_id = ?)"
+        changed = set()
+        for tx_id in ids:
+            if self.conn.execute(f"UPDATE transactions SET merchant = ? WHERE id = ? AND merchant IS NOT ? "
+                                 f"AND {not_split}{missing_merchant}", (merchant, tx_id, merchant)).rowcount:
+                changed.add(tx_id)
+            if merchant_only:
+                continue
+            params = [category_id, subcategory_id, tx_id, category_id, subcategory_id] + \
+                ([] if everything else [uncat_cat])
+            if self.conn.execute(f"""UPDATE transactions SET category_id = ?, subcategory_id = ?
+                                     WHERE id = ? AND (category_id IS NOT ? OR subcategory_id IS NOT ?)
+                                       AND {not_split}{missing_category}""", params).rowcount:
+                changed.add(tx_id)
+        return len(changed)
+
     def get_merchants_in(self, category_id, subcategory_id=None):
         """The merchants of a sub-category (or a whole category), all time, split parts in their
         own category with their own amount: [{merchant ("" for none), count, total, rules}]

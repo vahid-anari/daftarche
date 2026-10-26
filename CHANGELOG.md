@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.30.0 — 2026-10-26
+
+- A rule added or edited in Manage › Merchants can also be set on the transactions you already
+  have. Below "Matches N of your transactions", choose: No (only new imports), those missing a
+  merchant or category (the default: only what is empty is filled in, nothing set by hand
+  changes), or all of them. Split transactions, and those a more specific rule matches, are left
+  alone; a rule that only sets the merchant never takes a category off. Saving the rule and
+  changing the transactions happen together, and Manage says how many changed.
+- Radio buttons drawn in the app's style, and the rule window opens tall enough for its hints.
+
 ## 0.29.1 — 2026-10-24
 
 - Built on sciwidgets 0.15.4 (was 0.14.3), the same version as the author's other apps, so they

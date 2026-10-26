@@ -5,7 +5,7 @@ from PySide6.QtWidgets import (
     QPushButton, QLabel, QTableWidget, QTableWidgetItem,
     QHeaderView, QAbstractItemView, QMessageBox, QInputDialog,
     QColorDialog, QCheckBox, QFormLayout, QLineEdit,
-    QDialogButtonBox, QFrame, QSizePolicy, QAbstractScrollArea
+    QDialogButtonBox, QFrame, QSizePolicy, QAbstractScrollArea, QRadioButton, QButtonGroup
 )
 from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QColor, QBrush, QPalette
@@ -108,7 +108,7 @@ class ManageDialog(QDialog):
         self.cats_panel = CatsRulesPanel(self.db, self._changed, open_merchant=self.open_merchant,
                                          show_transactions=self._show_in_window)
         self.tags_panel = TagsPanel(self.db, self._changed)
-        self.merchants_panel = MerchantsPanel(self.db, self._changed, self._show_merchant)
+        self.merchants_panel = MerchantsPanel(self.db, self._changed, self._show_merchant, notify=self.notify)
 
         self.tabs.addTab(self.accounts_panel, "🏦  Accounts")
         self.tabs.addTab(self.cats_panel, "🏷️  Categories")
@@ -131,6 +131,9 @@ class ManageDialog(QDialog):
         btn_suggest.clicked.connect(self._suggest_icons)
         btn_row.addWidget(btn_suggest)
 
+        self.note = QLabel()
+        self.note.setProperty("class", "dim-label")
+        btn_row.addWidget(self.note)
         btn_row.addStretch()
 
         btn_close = QPushButton("Close")
@@ -148,8 +151,13 @@ class ManageDialog(QDialog):
         self.tags_panel.refresh()
 
     def _changed(self):
+        self.note.setText("")
         self.refresh()
         self.on_change_cb()
+
+    def notify(self, text):
+        """A line at the bottom, until the next change (e.g. how many transactions a rule changed)."""
+        self.note.setText(text)
 
     def open_merchant(self, name):
         """The Merchants tab, with this merchant and its rules."""
@@ -1039,7 +1047,31 @@ class RuleEditDialog(QDialog):
         self.matches = QLabel()
         self.matches.setWordWrap(True)
         form.addRow(self.matches)
+        self.apply_box = QFrame()
+        box = QVBoxLayout(self.apply_box)
+        box.setContentsMargins(0, 0, 0, 0)
+        box.setSpacing(6)
+        self.apply_title = QLabel()
+        box.addWidget(self.apply_title)
+        self.rb_none = QRadioButton("No — only new imports")
+        self.rb_missing = QRadioButton()
+        self.rb_all = QRadioButton()
+        self.apply_group = QButtonGroup(self)
+        for rb in (self.rb_none, self.rb_missing, self.rb_all):
+            self.apply_group.addButton(rb)
+            box.addWidget(rb)
+        self.rb_missing.setChecked(True)
+        self._apply_chosen = False  # until you pick one, "those missing …" when there are any
+        self.apply_group.buttonClicked.connect(lambda _: setattr(self, "_apply_chosen", True))
+        self.apply_note = QLabel()
+        self.apply_note.setProperty("class", "dim-label")
+        self.apply_note.setWordWrap(True)
+        box.addWidget(self.apply_note)
+        self.apply_box.hide()
+        self._apply_rows = {}  # type → db.rule_apply_rows: what "Also set …" can change
+        self._claimed = ([], [])  # (the transactions missing something, all of them) this rule would take
         layout.addLayout(form)
+        layout.addWidget(self.apply_box)
 
         btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         btns.accepted.connect(self._validate)
@@ -1047,7 +1079,7 @@ class RuleEditDialog(QDialog):
         layout.addWidget(btns)
 
         self.f_type.currentTextChanged.connect(lambda _: (self._fill_cats(), self._count()))
-        self.f_cat.currentTextChanged.connect(lambda _: self._fill_subs())
+        self.f_cat.currentTextChanged.connect(lambda _: (self._fill_subs(), self._count()))
         self.f_account.currentTextChanged.connect(lambda _: self._count())
         self.f_name.textChanged.connect(lambda _: self._count())
         self.f_memo.textChanged.connect(lambda _: self._count())
@@ -1056,11 +1088,15 @@ class RuleEditDialog(QDialog):
 
     def showEvent(self, event):
         super().showEvent(event)
-        self.adjustSize()  # tall enough for the wrapped hints
+        self._fit(True)
 
-    def _fit(self):
-        if self.isVisible():
+    def _fit(self, shown=False):
+        """Tall enough for the wrapped hints (adjustSize alone leaves the form short of them)."""
+        if shown or self.isVisible():
             self.adjustSize()
+            height = self.layout().totalHeightForWidth(self.width())
+            if height > self.height():
+                self.resize(self.width(), height)
 
     # ── category ──────────────────────────────────────────────────────────────
     def _is_transfer(self):
@@ -1136,6 +1172,11 @@ class RuleEditDialog(QDialog):
         return None if acc == "All" else acc
 
     def _count(self):
+        self._count_matches()
+        self._count_apply()
+        self._fit()
+
+    def _count_matches(self):
         from daftarche.db import rule_match_length
         name, memo = self.f_name.text().strip(), self.f_memo.text().strip()
         if not name and not memo:
@@ -1152,6 +1193,55 @@ class RuleEditDialog(QDialog):
         examples = list(dict.fromkeys(h for h in hits if h))[:3]
         self.matches.setText(f"Matches {len(hits)} of your transactions" +
                              (f", e.g. {', '.join(examples)}" if examples else "") + ".")
+
+    def _count_apply(self):
+        """"Also set … on them": the transactions this rule would take from the rules there are
+        (it is the newest, so it wins a tie, as in lookup_mapping). Income and expense rules only."""
+        from daftarche.db import rule_match_length
+        type_name = self.f_type.currentText()
+        name, memo = self.f_name.text().strip(), self.f_memo.text().strip()
+        self._claimed = ([], [])
+        if (name or memo) and ("Expense" in type_name or "Income" in type_name):
+            if type_name not in self._apply_rows:
+                self._apply_rows[type_name] = self.db.rule_apply_rows(type_name, (self.existing or {}).get("id"))
+            account = self._account()
+            acc = self.db.get_account_by_name(account) if account else None
+            acc_id = acc["id"] if acc else (-1 if account else None)
+            merchant_only = self._cat_id() is None
+            for row in self._apply_rows[type_name]:
+                if acc_id is not None and row["account_id"] != acc_id:
+                    continue
+                name_len, memo_len = rule_match_length(row["name"], name), rule_match_length(row["memo"], memo)
+                if name_len is None or memo_len is None:
+                    continue
+                if row["best"] is not None and (name_len + memo_len, acc_id is not None) < row["best"][:2]:
+                    continue  # a more specific rule there keeps it
+                self._claimed[1].append(row["id"])
+                if not row["merchant"] or (row["uncategorized"] and not merchant_only):
+                    self._claimed[0].append(row["id"])
+        missing, everything = (len(x) for x in self._claimed)
+        self.apply_box.setVisible(everything > 0)
+        if not everything:
+            return
+        merchant_only = self._cat_id() is None
+        self.apply_title.setText("Also set this merchant on them:" if merchant_only else
+                                 "Also set this merchant and category on them:")
+        self.rb_missing.setText(f"Those with no merchant ({missing})" if merchant_only else
+                                f"Those missing a merchant or category ({missing})")
+        self.rb_all.setText(f"All {everything}, even those with another merchant" if merchant_only else
+                            f"All {everything}, even those already categorized")
+        self.rb_missing.setEnabled(missing > 0)
+        if not self._apply_chosen or (self.rb_missing.isChecked() and not missing):
+            (self.rb_missing if missing else self.rb_none).setChecked(True)
+        self.apply_note.setText("Split transactions, and those a more specific rule matches, are left alone.")
+
+    def to_apply(self):
+        """After OK: (transaction ids, everything) for "Also set … on them", or None."""
+        if self.apply_box.isHidden() or self.rb_none.isChecked():
+            return None
+        if self.rb_all.isChecked():
+            return self._claimed[1], True
+        return (self._claimed[0], False) if self._claimed[0] else None
 
     # ── OK ────────────────────────────────────────────────────────────────────
     def _validate(self):
@@ -1213,18 +1303,27 @@ class RuleEditDialog(QDialog):
         return next((m for m in names if m.casefold() == typed.casefold()), typed)
 
 
-def save_rule(db, values, existing=None):
-    """Save what a RuleEditDialog gave (``existing``: the rule it edited)."""
+def save_rule(db, values, existing=None, apply=None):
+    """Save what a RuleEditDialog gave (``existing``: the rule it edited) and, with ``apply``
+    (its ``to_apply()``), give those transactions its merchant and category, all in one go.
+    Returns (the merchant, how many transactions changed)."""
     v = dict(values)
-    if v["subcategory_id"] is None:
-        v["subcategory_id"] = db.uncategorized_subcategory(v["category_id"])["id"]
-    if existing:
-        db.delete_rule_and_save(existing["id"], v["type_name"], v["account_name"], v["name"], v["memo"],
-                                v["subcategory_id"], v["category_id"], v["merchant"])
-    else:
-        db.save_mapping(v["type_name"], v["account_name"], v["name"], v["memo"],
-                        subcategory_id=v["subcategory_id"], category_id=v["category_id"], merchant=v["merchant"])
-    return v["merchant"]
+    applied = 0
+    with db.transaction():
+        if v["subcategory_id"] is None:
+            v["subcategory_id"] = db.uncategorized_subcategory(v["category_id"])["id"]
+        if existing:
+            db.delete_rule_and_save(existing["id"], v["type_name"], v["account_name"], v["name"], v["memo"],
+                                    v["subcategory_id"], v["category_id"], v["merchant"])
+        else:
+            db.save_mapping(v["type_name"], v["account_name"], v["name"], v["memo"],
+                            subcategory_id=v["subcategory_id"], category_id=v["category_id"],
+                            merchant=v["merchant"])
+        if apply:
+            ids, everything = apply
+            applied = db.apply_rule_to_transactions(ids, v["merchant"], v["category_id"], v["subcategory_id"],
+                                                    everything=everything)
+    return v["merchant"], applied
 
 
 class _PickCategoryDialog(QDialog):
@@ -1352,11 +1451,12 @@ class MerchantsPanel(QWidget):
     COL_NAME, COL_TX, COL_RULES, COL_TOTAL = range(4)
     R_TEXT, R_SETS, R_TYPE, R_ACCOUNT = range(4)
 
-    def __init__(self, db, on_change, show_transactions=None):
+    def __init__(self, db, on_change, show_transactions=None, notify=None):
         super().__init__()
         self.db = db
         self.on_change = on_change
         self.show_transactions = show_transactions  # (merchant, "" = none) → Transactions, from the window
+        self.notify = notify or (lambda text: None)  # (text) → a line at the bottom of Manage
         layout = QHBoxLayout(self)
         layout.setContentsMargins(16, 14, 16, 8)
         layout.setSpacing(16)
@@ -1585,9 +1685,10 @@ class MerchantsPanel(QWidget):
         m = self._selected()
         dlg = RuleEditDialog(self.db, merchant=m["merchant"] if m else None, parent=self)
         if dlg.exec():
-            name = save_rule(self.db, dlg.values())
+            name, applied = save_rule(self.db, dlg.values(), apply=dlg.to_apply())
             self.on_change()
             self.select(name)
+            self._tell_applied(applied)
 
     def edit_rule(self):
         chosen = self._selected_rules()
@@ -1599,9 +1700,14 @@ class MerchantsPanel(QWidget):
             return
         dlg = RuleEditDialog(self.db, existing=chosen[0], parent=self)
         if dlg.exec():
-            name = save_rule(self.db, dlg.values(), existing=chosen[0])
+            name, applied = save_rule(self.db, dlg.values(), existing=chosen[0], apply=dlg.to_apply())
             self.on_change()
             self.select(name)
+            self._tell_applied(applied)
+
+    def _tell_applied(self, n):
+        if n:
+            self.notify(f"✅ Rule saved and set on {n} transaction{'s' if n != 1 else ''}.")
 
     def delete_rules(self):
         chosen = self._selected_rules()
