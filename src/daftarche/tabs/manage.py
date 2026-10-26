@@ -5,17 +5,20 @@ from PySide6.QtWidgets import (
     QPushButton, QLabel, QTableWidget, QTableWidgetItem,
     QHeaderView, QAbstractItemView, QMessageBox, QInputDialog,
     QColorDialog, QCheckBox, QFormLayout, QLineEdit,
-    QDialogButtonBox, QFrame, QSizePolicy, QAbstractScrollArea, QRadioButton, QButtonGroup
+    QDialogButtonBox, QFrame, QSizePolicy, QAbstractScrollArea, QRadioButton, QButtonGroup, QSplitter
 )
-from PySide6.QtCore import QSize, Qt
+from PySide6.QtCore import QByteArray, QSize, Qt
 from PySide6.QtGui import QColor, QBrush, QPalette
 
 from daftarche.style import get_settings
 from daftarche.widgets import SingleSelectCombo
 from daftarche.icons import IconPickerDialog, SuggestIconsDialog, emoji_icon
+from daftarche.tx_list import SHOW_KEY, TransactionList, line_filters, net_spent
 
 
 NO_MERCHANT = "(no merchant)"
+GEOMETRY_KEY = "manage_geometry"  # Manage's size and place
+FILLED_KEY = "manage_filled_screen"  # it filled the screen once, the first time transactions were shown
 YOU_CHOOSE = "— you choose (To review)"
 
 
@@ -96,6 +99,23 @@ class ManageDialog(QDialog):
         self.setMinimumSize(1200, 620)
         self._build()
         self.refresh()
+        saved = get_settings().get(GEOMETRY_KEY)
+        if saved:
+            self.restoreGeometry(QByteArray.fromHex(saved.encode()))
+        self.finished.connect(self._save_geometry)
+
+    def _save_geometry(self, *_):
+        """Its size and place, so it opens where you left it."""
+        get_settings().set(GEOMETRY_KEY, bytes(self.saveGeometry().toHex()).decode())
+
+    def _show_lines(self, shown):
+        """"Show transactions" ticked (or not) in one tab: the same in the others; the first time,
+        the window fills the screen, so the lists keep their room."""
+        for panel in (self.cats_panel, self.merchants_panel):
+            panel.set_show_lines(shown)
+        if shown and not get_settings().get(FILLED_KEY):
+            get_settings().set(FILLED_KEY, True)
+            self.showMaximized()
 
     def _build(self):
         layout = QVBoxLayout(self)
@@ -106,9 +126,11 @@ class ManageDialog(QDialog):
 
         self.accounts_panel = AccountsPanel(self.db, self._changed)
         self.cats_panel = CatsRulesPanel(self.db, self._changed, open_merchant=self.open_merchant,
-                                         show_transactions=self._show_in_window)
+                                         show_transactions=self._show_in_window, on_show_lines=self._show_lines)
         self.tags_panel = TagsPanel(self.db, self._changed)
-        self.merchants_panel = MerchantsPanel(self.db, self._changed, self._show_merchant, notify=self.notify)
+        self.merchants_panel = MerchantsPanel(self.db, self._changed, self._show_merchant, notify=self.notify,
+                                              show_filtered=lambda text, **f: self._show_in_window(text, "merchants", **f),
+                                              on_show_lines=self._show_lines)
 
         self.tabs.addTab(self.accounts_panel, "🏦  Accounts")
         self.tabs.addTab(self.cats_panel, "🏷️  Categories")
@@ -165,9 +187,9 @@ class ManageDialog(QDialog):
         self.merchants_panel.find.clear()
         self.merchants_panel.select(name)
 
-    def _show_in_window(self, text, **filters):
+    def _show_in_window(self, text, panel="cats", **filters):
         if self._show_transactions:
-            self._show_transactions(text, "cats", **filters)
+            self._show_transactions(text, panel, **filters)
 
     def _suggest_icons(self):
         dlg = SuggestIconsDialog(self.db, self)
@@ -457,12 +479,13 @@ class CatsRulesPanel(QWidget):
     """Types, categories, sub-categories, and the merchants whose money goes there."""
     M_NAME, M_TX, M_TOTAL, M_RULES = range(4)
 
-    def __init__(self, db, on_change, open_merchant=None, show_transactions=None):
+    def __init__(self, db, on_change, open_merchant=None, show_transactions=None, on_show_lines=None):
         super().__init__()
         self.db = db
         self.on_change = on_change
         self.open_merchant = open_merchant  # (name) → Merchants tab
         self.show_transactions = show_transactions  # (text, **filters) → the main window
+        self.on_show_lines = on_show_lines  # (shown) → Manage, when "Show transactions" is ticked or not
         self._build()
 
     def _build(self):
@@ -515,13 +538,40 @@ class CatsRulesPanel(QWidget):
         h.setSectionResizeMode(self.M_NAME, QHeaderView.Stretch)
         self.merchant_table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.merchant_table.cellDoubleClicked.connect(self._merchant_double_clicked)
+        self.merchant_table.itemSelectionChanged.connect(self._update_lines)
         hint = QLabel("Double-click a merchant to see and edit its rules (Merchants tab); double-click its "
                       "numbers to see those transactions. Rules: how many of its rules send money here.")
         hint.setProperty("class", "dim-label")
         hint.setWordWrap(True)
-        m_col.addWidget(hint)
+        # the column in two rows: the merchants, and (when ticked) the transactions there
+        m_col.removeWidget(self.merchant_title)
+        m_col.removeWidget(self.merchant_table)
+        head = QHBoxLayout()
+        self.merchant_title.setWordWrap(True)
+        head.addWidget(self.merchant_title, 1)
+        self.chk_lines = QCheckBox("Show transactions")
+        self.chk_lines.setToolTip("The transactions of what is selected, under the merchants "
+                                  "(a click on a merchant shows only its own)")
+        head.addWidget(self.chk_lines)
+        m_col.addLayout(head)
+        top = QWidget()
+        top_col = QVBoxLayout(top)
+        top_col.setContentsMargins(0, 0, 0, 0)
+        top_col.setSpacing(6)
+        top_col.addWidget(self.merchant_table, 1)
+        top_col.addWidget(hint)
+        self.lines = TransactionList(open_line=self._open_line)
+        self.lines.btn_all.clicked.connect(self.merchant_table.clearSelection)
+        self.split = QSplitter(Qt.Vertical)
+        self.split.setChildrenCollapsible(False)
+        self.split.addWidget(top)
+        self.split.addWidget(self.lines)
+        self.split.setSizes([300, 500])
+        m_col.addWidget(self.split, 1)
         m_w.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         lists_row.addWidget(m_w, 1)
+        self.set_show_lines(bool(get_settings().get(SHOW_KEY)))
+        self.chk_lines.toggled.connect(self._show_lines_toggled)
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -681,6 +731,58 @@ class CatsRulesPanel(QWidget):
         self._on_sub_selected()
 
     def _reload_merchants(self, cat_data=None, sub_data=None):
+        kept = self._selected_data(self.merchant_table)
+        self.merchant_table.blockSignals(True)
+        try:
+            self._fill_merchants(cat_data, sub_data)
+            if kept:
+                for row in range(self.merchant_table.rowCount()):
+                    m = self.merchant_table.item(row, 0).data(Qt.UserRole)
+                    if m["merchant"] == kept["merchant"]:
+                        self.merchant_table.selectRow(row)
+                        break
+        finally:
+            self.merchant_table.blockSignals(False)
+        self._update_lines()
+
+    # ── the transactions under the merchants ─────────────────────────────────
+    def set_show_lines(self, shown):
+        """Show or hide them (no signal: Manage keeps its tabs alike)."""
+        self.chk_lines.blockSignals(True)
+        self.chk_lines.setChecked(shown)
+        self.chk_lines.blockSignals(False)
+        self.lines.setVisible(shown)
+        self._update_lines()
+
+    def _show_lines_toggled(self, shown):
+        get_settings().set(SHOW_KEY, shown)
+        self.set_show_lines(shown)
+        if self.on_show_lines:
+            self.on_show_lines(shown)
+
+    def _update_lines(self):
+        if self.lines.isHidden():
+            return
+        cat = self._selected_data(self.cat_table)
+        sub = self._selected_data(self.sub_table)
+        m = self._selected_data(self.merchant_table)
+        self.lines.btn_all.setVisible(m is not None)
+        if not cat:
+            self.lines.clear()
+            return
+        where = f"{cat['name']} › {sub['name']}" if sub else cat["name"]
+        who = (m["merchant"] or NO_MERCHANT) + " in " if m else ""
+        self.lines.set_lines(self.db.get_lines(cat["id"], sub["id"] if sub else None,
+                                               m["merchant"] if m else None), who + where,
+                             hide=(("merchant",) if m else ()) + (("subcategory",) if sub else ()))
+
+    def _open_line(self, line):
+        """In Transactions: that day's transactions of its merchant there (so this one, mostly)."""
+        if self.show_transactions:
+            text, filters = line_filters(line)
+            self.show_transactions(text, **filters)
+
+    def _fill_merchants(self, cat_data=None, sub_data=None):
         from daftarche.widgets import money
         table = self.merchant_table
         table.setRowCount(0)
@@ -1451,12 +1553,14 @@ class MerchantsPanel(QWidget):
     COL_NAME, COL_TX, COL_RULES, COL_TOTAL = range(4)
     R_TEXT, R_SETS, R_TYPE, R_ACCOUNT = range(4)
 
-    def __init__(self, db, on_change, show_transactions=None, notify=None):
+    def __init__(self, db, on_change, show_transactions=None, notify=None, show_filtered=None, on_show_lines=None):
         super().__init__()
         self.db = db
         self.on_change = on_change
         self.show_transactions = show_transactions  # (merchant, "" = none) → Transactions, from the window
         self.notify = notify or (lambda text: None)  # (text) → a line at the bottom of Manage
+        self.show_filtered = show_filtered  # (text, **filters) → Transactions (one of its transactions)
+        self.on_show_lines = on_show_lines  # (shown) → Manage, when "Show transactions" is ticked or not
         layout = QHBoxLayout(self)
         layout.setContentsMargins(16, 14, 16, 8)
         layout.setSpacing(16)
@@ -1505,8 +1609,18 @@ class MerchantsPanel(QWidget):
 
         right = QVBoxLayout()
         right.setSpacing(8)
+        head = QHBoxLayout()
         self.rules_title = QLabel()
-        right.addWidget(self.rules_title)
+        self.rules_title.setWordWrap(True)
+        head.addWidget(self.rules_title, 1)
+        self.chk_lines = QCheckBox("Show transactions")
+        self.chk_lines.setToolTip("The selected merchant's transactions, under its rules")
+        head.addWidget(self.chk_lines)
+        right.addLayout(head)
+        top = QWidget()
+        top_col = QVBoxLayout(top)
+        top_col.setContentsMargins(0, 0, 0, 0)
+        top_col.setSpacing(8)
         self.rules = QTableWidget(0, 4)
         self.rules.setHorizontalHeaderLabels(["Bank text", "Sets", "Type", "Account"])
         h = self.rules.horizontalHeader()
@@ -1520,19 +1634,59 @@ class MerchantsPanel(QWidget):
         self.rules.setAlternatingRowColors(True)
         self.rules.cellDoubleClicked.connect(lambda r, c: self.edit_rule())
         _apply_selection_palette(self.rules)
-        right.addWidget(self.rules, 1)
+        top_col.addWidget(self.rules, 1)
         self.rules_hint = QLabel()
         self.rules_hint.setProperty("class", "dim-label")
         self.rules_hint.setWordWrap(True)
-        right.addWidget(self.rules_hint)
+        top_col.addWidget(self.rules_hint)
         row, buttons = _icon_buttons([
             ("＋", "Add Rule", self.add_rule),
             ("✏️", "Edit Rule", self.edit_rule),
             ("🏪", "Set Merchant… (the selected rules)", self.set_rules_merchant),
             ("🗑️", "Delete Rule", self.delete_rules)])
         self.btn_set_merchant = buttons[2]
-        right.addLayout(row)
+        top_col.addLayout(row)
+        self.lines = TransactionList(("date", "account", "category", "subcategory", "amount"),
+                                     open_line=self._open_line)
+        self.split = QSplitter(Qt.Vertical)
+        self.split.setChildrenCollapsible(False)
+        self.split.addWidget(top)
+        self.split.addWidget(self.lines)
+        self.split.setSizes([300, 500])
+        right.addWidget(self.split, 1)
         layout.addLayout(right, 7)
+        self.set_show_lines(bool(get_settings().get(SHOW_KEY)))
+        self.chk_lines.toggled.connect(self._show_lines_toggled)
+
+    # ── its transactions, under its rules ─────────────────────────────────────
+    def set_show_lines(self, shown):
+        """Show or hide them (no signal: Manage keeps its tabs alike)."""
+        self.chk_lines.blockSignals(True)
+        self.chk_lines.setChecked(shown)
+        self.chk_lines.blockSignals(False)
+        self.lines.setVisible(shown)
+        self._update_lines()
+
+    def _show_lines_toggled(self, shown):
+        get_settings().set(SHOW_KEY, shown)
+        self.set_show_lines(shown)
+        if self.on_show_lines:
+            self.on_show_lines(shown)
+
+    def _update_lines(self):
+        if self.lines.isHidden():
+            return
+        m = self._selected()
+        if m is None:
+            self.lines.clear()
+            return
+        lines = self.db.get_lines(merchant=m["merchant"])
+        self.lines.set_lines(lines, m["merchant"] or NO_MERCHANT, total=net_spent(lines), total_label="net spent")
+
+    def _open_line(self, line):
+        if self.show_filtered:
+            text, filters = line_filters(line)
+            self.show_filtered(text, **filters)
 
     # ── the merchants ─────────────────────────────────────────────────────────
     def refresh(self):
@@ -1647,6 +1801,7 @@ class MerchantsPanel(QWidget):
 
     # ── its rules ─────────────────────────────────────────────────────────────
     def _show_rules(self):
+        self._update_lines()
         m = self._selected()
         self.rules.setRowCount(0)
         none = m is not None and not m["merchant"]

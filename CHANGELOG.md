@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.31.0 — 2026-10-26
+
+- Manage › Categories and Manage › Merchants can show the transactions themselves: tick **Show
+  transactions** (one setting for both tabs) and the column on the right is in two rows, the
+  merchants (or a merchant's rules) above and their transactions below, with a line between them
+  to drag. Newest first, sortable, with their number and total (net spent in Merchants); a part
+  of a split transaction shows its own amount, marked ✂; the account and the bank's text show on
+  hover. In Categories, a click on a merchant shows only its own (Show All: every merchant again).
+  Double-click one to open it in Transactions.
+- Manage opens at the size and place it was left; the first time transactions are shown, it
+  fills the screen.
+
 ## 0.30.0 — 2026-10-26
 
 - A rule added or edited in Manage › Merchants can also be set on the transactions you already

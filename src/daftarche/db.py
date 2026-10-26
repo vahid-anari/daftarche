@@ -1843,6 +1843,37 @@ class Database:
                 changed.add(tx_id)
         return len(changed)
 
+    def get_lines(self, category_id=None, subcategory_id=None, merchant=None):
+        """The transactions of a sub-category (or a whole category) and/or a merchant ("": those
+        with none; None: any), all time, newest first, a split one as its part(s) there with their
+        own amount: [{id, part, date, type, account, merchant, category, subcategory, amount, name,
+        memorandum, note}]. For the transaction lists in Manage."""
+        where, params = [], []
+        if subcategory_id is not None:
+            where.append("l.subcategory_id = ?")
+            params.append(subcategory_id)
+        elif category_id is not None:
+            where.append("l.category_id = ?")
+            params.append(category_id)
+        if merchant is not None:
+            if merchant:
+                where.append("TRIM(l.merchant) = ?")
+                params.append(merchant.strip())
+            else:
+                where.append("(l.merchant IS NULL OR TRIM(l.merchant) = '')")
+        rows = self.conn.execute(f"""
+            SELECT l.id, l.part, l.date, ty.name AS type, COALESCE(a.name, ta.name) AS account,
+                   IFNULL(TRIM(l.merchant), '') AS merchant, c.name AS category, s.name AS subcategory,
+                   l.amount, l.name, l.memorandum, l.note
+            FROM tx_lines l LEFT JOIN types ty ON ty.id = l.type_id
+                 LEFT JOIN accounts a ON a.id = l.account_id
+                 LEFT JOIN accounts ta ON ta.id = l.to_account_id
+                 LEFT JOIN categories c ON c.id = l.category_id
+                 LEFT JOIN subcategories s ON s.id = l.subcategory_id
+            {"WHERE " + " AND ".join(where) if where else ""}
+            ORDER BY l.date DESC, l.id DESC, l.part""", params)
+        return [dict(r) for r in rows]
+
     def get_merchants_in(self, category_id, subcategory_id=None):
         """The merchants of a sub-category (or a whole category), all time, split parts in their
         own category with their own amount: [{merchant ("" for none), count, total, rules}]
