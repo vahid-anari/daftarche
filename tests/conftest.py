@@ -1,5 +1,6 @@
 """Every test runs against a throw-away data folder, never the real one."""
 
+import gc
 import os
 import tempfile
 
@@ -37,6 +38,14 @@ def keep(widget):
 @pytest.fixture(autouse=True)
 def _delete_kept_windows():
     yield
+    _delete_kept()
+    # Python's cycle collector runs in whichever thread happens to allocate: left for later, a
+    # window's wrapper from this test could be freed in the sign-in server's thread of a later
+    # one (test_phone_link), which crashed Qt now and then. Collected here, on the main thread.
+    gc.collect()
+
+
+def _delete_kept():
     if _kept:
         from PySide6.QtCore import QCoreApplication, QEvent
         for widget in _kept:
