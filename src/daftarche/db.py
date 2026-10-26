@@ -1755,6 +1755,15 @@ class Database:
             ORDER BY m.type_id, IFNULL(m.name, '') COLLATE NOCASE, IFNULL(m.memorandum, '') COLLATE NOCASE,
                      IFNULL(a.name, '')""", params)]
 
+    def get_no_merchant_total(self):
+        """Expenses minus income of the transactions with no merchant (transfers left out), as
+        get_merchant_overview adds up a merchant's."""
+        return round2(self.conn.execute("""
+            SELECT SUM(CASE WHEN ty.name LIKE '%Expense%' THEN t.amount
+                            WHEN ty.name LIKE '%Income%' THEN -t.amount ELSE 0 END)
+            FROM transactions t LEFT JOIN types ty ON ty.id = t.type_id
+            WHERE t.merchant IS NULL OR TRIM(t.merchant) = ''""").fetchone()[0] or 0)
+
     def get_no_merchant_counts(self):
         """(transactions, rules) with no merchant."""
         none = "merchant IS NULL OR TRIM(merchant) = ''"
@@ -1843,9 +1852,9 @@ class Database:
                 changed.add(tx_id)
         return len(changed)
 
-    def get_lines(self, category_id=None, subcategory_id=None, merchant=None):
+    def get_lines(self, category_id=None, subcategory_id=None, merchant=None, account_id=None, tag_id=None):
         """The transactions of a sub-category (or a whole category) and/or a merchant ("": those
-        with none; None: any), all time, newest first, a split one as its part(s) there with their
+        with none; None: any), an account or a tag, all time, newest first, a split one as its part(s) there with their
         own amount: [{id, part, date, type, account, merchant, category, subcategory, amount, name,
         memorandum, note, fitid, tags}] (tags: their names, A to Z). For the transaction lists in Manage."""
         where, params = [], []
@@ -1855,6 +1864,12 @@ class Database:
         elif category_id is not None:
             where.append("l.category_id = ?")
             params.append(category_id)
+        if account_id is not None:
+            where.append("(l.account_id = ? OR l.to_account_id = ?)")
+            params += [account_id, account_id]
+        if tag_id is not None:
+            where.append("EXISTS (SELECT 1 FROM transaction_tags tt WHERE tt.transaction_id = l.id AND tt.tag_id = ?)")
+            params.append(tag_id)
         if merchant is not None:
             if merchant:
                 where.append("TRIM(l.merchant) = ?")
@@ -2628,6 +2643,13 @@ class Database:
         return self.conn.execute(
             "SELECT COUNT(DISTINCT id) FROM tx_lines WHERE subcategory_id=?", (subcategory_id,)
         ).fetchone()[0]
+
+    def get_merchant_count_for_subcategory(self, subcategory_id):
+        """How many merchants (with a name) have transactions here, a split one's part counting
+        in its own sub-category."""
+        return self.conn.execute(
+            "SELECT COUNT(DISTINCT TRIM(merchant)) FROM tx_lines WHERE subcategory_id=? "
+            "AND merchant IS NOT NULL AND TRIM(merchant) <> ''", (subcategory_id,)).fetchone()[0]
 
     def get_rule_count_for_subcategory(self, subcategory_id):
         return self.conn.execute(

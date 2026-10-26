@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.31.2 — 2026-10-26
+
+- Manage › Accounts and Tags show the selected account's or tag's transactions too, beside the
+  list (a tag's with their total). Their lists are only as wide as their text, with the buttons
+  under them, as in the other tabs.
+- **Show transactions** is beside the tabs, once for all four.
+- One way of writing numbers in Manage: short headings (Tx, Cats, Subs, M for merchants, R for
+  rules; hold the pointer over one to read it), a 0 written in the dim colour, never a dash, and
+  **Total** for the money (in Merchants: spent minus income), also for the transactions with no
+  merchant.
+- Sub-categories show how many merchants (M) and rules (R) they have.
+- Merchants: a line under the list adds up the merchants shown (all, or those you looked for).
+- Manage follows the changes made in the main window (an import, a category set in Transactions),
+  so the Refresh button is gone. Suggest Icons… is gone too: the icon window offers an icon that
+  suits the name when there is none yet.
+- The line between a list and its transactions lights up in the accent colour under the pointer
+  (and while it is dragged), is easier to grab, and has room above and below it; the hints beside
+  and under the lists take only the lines they need, and a split transaction counts once.
+
 ## 0.31.1 — 2026-10-26
 
 - The transactions in Manage › Categories and Merchants show the same columns as Transactions,

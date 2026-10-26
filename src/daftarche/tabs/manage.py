@@ -8,11 +8,11 @@ from PySide6.QtWidgets import (
     QDialogButtonBox, QFrame, QSizePolicy, QAbstractScrollArea, QRadioButton, QButtonGroup, QSplitter
 )
 from PySide6.QtCore import QByteArray, QSize, Qt
-from PySide6.QtGui import QColor, QBrush, QPalette
+from PySide6.QtGui import QBrush, QColor, QFont, QFontMetrics, QPalette
 
 from daftarche.style import get_settings
 from daftarche.widgets import SingleSelectCombo
-from daftarche.icons import IconPickerDialog, SuggestIconsDialog, emoji_icon
+from daftarche.icons import IconPickerDialog, emoji_icon, suggest_icon
 from daftarche.tx_list import SHOW_KEY, TransactionList, line_filters, net_spent
 
 
@@ -20,6 +20,30 @@ NO_MERCHANT = "(no merchant)"
 GEOMETRY_KEY = "manage_geometry"  # Manage's size and place
 FILLED_KEY = "manage_filled_screen"  # it filled the screen once, the first time transactions were shown
 YOU_CHOOSE = "— you choose (To review)"
+
+
+def _compact(table):
+    """A list only as wide as its text (the room beside it goes to its transactions)."""
+    header = table.horizontalHeader()
+    header.setStretchLastSection(False)
+    header.setSectionResizeMode(QHeaderView.ResizeToContents)
+    table.setSizeAdjustPolicy(QAbstractScrollArea.AdjustToContents)
+    table.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Expanding)
+    table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)  # in a narrow window
+
+
+def _dim():
+    return QBrush(QColor(get_settings().get("text_dim") or "#999"))
+
+
+def _number_item(value, text=None, align=Qt.AlignCenter):
+    """A count (or, with ``text``, an amount) in a list: 0 is written, in the dim colour, so the
+    numbers that are not 0 stand out."""
+    item = QTableWidgetItem(str(value) if text is None else text)
+    item.setTextAlignment(align)
+    if not value:
+        item.setForeground(_dim())
+    return item
 
 
 def _icon_buttons(items):
@@ -104,14 +128,18 @@ class ManageDialog(QDialog):
             self.restoreGeometry(QByteArray.fromHex(saved.encode()))
         self.finished.connect(self._save_geometry)
 
+    def _line_panels(self):
+        return (self.accounts_panel, self.cats_panel, self.merchants_panel, self.tags_panel)
+
     def _save_geometry(self, *_):
         """Its size and place, so it opens where you left it."""
         get_settings().set(GEOMETRY_KEY, bytes(self.saveGeometry().toHex()).decode())
 
     def _show_lines(self, shown):
-        """"Show transactions" ticked (or not) in one tab: the same in the others; the first time,
-        the window fills the screen, so the lists keep their room."""
-        for panel in (self.cats_panel, self.merchants_panel):
+        """"Show transactions" (beside the tabs) ticked or not: every tab shows them or not; the
+        first time, the window fills the screen, so the lists keep their room."""
+        get_settings().set(SHOW_KEY, shown)
+        for panel in self._line_panels():
             panel.set_show_lines(shown)
         if shown and not get_settings().get(FILLED_KEY):
             get_settings().set(FILLED_KEY, True)
@@ -126,32 +154,30 @@ class ManageDialog(QDialog):
 
         self.accounts_panel = AccountsPanel(self.db, self._changed)
         self.cats_panel = CatsRulesPanel(self.db, self._changed, open_merchant=self.open_merchant,
-                                         show_transactions=self._show_in_window, on_show_lines=self._show_lines)
+                                         show_transactions=self._show_in_window)
         self.tags_panel = TagsPanel(self.db, self._changed)
         self.merchants_panel = MerchantsPanel(self.db, self._changed, self._show_merchant, notify=self.notify,
-                                              show_filtered=lambda text, **f: self._show_in_window(text, "merchants", **f),
-                                              on_show_lines=self._show_lines)
+                                              show_filtered=lambda text, **f: self._show_in_window(text, "merchants", **f))
 
+        for panel, name in ((self.accounts_panel, "accounts"), (self.tags_panel, "tags")):
+            panel.open_filtered = lambda text, name=name, **f: self._show_in_window(text, name, **f)
         self.tabs.addTab(self.accounts_panel, "🏦  Accounts")
         self.tabs.addTab(self.cats_panel, "🏷️  Categories")
         self.tabs.addTab(self.merchants_panel, "🏪  Merchants")
         self.tabs.addTab(self.tags_panel, "🔖  Tags")
+        corner = QWidget()
+        corner_row = QHBoxLayout(corner)
+        corner_row.setContentsMargins(0, 0, 12, 0)
+        self.chk_lines = QCheckBox("Show transactions")
+        self.chk_lines.setToolTip("Each tab shows the transactions of what is selected in it")
+        self.chk_lines.setChecked(bool(get_settings().get(SHOW_KEY)))
+        self.chk_lines.toggled.connect(self._show_lines)
+        corner_row.addWidget(self.chk_lines)
+        self.tabs.setCornerWidget(corner, Qt.TopRightCorner)
 
         layout.addWidget(self.tabs)
         btn_row = QHBoxLayout()
         btn_row.setContentsMargins(12, 8, 12, 12)
-
-        btn_refresh = QPushButton("🔄 Refresh")
-        btn_refresh.setProperty("class", "secondary")
-        btn_refresh.setMinimumWidth(90)
-        btn_refresh.clicked.connect(self.refresh)
-        btn_row.addWidget(btn_refresh)
-
-        btn_suggest = QPushButton("✨ Suggest Icons…")
-        btn_suggest.setProperty("class", "secondary")
-        btn_suggest.setToolTip("Icons for the categories with none, from their names: you check them first")
-        btn_suggest.clicked.connect(self._suggest_icons)
-        btn_row.addWidget(btn_suggest)
 
         self.note = QLabel()
         self.note.setProperty("class", "dim-label")
@@ -175,7 +201,17 @@ class ManageDialog(QDialog):
     def _changed(self):
         self.note.setText("")
         self.refresh()
-        self.on_change_cb()
+        self._own_change = True  # the window's refresh after it need not come back here
+        try:
+            self.on_change_cb()
+        finally:
+            self._own_change = False
+
+    def outside_change(self):
+        """Something changed in the main window (an import, a category set in Transactions):
+        show it here too (no Refresh button to remember)."""
+        if not getattr(self, "_own_change", False):
+            self.refresh()
 
     def notify(self, text):
         """A line at the bottom, until the next change (e.g. how many transactions a rule changed)."""
@@ -190,11 +226,6 @@ class ManageDialog(QDialog):
     def _show_in_window(self, text, panel="cats", **filters):
         if self._show_transactions:
             self._show_transactions(text, panel, **filters)
-
-    def _suggest_icons(self):
-        dlg = SuggestIconsDialog(self.db, self)
-        if dlg.exec():
-            self._changed()
 
 
 # AccountsPanel
@@ -211,49 +242,70 @@ class AccountsPanel(QWidget):
         self._build()
 
     def _build(self):
-        layout = QHBoxLayout(self)
+        layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(16)
 
         self.table = QTableWidget()
         self.table.setColumnCount(8)
         self.table.setHorizontalHeaderLabels([
             "Account", "Account ID", "Type", "Bank ID",
-            "Color", "Active", "Dashboard", "# Tx"
+            "Color", "Active", "Dashboard", "Tx"
         ])
-        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        for i in (1, 2, 3):
-            self.table.horizontalHeader().setSectionResizeMode(i, QHeaderView.ResizeToContents)
-        self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
-        for i in (5, 6, 7):
-            self.table.horizontalHeader().setSectionResizeMode(i, QHeaderView.ResizeToContents)
+        self.table.horizontalHeaderItem(self.COL_TX).setToolTip("Transactions")
+        _compact(self.table)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.verticalHeader().setVisible(False)
         self.table.setAlternatingRowColors(True)
         self.table.cellDoubleClicked.connect(self._on_double_click)
         self.table.itemChanged.connect(self._on_item_changed)
+        self.table.itemSelectionChanged.connect(self._update_lines)
         _apply_selection_palette(self.table)
-        layout.addWidget(self.table, 3)
+        left = QWidget()
+        left_col = QVBoxLayout(left)
+        left_col.setSpacing(8)
+        left_col.addWidget(self.table, 1, Qt.AlignLeft)
+        row, _ = _icon_buttons([("＋", "Add Account", self.add), ("✏️", "Edit Account", self.edit),
+                                ("🗑️", "Delete Account", self.delete)])
+        left_col.addLayout(row)
+        self.lines = TransactionList(open_line=self._open_line, leave_out=("account",))
+        self.split = _two_rows(left, self.lines, side_by_side=True)
+        layout.addWidget(self.split, 1)
+        self.open_filtered = None  # (text, **filters) → Transactions, from Manage
+        self.set_show_lines(bool(get_settings().get(SHOW_KEY)))
 
-        btn_panel = QVBoxLayout()
-        btn_panel.setSpacing(8)
-        for label, slot in [
-            ("＋ Add", self.add),
-            ("✏️  Edit", self.edit),
-            ("🗑️  Delete", self.delete),
-        ]:
-            btn = QPushButton(label)
-            if "Delete" in label:
-                btn.setProperty("class", "danger")
-            elif "Add" not in label:
-                btn.setProperty("class", "secondary")
-            btn.clicked.connect(slot)
-            btn_panel.addWidget(btn)
-        btn_panel.addStretch()
-        layout.addLayout(btn_panel)
+    def showEvent(self, event):
+        super().showEvent(event)
+        _fit_beside(self.split)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        _fit_beside(self.split)
+
+    def set_show_lines(self, shown):
+        """Show or hide the selected account's transactions ("Show transactions")."""
+        self.lines.setVisible(shown)
+        self._update_lines()
+
+    def _update_lines(self):
+        if self.lines.isHidden():
+            return
+        rows = self.table.selectionModel().selectedRows() if self.table.selectionModel() else []
+        item = self.table.item(rows[0].row(), self.COL_NAME) if rows else None
+        if item is None:
+            self.lines.clear("Select an account to see its transactions")
+            return
+        self.lines.set_lines(self.db.get_lines(account_id=item.data(Qt.UserRole)), item.text(), total=False)
+
+    def _open_line(self, line):
+        if self.open_filtered:
+            text, filters = line_filters(line)
+            self.open_filtered(text, accounts=[line["account"]] if line["account"] else [], **filters)
 
     def refresh(self):
+        rows = self.table.selectionModel().selectedRows()
+        kept = self.table.item(rows[0].row(), self.COL_NAME).data(Qt.UserRole) if rows else None
         self.table.blockSignals(True)
         self.table.setRowCount(0)
 
@@ -296,11 +348,13 @@ class AccountsPanel(QWidget):
                 l.setContentsMargins(0, 0, 0, 0)
                 self.table.setCellWidget(row, col, w)
 
-            cnt = QTableWidgetItem(str(count))
-            cnt.setTextAlignment(Qt.AlignCenter)
-            self.table.setItem(row, self.COL_TX, cnt)
+            self.table.setItem(row, self.COL_TX, _number_item(count))
+            if a["id"] == kept:
+                self.table.selectRow(row)
 
         self.table.blockSignals(False)
+        _fit_beside(self.split)
+        self._update_lines()
 
     def _on_double_click(self, row, col):
         if col == self.COL_COLOR:
@@ -475,17 +529,53 @@ class AccountEditDialog(QDialog):
 
 
 # CatsRulesPanel
+def _two_rows(top, bottom, side_by_side=False):
+    """A list above (or beside) its transactions, and a line between them to drag: it lights
+    up under the pointer, with a little room on both sides so the buttons do not touch it."""
+    split = QSplitter(Qt.Horizontal if side_by_side else Qt.Vertical)
+    split.setChildrenCollapsible(False)
+    split.setHandleWidth(7)
+    split.addWidget(top)
+    split.addWidget(bottom)
+    split.setStretchFactor(0, 0)  # a bigger window: the room goes to the transactions
+    split.setStretchFactor(1, 1)
+    if side_by_side:
+        top.layout().setContentsMargins(0, 0, 10, 0)
+        bottom.layout().setContentsMargins(8, 0, 0, 0)
+    else:
+        top.layout().setContentsMargins(0, 0, 0, 10)
+        bottom.layout().setContentsMargins(0, 8, 0, 0)
+    split.handle(1).setAttribute(Qt.WA_Hover)  # for :hover in the style sheet
+    split.handle(1).setToolTip("Drag to give either side more room")
+    split.setSizes([top.sizeHint().width(), 2000] if side_by_side else [300, 500])
+    return split
+
+
+def _fit_beside(split):
+    """Once its list has its rows: give the list beside the transactions the width it needs
+    (the line can still be dragged afterwards)."""
+    if getattr(split, "_fitted", False) or not split.isVisible():
+        return  # on screen: only then are its columns as wide as their text
+    left = split.widget(0)
+    table = left.findChild(QTableWidget)
+    header = table.horizontalHeader()
+    width = sum(max(table.sizeHintForColumn(c), header.sectionSizeHint(c)) for c in range(table.columnCount()))
+    width += 2 * table.frameWidth() + table.verticalScrollBar().sizeHint().width() + 24  # its frame, margins
+    if split.width() > width + 200:  # laid out at its real size (the sizes are shares of it)
+        split.setSizes([width, split.width() - width])
+        split._fitted = True
+
+
 class CatsRulesPanel(QWidget):
     """Types, categories, sub-categories, and the merchants whose money goes there."""
-    M_NAME, M_TX, M_TOTAL, M_RULES = range(4)
+    M_NAME, M_TX, M_RULES, M_TOTAL = range(4)
 
-    def __init__(self, db, on_change, open_merchant=None, show_transactions=None, on_show_lines=None):
+    def __init__(self, db, on_change, open_merchant=None, show_transactions=None):
         super().__init__()
         self.db = db
         self.on_change = on_change
         self.open_merchant = open_merchant  # (name) → Merchants tab
         self.show_transactions = show_transactions  # (text, **filters) → the main window
-        self.on_show_lines = on_show_lines  # (shown) → Manage, when "Show transactions" is ticked or not
         self._build()
 
     def _build(self):
@@ -493,7 +583,8 @@ class CatsRulesPanel(QWidget):
         lists_row.setContentsMargins(10, 10, 10, 10)
         lists_row.setSpacing(4)
 
-        self.type_table, type_col, type_w = self._make_table_col("Type", ["Name", "Tx", "Cats"])
+        self.type_table, type_col, type_w = self._make_table_col("Type", ["Name", "Tx", "Cats"],
+                                                                 {1: "Transactions", 2: "Categories"})
         self.type_table.itemSelectionChanged.connect(self._on_type_selected)
         self.type_table.cellDoubleClicked.connect(lambda r, c: self._rename_type())
         type_col.addLayout(self._make_btns([
@@ -504,7 +595,8 @@ class CatsRulesPanel(QWidget):
         lists_row.addWidget(type_w)
         lists_row.addWidget(self._vline())
 
-        self.cat_table, cat_col, cat_w = self._make_table_col("Category", ["Name", "Tx", "Subs"])
+        self.cat_table, cat_col, cat_w = self._make_table_col("Category", ["Name", "Tx", "Subs"],
+                                                              {1: "Transactions", 2: "Sub-categories"})
         self.cat_table.itemSelectionChanged.connect(self._on_cat_selected)
         self.cat_table.cellDoubleClicked.connect(lambda r, c: self._rename_cat())
         # a click on the category (again): its merchants, all sub-categories together
@@ -518,7 +610,9 @@ class CatsRulesPanel(QWidget):
         lists_row.addWidget(cat_w)
         lists_row.addWidget(self._vline())
 
-        self.sub_table, sub_col, sub_w = self._make_table_col("Sub-Category", ["Name", "Tx"])
+        self.sub_table, sub_col, sub_w = self._make_table_col(
+            "Sub-Category", ["Name", "Tx", "M", "R"],
+            {1: "Transactions", 2: "Merchants with transactions here", 3: "Rules that send money here"})
         self.sub_table.itemSelectionChanged.connect(self._on_sub_selected)
         self.sub_table.cellDoubleClicked.connect(lambda r, c: self._rename_sub())
         self.sub_table.setSelectionMode(QTableWidget.ExtendedSelection)
@@ -532,50 +626,42 @@ class CatsRulesPanel(QWidget):
         lists_row.addWidget(sub_w)
         lists_row.addWidget(self._vline())
 
-        self.merchant_table, m_col, m_w = self._make_table_col("Merchants", ["Merchant", "Tx", "Total", "Rules"])
+        self.merchant_table, m_col, m_w = self._make_table_col(
+            "Merchants", ["Merchant", "Tx", "R", "Total"],
+            {1: "Transactions", 2: "Its rules that send money here", 3: "The money of its transactions here"})
         self.merchant_title = m_col.itemAt(0).widget()
         self.merchant_table.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Expanding)  # as wide as its text
+        self.merchant_table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)  # in a narrow window
         self.merchant_table.cellDoubleClicked.connect(self._merchant_double_clicked)
         self.merchant_table.itemSelectionChanged.connect(self._update_lines)
         hint = QLabel("Double-click a merchant to see and edit its rules (Merchants tab); double-click its "
-                      "numbers to see those transactions. Rules: how many of its rules send money here.")
+                      "numbers to see those transactions. R: how many of its rules send money here.")
         hint.setProperty("class", "dim-label")
         hint.setWordWrap(True)
-        hint.setMaximumWidth(420)
         # the column in two rows: the merchants, and (when ticked) the transactions there
         m_col.removeWidget(self.merchant_title)
         m_col.removeWidget(self.merchant_table)
         head = QHBoxLayout()
         self.merchant_title.setWordWrap(True)
         head.addWidget(self.merchant_title, 1)
-        self.chk_lines = QCheckBox("Show transactions")
-        self.chk_lines.setToolTip("The transactions of what is selected, under the merchants "
-                                  "(a click on a merchant shows only its own)")
-        head.addWidget(self.chk_lines)
         m_col.addLayout(head)
         top = QWidget()
-        top_row = QHBoxLayout(top)
-        top_row.setContentsMargins(0, 0, 0, 0)
-        top_row.setSpacing(14)
-        top_row.addWidget(self.merchant_table)
-        top_row.addWidget(hint, 0, Qt.AlignTop)
-        top_row.addStretch(1)
+        top_col = QVBoxLayout(top)
+        top_col.setContentsMargins(0, 0, 0, 0)
+        top_col.setSpacing(6)
+        top_col.addWidget(self.merchant_table, 1, Qt.AlignLeft)
+        top_col.addWidget(hint)
         self.lines = TransactionList(open_line=self._open_line, leave_out=("type", "category"))
         self.lines.btn_all.clicked.connect(self.merchant_table.clearSelection)
-        self.split = QSplitter(Qt.Vertical)
-        self.split.setChildrenCollapsible(False)
-        self.split.addWidget(top)
-        self.split.addWidget(self.lines)
-        self.split.setSizes([300, 500])
+        self.split = _two_rows(top, self.lines)
         m_col.addWidget(self.split, 1)
         m_w.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         lists_row.addWidget(m_w, 1)
         self.set_show_lines(bool(get_settings().get(SHOW_KEY)))
-        self.chk_lines.toggled.connect(self._show_lines_toggled)
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
-    def _make_table_col(self, title, header):
+    def _make_table_col(self, title, header, tips=None):
         col = QVBoxLayout()
         col.setSpacing(6)
         col.setContentsMargins(0, 0, 0, 0)
@@ -587,6 +673,8 @@ class CatsRulesPanel(QWidget):
         n_cols = len(header)
         tbl = QTableWidget(0, n_cols)
         tbl.setHorizontalHeaderLabels(header)
+        for index, tip in (tips or {}).items():  # the short headers in words
+            tbl.horizontalHeaderItem(index).setToolTip(tip)
         self._add_scrollbar_gap(tbl, gap=8, scrollbar_width=12)
         h = tbl.horizontalHeader()
         h.setStretchLastSection(False)
@@ -666,7 +754,7 @@ class CatsRulesPanel(QWidget):
             row = self.type_table.rowCount()
             self.type_table.insertRow(row)
             for col, val in enumerate([t["name"], str(tx), str(cats)]):
-                item = QTableWidgetItem(val)
+                item = QTableWidgetItem(val) if col == 0 else _number_item(int(val))
                 item.setData(Qt.UserRole, t)
                 if col > 0:
                     item.setTextAlignment(Qt.AlignCenter)
@@ -691,7 +779,7 @@ class CatsRulesPanel(QWidget):
             row = self.cat_table.rowCount()
             self.cat_table.insertRow(row)
             for col, val in enumerate([c["name"], str(tx), str(subs)]):
-                item = QTableWidgetItem(val)
+                item = QTableWidgetItem(val) if col == 0 else _number_item(int(val))
                 item.setData(Qt.UserRole, c)
                 if col > 0:
                     item.setTextAlignment(Qt.AlignCenter)
@@ -713,11 +801,13 @@ class CatsRulesPanel(QWidget):
         subs = self.db.get_subcategories(cat_id) if cat_id else []
         for s in subs:
             tx = self.db.get_transaction_count_for_subcategory(s["id"])
+            merchants = self.db.get_merchant_count_for_subcategory(s["id"])
+            rules = self.db.get_rule_count_for_subcategory(s["id"])
 
             row = self.sub_table.rowCount()
             self.sub_table.insertRow(row)
-            for col, val in enumerate([s["name"], str(tx)]):
-                item = QTableWidgetItem(val)
+            for col, val in enumerate([s["name"], str(tx), str(merchants), str(rules)]):
+                item = QTableWidgetItem(val) if col == 0 else _number_item(int(val))
                 item.setData(Qt.UserRole, s)
                 if col > 0:
                     item.setTextAlignment(Qt.AlignCenter)
@@ -747,18 +837,9 @@ class CatsRulesPanel(QWidget):
 
     # ── the transactions under the merchants ─────────────────────────────────
     def set_show_lines(self, shown):
-        """Show or hide them (no signal: Manage keeps its tabs alike)."""
-        self.chk_lines.blockSignals(True)
-        self.chk_lines.setChecked(shown)
-        self.chk_lines.blockSignals(False)
+        """Show or hide them ("Show transactions", beside Manage's tabs)."""
         self.lines.setVisible(shown)
         self._update_lines()
-
-    def _show_lines_toggled(self, shown):
-        get_settings().set(SHOW_KEY, shown)
-        self.set_show_lines(shown)
-        if self.on_show_lines:
-            self.on_show_lines(shown)
 
     def _update_lines(self):
         if self.lines.isHidden():
@@ -797,13 +878,12 @@ class CatsRulesPanel(QWidget):
             row = table.rowCount()
             table.insertRow(row)
             none = not m["merchant"]
-            values = [NO_MERCHANT if none else m["merchant"], str(m["count"]), money(m["total"]),
-                      "—" if none else str(m["rules"])]
-            for col, val in enumerate(values):
-                item = QTableWidgetItem(val)
+            right = Qt.AlignRight | Qt.AlignVCenter
+            items = [QTableWidgetItem(NO_MERCHANT if none else m["merchant"]),
+                     _number_item(m["count"], align=right), _number_item(m["rules"], align=right),
+                     _number_item(m["total"], money(m["total"]), align=right)]
+            for col, item in enumerate(items):
                 item.setData(Qt.UserRole, m)
-                if col > 0:
-                    item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
                 if none:
                     item.setForeground(dim)
                 table.setItem(row, col, item)
@@ -1048,7 +1128,8 @@ class CatsRulesPanel(QWidget):
             QMessageBox.information(self, "Select", "Select a category first.")
             return
         dlg = IconPickerDialog(data["icon"], f"Icon for <b>{html.escape(data['name'])}</b>",
-                               "Its sub-categories show it too, unless they have their own.", self)
+                               "Its sub-categories show it too, unless they have their own.", self,
+                               suggested=suggest_icon(data["name"]))
         if dlg.exec():
             self.db.set_category_icon(data["id"], dlg.icon)
             self.on_change()
@@ -1061,7 +1142,11 @@ class CatsRulesPanel(QWidget):
         cat = self._selected_data(self.cat_table)
         hint = (f"No Icon: it shows its category's ({cat['icon']})." if cat and cat["icon"]
                 else "No Icon: it shows its category's, if that has one.")
-        dlg = IconPickerDialog(data["icon"], f"Icon for <b>{html.escape(data['name'])}</b>", hint, self)
+        offer = suggest_icon(data["name"])
+        if cat and offer == cat["icon"]:
+            offer = ""  # it shows its category's anyway
+        dlg = IconPickerDialog(data["icon"], f"Icon for <b>{html.escape(data['name'])}</b>", hint, self,
+                               suggested=offer)
         if dlg.exec():
             self.db.set_subcategory_icon(data["id"], dlg.icon)
             self.on_change()
@@ -1458,42 +1543,66 @@ class TagsPanel(QWidget):
         self._build()
 
     def _build(self):
-        layout = QHBoxLayout(self)
+        layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(16)
 
         self.table = QTableWidget()
         self.table.setColumnCount(2)
-        self.table.setHorizontalHeaderLabels(["Tag", "# Tx"])
-        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.table.setHorizontalHeaderLabels(["Tag", "Tx"])
+        self.table.horizontalHeaderItem(self.COL_TX).setToolTip("Transactions")
+        _compact(self.table)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.verticalHeader().setVisible(False)
         self.table.setAlternatingRowColors(True)
         self.table.cellDoubleClicked.connect(lambda r, c: self.rename())
+        self.table.itemSelectionChanged.connect(self._update_lines)
         _apply_selection_palette(self.table)
-        layout.addWidget(self.table, 1)
+        left = QWidget()
+        left_col = QVBoxLayout(left)
+        left_col.setSpacing(8)
+        left_col.addWidget(self.table, 1, Qt.AlignLeft)
+        row, _ = _icon_buttons([("＋", "Add Tag", self.add), ("✏️", "Rename Tag", self.rename),
+                                ("🗑️", "Delete Tag", self.delete)])
+        left_col.addLayout(row)
+        self.lines = TransactionList(open_line=self._open_line)
+        self.split = _two_rows(left, self.lines, side_by_side=True)
+        layout.addWidget(self.split, 1)
+        self.open_filtered = None  # (text, **filters) → Transactions, from Manage
+        self.set_show_lines(bool(get_settings().get(SHOW_KEY)))
 
-        btn_panel = QVBoxLayout()
-        btn_panel.setSpacing(8)
-        for label, slot in [
-            ("＋ Add", self.add),
-            ("✏️  Rename", self.rename),
-            ("🗑️  Delete", self.delete),
-        ]:
-            btn = QPushButton(label)
-            if "Delete" in label:
-                btn.setProperty("class", "danger")
-            elif "Add" not in label:
-                btn.setProperty("class", "secondary")
-            btn.clicked.connect(slot)
-            btn_panel.addWidget(btn)
-        btn_panel.addStretch()
-        layout.addLayout(btn_panel)
+    def showEvent(self, event):
+        super().showEvent(event)
+        _fit_beside(self.split)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        _fit_beside(self.split)
+
+    def set_show_lines(self, shown):
+        """Show or hide the selected tag's transactions ("Show transactions")."""
+        self.lines.setVisible(shown)
+        self._update_lines()
+
+    def _update_lines(self):
+        if self.lines.isHidden():
+            return
+        tag_id, name = self._selected()
+        if tag_id is None:
+            self.lines.clear("Select a tag to see its transactions")
+            return
+        lines = self.db.get_lines(tag_id=tag_id)
+        self.lines.set_lines(lines, name, total=net_spent(lines))
+
+    def _open_line(self, line):
+        if self.open_filtered:
+            text, filters = line_filters(line)
+            self.open_filtered(text, **filters)
 
     def refresh(self):
+        kept, _ = self._selected()
+        self.table.blockSignals(True)
         self.table.setRowCount(0)
         for tag in self.db.get_tags():
             count = self.db.get_transaction_count_for_tag(tag["id"])
@@ -1502,9 +1611,12 @@ class TagsPanel(QWidget):
             name_item = QTableWidgetItem(tag["name"])
             name_item.setData(Qt.UserRole, tag["id"])
             self.table.setItem(row, self.COL_NAME, name_item)
-            cnt = QTableWidgetItem(str(count))
-            cnt.setTextAlignment(Qt.AlignCenter)
-            self.table.setItem(row, self.COL_TX, cnt)
+            self.table.setItem(row, self.COL_TX, _number_item(count))
+            if tag["id"] == kept:
+                self.table.selectRow(row)
+        self.table.blockSignals(False)
+        _fit_beside(self.split)
+        self._update_lines()
 
     def _selected(self):
         rows = self.table.selectedItems()
@@ -1553,14 +1665,13 @@ class MerchantsPanel(QWidget):
     COL_NAME, COL_TX, COL_RULES, COL_TOTAL = range(4)
     R_TEXT, R_SETS, R_TYPE, R_ACCOUNT = range(4)
 
-    def __init__(self, db, on_change, show_transactions=None, notify=None, show_filtered=None, on_show_lines=None):
+    def __init__(self, db, on_change, show_transactions=None, notify=None, show_filtered=None):
         super().__init__()
         self.db = db
         self.on_change = on_change
         self.show_transactions = show_transactions  # (merchant, "" = none) → Transactions, from the window
         self.notify = notify or (lambda text: None)  # (text) → a line at the bottom of Manage
         self.show_filtered = show_filtered  # (text, **filters) → Transactions (one of its transactions)
-        self.on_show_lines = on_show_lines  # (shown) → Manage, when "Show transactions" is ticked or not
         layout = QHBoxLayout(self)
         layout.setContentsMargins(16, 14, 16, 8)
         layout.setSpacing(16)
@@ -1573,7 +1684,10 @@ class MerchantsPanel(QWidget):
         self.find.textChanged.connect(self._filter)
         left.addWidget(self.find)
         self.table = QTableWidget(0, 4)
-        self.table.setHorizontalHeaderLabels(["Merchant", "Tx", "Rules", "Net Spent"])
+        self.table.setHorizontalHeaderLabels(["Merchant", "Tx", "R", "Total"])
+        for col, tip in ((self.COL_TX, "Transactions"), (self.COL_RULES, "Its rules"),
+                         (self.COL_TOTAL, "Spent minus income (money back counts against it); transfers left out")):
+            self.table.horizontalHeaderItem(col).setToolTip(tip)
         h = self.table.horizontalHeader()
         h.setSectionResizeMode(QHeaderView.ResizeToContents)
         h.setSectionResizeMode(self.COL_NAME, QHeaderView.Stretch)
@@ -1592,6 +1706,19 @@ class MerchantsPanel(QWidget):
         self.table.itemSelectionChanged.connect(self._show_rules)
         _apply_selection_palette(self.table)
         left.addWidget(self.table, 1)
+        # the sums of the merchants shown, always in sight under their columns
+        self.totals = QTableWidget(1, 4)
+        self.totals.horizontalHeader().hide()
+        self.totals.verticalHeader().hide()
+        self.totals.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.totals.setSelectionMode(QAbstractItemView.NoSelection)
+        self.totals.setFocusPolicy(Qt.NoFocus)
+        self.totals.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.totals.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.totals.setFixedHeight(self.totals.verticalHeader().defaultSectionSize() + 2 * self.totals.frameWidth())
+        self.totals.setToolTip("The merchants shown (all, or those you looked for) added up")
+        h.sectionResized.connect(lambda col, _old, new: self.totals.setColumnWidth(col, new))
+        left.addWidget(self.totals)
         row, self._merchant_btns = _icon_buttons([
             ("✏️", "Rename / Merge", self.rename),
             ("🏷️", "Set Category… (its rules and transactions)", self.set_category),
@@ -1601,7 +1728,7 @@ class MerchantsPanel(QWidget):
         lw = QWidget()
         lw.setLayout(left)
         lw.setMinimumWidth(510)
-        lw.setMaximumWidth(560)
+        lw.setMaximumWidth(640)
         layout.addWidget(lw, 4)
         sep = QFrame()
         sep.setFrameShape(QFrame.VLine)
@@ -1613,9 +1740,6 @@ class MerchantsPanel(QWidget):
         self.rules_title = QLabel()
         self.rules_title.setWordWrap(True)
         head.addWidget(self.rules_title, 1)
-        self.chk_lines = QCheckBox("Show transactions")
-        self.chk_lines.setToolTip("The selected merchant's transactions, under its rules")
-        head.addWidget(self.chk_lines)
         right.addLayout(head)
         top = QWidget()
         top_col = QVBoxLayout(top)
@@ -1634,48 +1758,34 @@ class MerchantsPanel(QWidget):
         self.rules.setAlternatingRowColors(True)
         self.rules.cellDoubleClicked.connect(lambda r, c: self.edit_rule())
         _apply_selection_palette(self.rules)
-        rules_row = QHBoxLayout()
-        rules_row.setSpacing(14)
-        rules_row.addWidget(self.rules)
-        self.rules_hint = QLabel()
-        self.rules_hint.setProperty("class", "dim-label")
-        self.rules_hint.setWordWrap(True)
-        self.rules_hint.setMaximumWidth(420)
-        rules_row.addWidget(self.rules_hint, 0, Qt.AlignTop)
-        rules_row.addStretch(1)
-        top_col.addLayout(rules_row, 1)
+        top_col.addWidget(self.rules, 1, Qt.AlignLeft)
         row, buttons = _icon_buttons([
             ("＋", "Add Rule", self.add_rule),
             ("✏️", "Edit Rule", self.edit_rule),
             ("🏪", "Set Merchant… (the selected rules)", self.set_rules_merchant),
             ("🗑️", "Delete Rule", self.delete_rules)])
         self.btn_set_merchant = buttons[2]
+        self.rules_hint = QLabel()  # after the buttons: the room beside them, so few lines
+        self.rules_hint.setProperty("class", "dim-label")
+        self.rules_hint.setWordWrap(True)
+        row.addSpacing(14)
+        row.addWidget(self.rules_hint, 1)
         top_col.addLayout(row)
         self.lines = TransactionList(open_line=self._open_line, leave_out=("merchant",))
-        self.split = QSplitter(Qt.Vertical)
-        self.split.setChildrenCollapsible(False)
-        self.split.addWidget(top)
-        self.split.addWidget(self.lines)
-        self.split.setSizes([300, 500])
+        self.split = _two_rows(top, self.lines)
         right.addWidget(self.split, 1)
         layout.addLayout(right, 7)
         self.set_show_lines(bool(get_settings().get(SHOW_KEY)))
-        self.chk_lines.toggled.connect(self._show_lines_toggled)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._update_totals()  # the fonts are final now: the Total column fits the sum
 
     # ── its transactions, under its rules ─────────────────────────────────────
     def set_show_lines(self, shown):
-        """Show or hide them (no signal: Manage keeps its tabs alike)."""
-        self.chk_lines.blockSignals(True)
-        self.chk_lines.setChecked(shown)
-        self.chk_lines.blockSignals(False)
+        """Show or hide them ("Show transactions", beside Manage's tabs)."""
         self.lines.setVisible(shown)
         self._update_lines()
-
-    def _show_lines_toggled(self, shown):
-        get_settings().set(SHOW_KEY, shown)
-        self.set_show_lines(shown)
-        if self.on_show_lines:
-            self.on_show_lines(shown)
 
     def _update_lines(self):
         if self.lines.isHidden():
@@ -1685,7 +1795,7 @@ class MerchantsPanel(QWidget):
             self.lines.clear()
             return
         lines = self.db.get_lines(merchant=m["merchant"])
-        self.lines.set_lines(lines, m["merchant"] or NO_MERCHANT, total=net_spent(lines), total_label="net spent")
+        self.lines.set_lines(lines, m["merchant"] or NO_MERCHANT, total=net_spent(lines))
 
     def _open_line(self, line):
         if self.show_filtered:
@@ -1701,8 +1811,8 @@ class MerchantsPanel(QWidget):
         rows = list(self.db.get_merchant_overview())
         n_tx, n_rules = self.db.get_no_merchant_counts()
         if n_tx or n_rules:
-            rows.append({"merchant": "", "count": n_tx, "rules": n_rules, "total": None, "rule_targets": set(),
-                         "types": {}})
+            rows.append({"merchant": "", "count": n_tx, "rules": n_rules, "total": self.db.get_no_merchant_total(),
+                         "rule_targets": set(), "types": {}})
         dim = QBrush(QColor(get_settings().get("text_dim") or "#999"))
         for m in rows:
             r = self.table.rowCount()
@@ -1710,11 +1820,13 @@ class MerchantsPanel(QWidget):
             none = not m["merchant"]
             items = [_SortItem(NO_MERCHANT if none else m["merchant"], m["merchant"].casefold(), none),
                      _SortItem(str(m["count"]), m["count"], none), _SortItem(str(m["rules"]), m["rules"], none),
-                     _SortItem("—" if none else _money(m["total"]), m["total"] or 0, none)]
+                     _SortItem(_money(m["total"]), m["total"] or 0, none)]
             items[0].setData(Qt.UserRole, m)
             for c, item in enumerate(items):
                 if c != self.COL_NAME:
                     item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                    if not round(m[("count", "rules", "total")[c - 1]] or 0, 2):
+                        item.setForeground(_dim())  # 0: written, quietly
                 if none:
                     item.setForeground(dim)
                     item.setToolTip("Transactions and rules with no merchant: give the rules one "
@@ -1731,6 +1843,31 @@ class MerchantsPanel(QWidget):
         text = text.strip().casefold()
         for r in range(self.table.rowCount()):
             self.table.setRowHidden(r, bool(text) and text not in self.table.item(r, 0).text().casefold())
+        self._update_totals()
+
+    def _update_totals(self):
+        """The line under the merchants: how many are shown, and their numbers added up."""
+        shown = [self.table.item(r, 0).data(Qt.UserRole) for r in range(self.table.rowCount())
+                 if not self.table.isRowHidden(r)]
+        named = sum(1 for m in shown if m["merchant"])
+        sums = (sum(m["count"] for m in shown), sum(m["rules"] for m in shown),
+                sum(m["total"] or 0 for m in shown))
+        texts = [f"{named} merchant{'s' if named != 1 else ''}", str(sums[0]), str(sums[1]), _money(sums[2])]
+        bold = QFont(self.table.font())  # the list's font, as the style sheet made it
+        bold.setBold(True)
+        for c, text in enumerate(texts):
+            item = QTableWidgetItem(text)
+            item.setFont(bold)
+            if c != self.COL_NAME:
+                item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            self.totals.setItem(0, c, item)
+        header = self.table.horizontalHeader()
+        needed = QFontMetrics(bold).horizontalAdvance(texts[self.COL_TOTAL]) + 28  # with the cell's padding
+        widest = max(self.table.sizeHintForColumn(self.COL_TOTAL), header.sectionSizeHint(self.COL_TOTAL))
+        header.setSectionResizeMode(self.COL_TOTAL, QHeaderView.Fixed)
+        header.resizeSection(self.COL_TOTAL, int(max(needed, widest)))
+        for c in range(4):
+            self.totals.setColumnWidth(c, header.sectionSize(c))
 
     def _selected(self):
         r = self.table.currentRow()

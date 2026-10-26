@@ -61,7 +61,7 @@ def panel_on(db, shown=True):
     p._select_by_name(p.cat_table, "Groceries")
     if shown:
         with mock.patch.object(dlg, "showMaximized"):
-            p.chk_lines.setChecked(True)
+            dlg.chk_lines.setChecked(True)
     return dlg, p, opened
 
 
@@ -83,7 +83,9 @@ def test_lines_of_a_category_a_sub_category_and_a_merchant(db, food):
 # ── Manage → Categories ──────────────────────────────────────────────────────
 def test_off_at_first(qapp, db, food):
     dlg, p, _ = panel_on(db, shown=False)
-    assert not p.chk_lines.isChecked() and p.lines.isHidden()
+    assert not dlg.chk_lines.isChecked() and p.lines.isHidden()
+    assert dlg.tabs.cornerWidget() is dlg.chk_lines.parentWidget()  # beside the tabs, once for all
+
 
 
 def test_the_transactions_of_the_category(qapp, db, food):
@@ -133,9 +135,9 @@ def test_double_click_opens_that_day_in_transactions(qapp, db, food):
 def test_the_first_time_manage_fills_the_screen(qapp, db, food):
     dlg, p, _ = panel_on(db, shown=False)
     with mock.patch.object(dlg, "showMaximized") as fill:
-        p.chk_lines.setChecked(True)
-        p.chk_lines.setChecked(False)
-        p.chk_lines.setChecked(True)
+        dlg.chk_lines.setChecked(True)
+        dlg.chk_lines.setChecked(False)
+        dlg.chk_lines.setChecked(True)
     assert fill.call_count == 1
 
 
@@ -159,12 +161,12 @@ def test_merchants_tab_shows_a_merchants_transactions(qapp, db, food):
                        name="SUNRISE GIFT", merchant="Sunrise")
     dlg, p, opened = panel_on(db)
     m = dlg.merchants_panel
-    assert m.chk_lines.isChecked() and not m.lines.isHidden()  # one tick for both tabs
-    m.chk_lines.setChecked(False)
-    assert not p.chk_lines.isChecked() and p.lines.isHidden()
-    m.chk_lines.setChecked(True)
+    assert not m.lines.isHidden()  # one tick for every tab
+    dlg.chk_lines.setChecked(False)
+    assert p.lines.isHidden() and m.lines.isHidden()
+    dlg.chk_lines.setChecked(True)
     m.select("Sunrise")
-    assert m.lines.title.text() == "Sunrise — 3 transactions · $3.00 net spent"  # 10 − 4 − 3
+    assert m.lines.title.text() == "Sunrise — 3 transactions · $3.00"  # 10 − 4 − 3
     assert [m.lines.table.item(r, m.lines.columns.index("category")).text()
             for r in range(m.lines.table.rowCount())] == ["Refunds", "Groceries", "Groceries"]
     m.lines._double_clicked(0, 0)
@@ -203,3 +205,80 @@ def test_the_merchants_are_only_as_wide_as_their_text(qapp, db, food):
     dlg, p, _ = panel_on(db)
     assert p.merchant_table.sizePolicy().horizontalPolicy() == QSizePolicy.Maximum
     assert dlg.merchants_panel.rules.sizePolicy().horizontalPolicy() == QSizePolicy.Maximum
+
+
+def test_the_line_between_the_lists_lights_up_and_has_room(qapp, db, food):
+    from PySide6.QtCore import Qt
+    from daftarche.style import build_stylesheet
+    dlg, p, _ = panel_on(db)
+    for panel in (p, dlg.merchants_panel):
+        handle = panel.split.handle(1)
+        assert handle.testAttribute(Qt.WA_Hover)
+        assert panel.split.widget(0).layout().contentsMargins().bottom() == 10
+    assert "QSplitter::handle:hover" in build_stylesheet()
+
+
+def test_sub_categories_count_their_merchants_and_rules(qapp, db, food):
+    db.save_mapping("Expense", None, name="SUNRISE", subcategory_id=food["bakery"], category_id=food["cat"],
+                    merchant="Sunrise")
+    assert db.get_merchant_count_for_subcategory(food["bakery"]) == 1
+    assert db.get_merchant_count_for_subcategory(food["market"]) == 1  # Big Box's part; FARM STAND has none
+    dlg, p, _ = panel_on(db, shown=False)
+    rows = {p.sub_table.item(r, 0).text(): [p.sub_table.item(r, c).text() for c in (1, 2, 3)]
+            for r in range(p.sub_table.rowCount())}
+    assert rows["Bakery"] == ["2", "1", "1"] and rows["Market"] == ["2", "1", "0"]
+    assert p.sub_table.horizontalHeaderItem(3).toolTip() == "Rules that send money here"
+
+
+# ── one way of writing numbers; the totals line; Accounts and Tags ──────────────
+def test_headers_and_quiet_zeros(qapp, db, food):
+    dlg, p, _ = panel_on(db, shown=False)
+    headers = lambda table: [table.horizontalHeaderItem(c).text() for c in range(table.columnCount())]
+    assert headers(p.sub_table) == ["Name", "Tx", "M", "R"]
+    assert headers(p.merchant_table) == ["Merchant", "Tx", "R", "Total"]
+    assert headers(dlg.merchants_panel.table) == ["Merchant", "Tx", "R", "Total"]
+    assert headers(dlg.accounts_panel.table)[-1] == "Tx" and headers(dlg.tags_panel.table) == ["Tag", "Tx"]
+    rows = {p.merchant_table.item(r, 0).text(): r for r in range(p.merchant_table.rowCount())}
+    none = rows["(no merchant)"]
+    assert p.merchant_table.item(none, p.M_RULES).text() == "0"  # a number, not —
+    mp = dlg.merchants_panel
+    mrows = {mp.table.item(r, 0).text(): r for r in range(mp.table.rowCount())}
+    assert mp.table.item(mrows["(no merchant)"], mp.COL_TOTAL).text() == "$30.00"
+    zero = mp.table.item(mrows["Sunrise"], mp.COL_RULES)
+    assert zero.text() == "0" and zero.foreground().color().name() != mp.table.item(mrows["Sunrise"], 0).foreground().color().name()
+
+
+def test_the_merchants_totals_line(qapp, db, food):
+    dlg, p, _ = panel_on(db, shown=False)
+    mp = dlg.merchants_panel
+    line = [mp.totals.item(0, c).text() for c in range(4)]
+    assert line == ["2 merchants", "4", "0", "$136.00"]  # Sunrise, Big Box (all of it), the one with none
+    mp.find.setText("sun")
+    assert [mp.totals.item(0, c).text() for c in range(4)] == ["1 merchant", "2", "0", "$6.00"]
+
+
+def test_accounts_and_tags_show_their_transactions_beside_them(qapp, db, food):
+    from PySide6.QtCore import Qt
+    db.add_tag("Party")
+    tag_id = db.conn.execute("SELECT id FROM tags WHERE name = 'Party'").fetchone()[0]
+    sunrise = db.conn.execute("SELECT id FROM transactions WHERE name = 'SUNRISE 1'").fetchone()[0]
+    db.set_tags_for_transaction(sunrise, [tag_id])
+    dlg, p, opened = panel_on(db)
+    a = dlg.accounts_panel
+    assert a.split.orientation() == Qt.Horizontal and not a.lines.isHidden()
+    a.table.selectRow(0)
+    assert a.lines.title.text() == "Card — 4 transactions"  # Big Box's two parts are one; no total
+    assert a.lines.table.rowCount() == 5
+    tg = dlg.tags_panel
+    tg.table.selectRow(0)
+    assert tg.lines.title.text() == "Party — 1 transaction · $10.00"
+    tg.lines._double_clicked(0, 0)
+    (text, panel), filters = opened[-1]
+    assert panel == "tags" and filters["from_day"] == "2026-05-01"
+
+
+def test_manage_follows_changes_made_in_the_window(qapp, db, food):
+    dlg, p, _ = panel_on(db, shown=False)
+    db.add_tag("Later")
+    dlg.outside_change()
+    assert [dlg.tags_panel.table.item(r, 0).text() for r in range(dlg.tags_panel.table.rowCount())] == ["Later"]

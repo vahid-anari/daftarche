@@ -71,30 +71,6 @@ def test_suggested_icons(name, icon):
     assert suggest_icon(name) == icon
 
 
-def test_suggest_icons_window(qapp, db, cats):
-    from PySide6.QtCore import Qt
-    from daftarche.icons import SuggestIconsDialog
-    dlg = keep(SuggestIconsDialog(db))
-    lines = [(x["category"], x["sub"], x["icon"]) for x in dlg.lines]
-    # Produce would get 🛒 like Groceries: not listed. Insurance gets its own, Gas too.
-    assert [x for x in lines if x[0] in ("Car", "Groceries")] == [
-        ("Car", "", "🚗"), ("Car", "Gas", "⛽"), ("Car", "Insurance", "🛡️"), ("Groceries", "", "🛒")]
-    assert ("Loans", "", "🤝") in lines and ("External Transfer", "", "🔄") in lines
-    row = {(x[0], x[1]): i for i, x in enumerate(lines)}
-    for i in range(len(lines)):
-        if lines[i][0] not in ("Car", "Groceries"):
-            dlg.table.item(i, dlg.COL_USE).setCheckState(Qt.Unchecked)
-    dlg.table.item(row[("Car", "Insurance")], dlg.COL_USE).setCheckState(Qt.Unchecked)  # not Insurance
-    dlg.table.item(row[("Groceries", "")], dlg.COL_ICON).setText("🥕")  # changed before Save
-    with mock.patch.object(dlg, "accept"):
-        dlg.save()
-    icons = db.get_icons()
-    assert icons["cat"] == {cats["car"]: "🚗", cats["groc"]: "🥕"}
-    assert icons["sub_own"] == {cats["gas"]: "⛽"}
-    again = [(x["category"], x["sub"]) for x in keep(SuggestIconsDialog(db)).lines]
-    assert ("Car", "Insurance") in again and ("Car", "") not in again  # only what has none
-
-
 def test_an_icon_is_one_emoji(db, cats):
     from daftarche.db import clean_icon
     assert clean_icon(" 🍽️ ") == "🍽️" and clean_icon("🇨🇦") == "🇨🇦" and clean_icon("") == ""
@@ -162,3 +138,13 @@ def test_manage_sets_an_icon(qapp, db, cats):
     assert db.get_icons()["cat"] == {cats["car"]: "🚗"}
     car = next(r for r in range(panel.cat_table.rowCount()) if panel.cat_table.item(r, 0).text() == "Car")
     assert not panel.cat_table.item(car, 0).icon().isNull()
+
+
+def test_icon_picker_offers_the_suggestion(qapp):
+    from daftarche.icons import IconPickerDialog
+    d = keep(IconPickerDialog("", "Icon for Groceries", suggested="🛒"))
+    assert d.typed.text() == "🛒"
+    d._choose(d.typed.text())
+    assert d.icon == "🛒"
+    kept = keep(IconPickerDialog("🥕", "Icon for Groceries", suggested="🛒"))
+    assert kept.typed.text() == "🥕"  # its own icon: nothing offered

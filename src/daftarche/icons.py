@@ -7,8 +7,8 @@ import re
 from PySide6.QtCore import QRect, Qt
 from PySide6.QtGui import QFont, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
-    QAbstractItemView, QDialog, QDialogButtonBox, QGridLayout, QHBoxLayout, QHeaderView, QLabel,
-    QLineEdit, QMessageBox, QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout,
+    QDialog, QDialogButtonBox, QGridLayout, QHBoxLayout, QLabel,
+    QLineEdit, QMessageBox, QPushButton, QVBoxLayout,
 )
 
 # the picker's grid: money-related first, then the rest of everyday life
@@ -139,12 +139,14 @@ def set_category_icons(combo, db, type_name=None):
 
 
 class IconPickerDialog(QDialog):
-    """Pick an emoji from the grid, type any, or No Icon. ``icon``: the choice ("" = none)."""
+    """Pick an emoji from the grid, type any, or No Icon. ``icon``: the choice ("" = none).
+    ``suggested``: one from the name (suggest_icon), ready to use when there is none yet."""
 
-    def __init__(self, current, about, hint="", parent=None):
+    def __init__(self, current, about, hint="", parent=None, suggested=""):
         super().__init__(parent)
         self.setWindowTitle("Icon")
         self.icon = current or ""
+        offer = "" if current else (suggested or "")
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel(about))
         if hint:
@@ -162,13 +164,17 @@ class IconPickerDialog(QDialog):
             big.setPixelSize(22)
             btn.setFont(big)
             btn.setToolTip(emoji)
-            if emoji == current:
+            if emoji == (current or offer):
                 btn.setStyleSheet("border: 2px solid palette(highlight);")
             btn.clicked.connect(lambda _=None, e=emoji: self._choose(e))
             grid.addWidget(btn, i // 8, i % 8)
         layout.addLayout(grid)
+        if offer:
+            tip = QLabel(f"Suggested from its name: {offer}  — press Use (or Return) to take it.")
+            tip.setProperty("class", "dim-label")
+            layout.addWidget(tip)
         row = QHBoxLayout()
-        self.typed = QLineEdit(current or "")
+        self.typed = QLineEdit(current or offer)
         self.typed.setPlaceholderText("Or type any emoji (⌃⌘Space opens the emoji picker)")
         self.typed.returnPressed.connect(lambda: self._choose(self.typed.text().strip()))
         use = QPushButton("Use")
@@ -190,103 +196,4 @@ class IconPickerDialog(QDialog):
         except ValueError as e:
             QMessageBox.warning(self, "Icon", str(e))
             return
-        self.accept()
-
-class SuggestIconsDialog(QDialog):
-    """Icons for the categories (and clear sub-categories) that have none, from their names:
-    each line can be changed or unticked before Save."""
-
-    COL_USE, COL_TYPE, COL_CAT, COL_SUB, COL_ICON = range(5)
-
-    def __init__(self, db, parent=None):
-        super().__init__(parent)
-        self.db = db
-        self.setWindowTitle("Suggest Icons")
-        self.setMinimumSize(640, 520)
-        layout = QVBoxLayout(self)
-        hint = QLabel("Icons for the categories with none, from their names. A sub-category is "
-                      "listed only when a different icon fits it better than its category's; "
-                      "the others show their category's. Untick a line, or change its icon, "
-                      "then Save.")
-        hint.setWordWrap(True)
-        hint.setProperty("class", "dim-label")
-        layout.addWidget(hint)
-        self.table = QTableWidget(0, 5)
-        self.table.setHorizontalHeaderLabels(["", "Type", "Category", "Sub-Category", "Icon"])
-        h = self.table.horizontalHeader()
-        h.setSectionResizeMode(QHeaderView.ResizeToContents)
-        h.setSectionResizeMode(self.COL_SUB, QHeaderView.Stretch)
-        self.table.verticalHeader().setVisible(False)
-        self.table.setSelectionMode(QAbstractItemView.NoSelection)
-        self.table.setEditTriggers(QAbstractItemView.DoubleClicked | QAbstractItemView.SelectedClicked
-                                   | QAbstractItemView.AnyKeyPressed)
-        layout.addWidget(self.table, 1)
-        self.empty = QLabel("Every category has an icon, or none fits its name.")
-        layout.addWidget(self.empty)
-        btns = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
-        btns.accepted.connect(self.save)
-        btns.rejected.connect(self.reject)
-        layout.addWidget(btns)
-        self.lines = self.suggestions(db)
-        for line in self.lines:
-            r = self.table.rowCount()
-            self.table.insertRow(r)
-            use = QTableWidgetItem()
-            use.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
-            use.setCheckState(Qt.Checked)
-            self.table.setItem(r, self.COL_USE, use)
-            for c, text in ((self.COL_TYPE, line["type"]), (self.COL_CAT, line["category"]),
-                            (self.COL_SUB, line["sub"] or "—")):
-                item = QTableWidgetItem(text)
-                item.setFlags(Qt.ItemIsEnabled)
-                self.table.setItem(r, c, item)
-            icon_item = QTableWidgetItem(line["icon"])
-            big = icon_item.font()
-            big.setPixelSize(20)
-            icon_item.setFont(big)
-            icon_item.setTextAlignment(Qt.AlignCenter)
-            self.table.setItem(r, self.COL_ICON, icon_item)
-        self.empty.setVisible(not self.lines)
-
-    @staticmethod
-    def suggestions(db):
-        """[{kind: "cat"|"sub", id, type, category, sub, icon}] for what has no icon yet."""
-        from daftarche.db import UNCATEGORIZED_CAT, UNCATEGORIZED_SUB
-        out = []
-        for c in db.get_categories():
-            if c["name"] == UNCATEGORIZED_CAT or not c["type_name"]:
-                continue
-            cat_icon = c["icon"] or suggest_icon(c["name"])
-            if not c["icon"] and cat_icon:
-                out.append({"kind": "cat", "id": c["id"], "type": c["type_name"], "category": c["name"],
-                            "sub": "", "icon": cat_icon})
-            for s in db.get_subcategories(c["id"]):
-                if s["icon"] or s["name"] == UNCATEGORIZED_SUB:
-                    continue
-                icon = suggest_icon(s["name"])
-                if icon and icon != cat_icon:
-                    out.append({"kind": "sub", "id": s["id"], "type": c["type_name"], "category": c["name"],
-                                "sub": s["name"], "icon": icon})
-        return out
-
-    def save(self):
-        from daftarche.db import clean_icon
-        for r, line in enumerate(self.lines):
-            try:
-                clean_icon(self.table.item(r, self.COL_ICON).text())
-            except ValueError as e:
-                where = line["category"] + (f" › {line['sub']}" if line["sub"] else "")
-                QMessageBox.warning(self, "Suggest Icons", f"{where}: {e}")
-                return
-        with self.db.transaction():
-            for r, line in enumerate(self.lines):
-                if self.table.item(r, self.COL_USE).checkState() != Qt.Checked:
-                    continue
-                icon = (self.table.item(r, self.COL_ICON).text() or "").strip()
-                if not icon:
-                    continue
-                if line["kind"] == "cat":
-                    self.db.set_category_icon(line["id"], icon)
-                else:
-                    self.db.set_subcategory_icon(line["id"], icon)
         self.accept()

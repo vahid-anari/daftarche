@@ -100,8 +100,8 @@ class TransactionList(QWidget):
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.cellDoubleClicked.connect(self._double_clicked)
         layout.addWidget(self.table, 1)
-        hint = QLabel("Double-click a transaction to open it in Transactions; hold the pointer over it for its "
-                      "account and the bank's text. The columns are those Transactions shows (its Columns button).")
+        hint = QLabel("Double-click a transaction to open it in Transactions. The columns are those "
+                      "Transactions shows (its Columns button).")
         hint.setProperty("class", "dim-label")
         hint.setWordWrap(True)
         layout.addWidget(hint)
@@ -118,7 +118,8 @@ class TransactionList(QWidget):
 
     def set_lines(self, lines, title, hide=(), total=None, total_label=""):
         """Show these lines (from db.get_lines), with ``title`` and their count and total above
-        (``total``: another sum, e.g. net spent, named by ``total_label``); ``hide``: columns not
+        (``total``: another sum, e.g. net spent, named by ``total_label``; False: none, as for an
+        account, whose lines are of every kind); ``hide``: columns not
         needed now (the merchant, when they are all one merchant's)."""
         self._set_columns()
         self.lines = list(lines)
@@ -128,13 +129,14 @@ class TransactionList(QWidget):
             header.setSectionResizeMode(col, QHeaderView.ResizeToContents)
         if total is None:
             total = sum(line["amount"] or 0 for line in self.lines)
-        n = len(self.lines)
+        n = len({line["id"] for line in self.lines})  # a split one's parts are one transaction
         self.title.setText(f"{title} — {n} transaction{'s' if n != 1 else ''}"
-                           + (f" · {money(total)}{' ' + total_label if total_label else ''}" if n else ""))
+                           + (f" · {money(total)}{' ' + total_label if total_label else ''}"
+                              if n and total is not False else ""))
         table = self.table
         table.setSortingEnabled(False)
         table.setRowCount(0)
-        table.setRowCount(n)
+        table.setRowCount(len(self.lines))
         settings = get_settings()
         for row, line in enumerate(self.lines):
             tip = "\n".join(x for x in (line.get("account"), line.get("name"), line.get("memorandum"),

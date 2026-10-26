@@ -626,6 +626,7 @@ QScrollArea > QWidget > QWidget {{ background: transparent; }}
 /* ── QSplitter ────────────────────────────────────── */
 
 QSplitter::handle {{ background: {bdr}; }}
+QSplitter::handle:hover, QSplitter::handle:pressed {{ background: {ac}; }}
 
 /* ── QToolTip ─────────────────────────────────────── */
 

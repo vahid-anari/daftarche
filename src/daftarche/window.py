@@ -325,6 +325,8 @@ class MainWindow(QMainWindow):
         """After a change: refresh the tab on screen now, the others when they are next shown."""
         if getattr(self, "_loans_dlg", None) is not None:
             self._loans_dlg.refresh()
+        if getattr(self, "_manage_dlg", None) is not None:
+            self._manage_dlg.outside_change()
         current = self.tabs.currentWidget()
         for tab in (self.dashboard_tab, self.transactions_tab, self.charts_tab, self.accounts_tab):
             if tab is current:
