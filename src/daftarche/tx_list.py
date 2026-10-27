@@ -1,79 +1,89 @@
-"""The list of transactions under a list in Manage (Categories, Merchants): read-only, newest
-first, sortable, a split transaction as its part there (✂). Double-click opens it in Transactions."""
+"""The transactions beside or under a list in Manage (Accounts, Categories, Merchants, Tags): the
+Transactions table itself, without its filter bar, so it works exactly as there (right-click,
+double-click, Delete, ⌘C…). Its columns are those Transactions shows."""
 
-import html
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QBrush, QColor
-from PySide6.QtWidgets import (QAbstractItemView, QHBoxLayout, QHeaderView, QLabel, QPushButton, QTableWidget,
-                               QTableWidgetItem, QVBoxLayout, QWidget)
+from daftarche.tabs.transactions import COLUMN_KEYS, TransactionsTab
 
-from daftarche.style import get_settings
-from daftarche.widgets import amount_color_key, money
-
-SHOW_KEY = "manage_show_transactions"  # the "Show transactions" tick, shared by the Manage tabs
-SPLIT_MARK = "✂ "  # before the amount of a split transaction's part
+SHOW_KEY = "manage_show_transactions"  # the "Show transactions" tick beside Manage's tabs
 
 
-def line_filters(line):
-    """(text, filters) that show a line in Transactions: that day's transactions of its merchant
-    there (so this one, mostly), for the window's show_matching."""
-    where = f"{line['category']} › {line['subcategory']}" if line["subcategory"] else (line["category"] or "")
-    who = html.escape(line["merchant"]) if line["merchant"] else "no merchant"
-    return (f"<b>{who}</b> on {line['date']} in <b>{html.escape(where)}</b>",
-            {"types": [line["type"]] if line["type"] else [],
-             "categories": [line["category"]] if line["category"] else [],
-             "subcategories": [line["subcategory"]] if line["subcategory"] else [],
-             "merchants": [line["merchant"]], "from_day": line["date"], "to_day": line["date"]})
+class _ManageTransactions(TransactionsTab):
+    """The Transactions table, its filters set by Manage (``show``) instead of by its filter bar,
+    which is hidden. Edits made in it are saved and reported as in Transactions."""
 
+    _shown = None  # the filters of what Manage selected; None: nothing selected, so no rows
+    _hidden = frozenset()  # columns that would show one value for every row
 
-def net_spent(lines):
-    """Expenses minus income (transfers left out), as the Merchants list adds them up."""
-    return sum((line["amount"] or 0) * (1 if "Expense" in (line["type"] or "") else -1)
-               for line in lines if "Expense" in (line["type"] or "") or "Income" in (line["type"] or ""))
+    def __init__(self, db, on_change):
+        super().__init__(db, on_change)
+        layout = self.layout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        for i in range(layout.count()):  # the toolbar, period and filter rows
+            row = layout.itemAt(i).layout()
+            if row is not None:
+                for j in range(row.count()):
+                    if row.itemAt(j).widget() is not None:
+                        row.itemAt(j).widget().hide()
+        self.nav_bar.hide()
+        self._period._select_preset(0, emit=False, persist=False)  # all dates; Transactions' own stays
+        # columns as wide as the first rows' text, not all of them: a click on a list stays quick
+        self.table.horizontalHeader().setResizeContentsPrecision(60)
+        self.lbl_income.parentWidget().layout().setSpacing(14)  # the sums' line: it fits a narrow column
 
+    def show(self, filters, hidden=()):
+        """``filters``: lists of names, as Transactions' boxes hold them: type, account, category,
+        subcategory, merchant ("" for none), tags. None: nothing to show."""
+        self._shown = filters
+        self._hidden = frozenset(hidden)
+        self._apply_column_visibility()
+        self._apply_filters()
 
-class _SortItem(QTableWidgetItem):
-    """Sorts by the value it was given (an amount as a number), not by its text."""
+    # ── Transactions' own machinery, fed by Manage ────────────────────────────
+    def _get_filters(self):
+        f = self._shown or {}
+        return {"from_day": None, "to_day": None, "type": f.get("type", []), "account": f.get("account", []),
+                "category": f.get("category", []), "subcategory": f.get("subcategory", []),
+                "merchant": f.get("merchant", []), "tags": f.get("tags", []), "search": "",
+                "search_fields": self._search_fields, "ids": None}
 
-    def __init__(self, text, key):
-        super().__init__(text)
-        self._key = key
+    def refresh(self):
+        self._apply_filters()
 
-    def __lt__(self, other):
-        if isinstance(other, _SortItem):
-            return self._key < other._key
-        return super().__lt__(other)
+    def _apply_filters(self):
+        if self._shown is None:
+            self._current_rows = []
+            self.model.set_rows([])
+            self._update_rows_info()
+            self._update_summary()
+            return
+        super()._apply_filters()
 
+    def _update_summary(self):
+        """As in Transactions, without the sums that say nothing here: those that are 0, and Net
+        when it is only the income or only the expenses."""
+        super()._update_summary()
+        rows = self._current_rows
+        income = any(r["type"] and "Income" in r["type"] for r in rows)
+        expense = any(r["type"] and "Expense" in r["type"] for r in rows)
+        self.lbl_income.setVisible(income)
+        self.lbl_expense.setVisible(expense)
+        self.lbl_net.setVisible(income and expense)
+        self.lbl_transfer.setVisible(any(r["type"] and "Transfer" in r["type"] for r in rows))
 
-def transactions_columns():
-    """The columns Transactions shows, in its order (its Columns button), as keys of db.get_lines
-    lines: the lists in Manage show the same."""
-    from daftarche.tabs.transactions import column_settings
-    s = get_settings()
-    saved, order = s.get("transactions_columns"), s.get("transactions_column_order")
-    visible, order = column_settings(saved if isinstance(saved, dict) else None,
-                                     order if isinstance(order, list) else None)
-    return [k for k in order if visible.get(k)]
+    def _apply_column_visibility(self):
+        super()._apply_column_visibility()
+        for key in self._hidden:
+            self.table.setColumnHidden(COLUMN_KEYS.index(key), True)
 
 
 class TransactionList(QWidget):
-    """``columns``: keys such as "date", "account", "amount" (None: as Transactions shows them);
-    ``leave_out``: columns never needed here (the merchant, under one merchant's rules).
-    ``open_line(line)``: what a double-click does. Fill it with ``set_lines(lines, title)``."""
+    """A title (and Show All, for Categories) above the transactions Manage shows.
+    ``on_change()``: after an edit made here (Manage refreshes, and the main window)."""
 
-    COLUMN_TITLES = {"date": "Date", "type": "Type", "account": "Account", "amount": "Amount",
-                     "merchant": "Merchant", "category": "Category", "subcategory": "Sub-Category",
-                     "tags": "Tags", "name": "Name", "memo": "Memorandum", "fitid": "FITID", "note": "Note"}
-    FIELDS = {"memo": "memorandum"}  # column key → its name in a line
-
-    def __init__(self, columns=None, open_line=None, leave_out=(), parent=None):
+    def __init__(self, db, on_change, parent=None):
         super().__init__(parent)
-        self._fixed_columns = list(columns) if columns else None
-        self.leave_out = set(leave_out)
-        self.columns = []
-        self.open_line = open_line
-        self.lines = []
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
@@ -89,84 +99,30 @@ class TransactionList(QWidget):
         self.btn_all.hide()
         head.addWidget(self.btn_all)
         layout.addLayout(head)
-
-        self.table = QTableWidget(0, 0)
-        self.table.verticalHeader().setVisible(False)
-        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.table.setSelectionMode(QAbstractItemView.SingleSelection)
-        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.table.setAlternatingRowColors(True)
-        self.table.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
-        self.table.horizontalHeader().setStretchLastSection(True)
-        self.table.cellDoubleClicked.connect(self._double_clicked)
-        layout.addWidget(self.table, 1)
-        hint = QLabel("Double-click a transaction to open it in Transactions. The columns are those "
-                      "Transactions shows (its Columns button).")
+        self._db, self._on_change = db, on_change
+        self.tx = None  # made the first time transactions are shown: Manage opens quickly
+        hint = QLabel("Works as in Transactions: right-click a row (or several) to edit, split or tag them, "
+                      "double-click a cell to change it. The columns are those Transactions shows.")
         hint.setProperty("class", "dim-label")
         hint.setWordWrap(True)
         layout.addWidget(hint)
-        self._set_columns()
 
-    def _set_columns(self):
-        """The columns to show now (Transactions' may have changed since)."""
-        columns = [c for c in (self._fixed_columns or transactions_columns())
-                   if c in self.COLUMN_TITLES and c not in self.leave_out]
-        if columns != self.columns:
-            self.columns = columns
-            self.table.setColumnCount(len(columns))
-            self.table.setHorizontalHeaderLabels([self.COLUMN_TITLES[c] for c in columns])
+    def _table(self):
+        if self.tx is None:
+            self.tx = _ManageTransactions(self._db, self._on_change)
+            self.layout().insertWidget(1, self.tx, 1)
+        return self.tx
 
-    def set_lines(self, lines, title, hide=(), total=None, total_label=""):
-        """Show these lines (from db.get_lines), with ``title`` and their count and total above
-        (``total``: another sum, e.g. net spent, named by ``total_label``; False: none, as for an
-        account, whose lines are of every kind); ``hide``: columns not
-        needed now (the merchant, when they are all one merchant's)."""
-        self._set_columns()
-        self.lines = list(lines)
-        header = self.table.horizontalHeader()
-        for col, c in enumerate(self.columns):
-            self.table.setColumnHidden(col, c in hide)
-            header.setSectionResizeMode(col, QHeaderView.ResizeToContents)
-        if total is None:
-            total = sum(line["amount"] or 0 for line in self.lines)
-        n = len({line["id"] for line in self.lines})  # a split one's parts are one transaction
-        self.title.setText(f"{title} — {n} transaction{'s' if n != 1 else ''}"
-                           + (f" · {money(total)}{' ' + total_label if total_label else ''}"
-                              if n and total is not False else ""))
-        table = self.table
-        table.setSortingEnabled(False)
-        table.setRowCount(0)
-        table.setRowCount(len(self.lines))
-        settings = get_settings()
-        for row, line in enumerate(self.lines):
-            tip = "\n".join(x for x in (line.get("account"), line.get("name"), line.get("memorandum"),
-                                        line.get("note"), "Part of a split transaction" if line["part"] else None)
-                             if x)
-            color_key = amount_color_key(line.get("type"), line["amount"])
-            for col, c in enumerate(self.columns):
-                if c == "amount":
-                    item = _SortItem((SPLIT_MARK if line["part"] else "") + money(line["amount"]), line["amount"] or 0)
-                    item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-                    if color_key:
-                        item.setForeground(QBrush(QColor(settings.get(color_key))))
-                elif c == "date":
-                    item = _SortItem(line["date"] or "", (line["date"] or "", line["id"], line["part"]))
-                else:
-                    text = line.get(self.FIELDS.get(c, c)) or ("—" if c == "subcategory" else "")
-                    item = _SortItem(text, text.casefold())
-                item.setData(Qt.UserRole, row)
-                if tip:
-                    item.setToolTip(tip)
-                table.setItem(row, col, item)
-        table.setSortingEnabled(True)
-        if "date" in self.columns:
-            table.sortItems(self.columns.index("date"), Qt.DescendingOrder)
+    @property
+    def table(self):
+        return self._table().table
+
+    def show_transactions(self, title, filters, hidden=()):
+        """Show the transactions matching ``filters`` (see _ManageTransactions.show)."""
+        self.title.setText(title)
+        self._table().show(filters, hidden)
 
     def clear(self, title="Transactions"):
-        self.set_lines([], title)
         self.title.setText(title)
-
-    def _double_clicked(self, row, _col):
-        item = self.table.item(row, 0)
-        if item is not None and self.open_line:
-            self.open_line(self.lines[item.data(Qt.UserRole)])
+        if self.tx is not None:
+            self.tx.show(None)

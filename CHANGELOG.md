@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.31.3 — 2026-10-26
+
+- The transactions in Manage are the Transactions table itself and work as there: select one row
+  or several, right-click to edit their merchant and category (with its rules), split them, make
+  them a loan, tag, copy or delete them, double-click a cell to change it, ⌘C, Delete. The lists of
+  Manage follow at once. Its sums line shows only the sums that mean something there.
+- Tests: what Python's collector frees is freed on the main thread after each test (a rare Qt
+  crash on CI), and quickly.
+
 ## 0.31.2 — 2026-10-26
 
 - Manage › Accounts and Tags show the selected account's or tag's transactions too, beside the

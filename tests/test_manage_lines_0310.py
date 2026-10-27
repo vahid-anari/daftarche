@@ -65,8 +65,14 @@ def panel_on(db, shown=True):
     return dlg, p, opened
 
 
-def texts(p, col):
-    return [p.lines.table.item(r, col).text() for r in range(p.lines.table.rowCount())]
+def shown(lines):
+    """The bank names of the transactions a Manage list shows, as listed."""
+    return [r["name"] for r in lines.tx.model._rows]
+
+
+def hidden(lines, key):
+    from daftarche.tabs.transactions import COLUMN_KEYS
+    return lines.table.isColumnHidden(COLUMN_KEYS.index(key))
 
 
 # ── the database ─────────────────────────────────────────────────────────────
@@ -90,46 +96,60 @@ def test_off_at_first(qapp, db, food):
 
 def test_the_transactions_of_the_category(qapp, db, food):
     from daftarche.style import get_settings
+    from daftarche.tabs.transactions import TransactionsTab
     from daftarche.tx_list import SHOW_KEY
     dlg, p, _ = panel_on(db)
     assert get_settings().get(SHOW_KEY) is True and not p.lines.isHidden()
-    assert p.lines.title.text() == "Groceries — 4 transactions · $96.00"
-    cols = p.lines.columns
-    assert texts(p, cols.index("amount")) == ["-$4.00", "✂ $60.00", "$30.00", "$10.00"]
-    assert texts(p, cols.index("merchant"))[2] == ""
-    p.lines.table.sortItems(cols.index("amount"))  # as numbers, not as text
-    assert texts(p, cols.index("amount")) == ["-$4.00", "$10.00", "$30.00", "✂ $60.00"]
-    assert "Part of a split transaction" in p.lines.table.item(3, 0).toolTip()
+    assert isinstance(p.lines.tx, TransactionsTab)  # the Transactions table itself
+    assert p.lines.title.text() == "Groceries"
+    assert sorted(shown(p.lines)) == ["BIG BOX", "FARM STAND", "SUNRISE 1", "SUNRISE REFUND"]  # Big Box by its part
+    assert hidden(p.lines, "type") and hidden(p.lines, "category") and not hidden(p.lines, "merchant")
+    assert p.lines.tx.lbl_rows_info.text().startswith("Rows: 4")
 
 
 def test_a_merchant_narrows_them_and_show_all_widens_them(qapp, db, food):
     dlg, p, _ = panel_on(db)
     row = next(r for r in range(p.merchant_table.rowCount()) if p.merchant_table.item(r, 0).text() == "Sunrise")
     p.merchant_table.selectRow(row)
-    assert p.lines.title.text() == "Sunrise in Groceries — 2 transactions · $6.00"
-    assert p.lines.table.isColumnHidden(p.lines.columns.index("merchant"))
+    assert p.lines.title.text() == "Sunrise in Groceries"
+    assert sorted(shown(p.lines)) == ["SUNRISE 1", "SUNRISE REFUND"] and hidden(p.lines, "merchant")
     assert not p.lines.btn_all.isHidden()
     p.lines.btn_all.click()
-    assert p.lines.title.text().startswith("Groceries — 4") and p.lines.btn_all.isHidden()
+    assert len(shown(p.lines)) == 4 and p.lines.btn_all.isHidden() and not hidden(p.lines, "merchant")
 
 
 def test_a_sub_category_and_the_merchant_kept_on_refresh(qapp, db, food):
     dlg, p, _ = panel_on(db)
     p._select_by_name(p.sub_table, "Bakery")
-    assert p.lines.title.text().startswith("Groceries › Bakery — 2")
-    assert p.lines.table.isColumnHidden(p.lines.columns.index("subcategory"))
+    assert p.lines.title.text() == "Groceries › Bakery" and len(shown(p.lines)) == 2
+    assert hidden(p.lines, "subcategory")
     p.merchant_table.selectRow(0)
     p.refresh()
-    assert p.lines.title.text().startswith("Sunrise in Groceries › Bakery — 2")
+    assert p.lines.title.text() == "Sunrise in Groceries › Bakery"
 
 
-def test_double_click_opens_that_day_in_transactions(qapp, db, food):
-    dlg, p, opened = panel_on(db)
-    p.lines._double_clicked(0, 0)
-    (text, panel), filters = opened[-1]
-    assert panel == "cats" and "Sunrise" in text
-    assert filters["from_day"] == filters["to_day"] == "2026-05-09"
-    assert filters["categories"] == ["Groceries"] and filters["merchants"] == ["Sunrise"]
+def test_rows_edited_there_as_in_transactions(qapp, db, food):
+    """Several rows selected, Edit Merchant / Category: saved, and Manage shows it at once."""
+    from types import SimpleNamespace
+    from PySide6.QtCore import QItemSelectionModel
+    changes = []
+    dlg, p, _ = panel_on(db)
+    dlg.on_change_cb = lambda: changes.append(1)
+    p._select_by_name(p.sub_table, "Bakery")
+    tx = p.lines.tx
+    rows = [i for i, r in enumerate(tx.model._rows)]
+    for i in rows:
+        tx.table.selectionModel().select(tx.model.index(i, 0), QItemSelectionModel.Select | QItemSelectionModel.Rows)
+    answer = SimpleNamespace(exec=lambda: True, cat_name="Groceries", sub_name="Market", row_type="Expense",
+                             merchant_changed=True, merchant="Sunrise Bakery", flipped=False,
+                             apply_keys=[], apply_merchants={})
+    with mock.patch.object(type(tx), "_category_dialog", lambda self, kind, rows: answer):
+        tx._bulk_edit_cat()
+    subs = {r["name"]: (r["subcategory"], r["merchant"]) for r in db.get_transactions({})}
+    assert subs["SUNRISE 1"] == ("Market", "Sunrise Bakery") and subs["SUNRISE REFUND"] == ("Market", "Sunrise Bakery")
+    assert changes  # the main window is told too
+    counts = {p.sub_table.item(r, 0).text(): p.sub_table.item(r, 1).text() for r in range(p.sub_table.rowCount())}
+    assert counts["Bakery"] == "0" and counts["Market"] == "4"  # the lists followed
 
 
 def test_the_first_time_manage_fills_the_screen(qapp, db, food):
@@ -159,45 +179,26 @@ def test_merchants_tab_shows_a_merchants_transactions(qapp, db, food):
     ref = db.get_category_by_name("Refunds", type_name="Income")["id"]
     db.add_transaction(2026, "May", 20, "Income", "Card", 3, db.uncategorized_subcategory(ref)["id"], ref,
                        name="SUNRISE GIFT", merchant="Sunrise")
-    dlg, p, opened = panel_on(db)
+    dlg, p, _ = panel_on(db)
     m = dlg.merchants_panel
     assert not m.lines.isHidden()  # one tick for every tab
     dlg.chk_lines.setChecked(False)
     assert p.lines.isHidden() and m.lines.isHidden()
     dlg.chk_lines.setChecked(True)
     m.select("Sunrise")
-    assert m.lines.title.text() == "Sunrise — 3 transactions · $3.00"  # 10 − 4 − 3
-    assert [m.lines.table.item(r, m.lines.columns.index("category")).text()
-            for r in range(m.lines.table.rowCount())] == ["Refunds", "Groceries", "Groceries"]
-    m.lines._double_clicked(0, 0)
-    (text, panel), filters = opened[-1]
-    assert panel == "merchants" and filters["types"] == ["Income"] and filters["from_day"] == "2026-05-20"
+    assert m.lines.title.text() == "Sunrise" and hidden(m.lines, "merchant")
+    assert sorted(shown(m.lines)) == ["SUNRISE 1", "SUNRISE GIFT", "SUNRISE REFUND"]
     m.select("")
-    assert m.lines.title.text().startswith("(no merchant) — 1 transaction ")
+    assert shown(m.lines) == ["FARM STAND"]
 
 
 # ── 0.31.1: the columns of Transactions, and the lists as wide as their text ──
 def test_the_columns_are_those_of_transactions(qapp, db, food):
     from daftarche.style import get_settings
-    db.add_tag("Party")
-    tag_id = db.conn.execute("SELECT id FROM tags WHERE name = 'Party'").fetchone()[0]
-    sunrise = db.conn.execute("SELECT id FROM transactions WHERE name = 'SUNRISE 1'").fetchone()[0]
-    db.set_tags_for_transaction(sunrise, [tag_id])
-    assert next(x for x in db.get_lines(food["cat"]) if x["name"] == "SUNRISE 1")["tags"] == "Party"
     s = get_settings()
     s._data["transactions_columns"] = {"memo": False, "fitid": False}
-    s._data["transactions_column_order"] = ["amount", "date", "name", "tags", "merchant", "type", "category",
-                                            "subcategory", "account", "memo", "note", "fitid"]
     dlg, p, _ = panel_on(db)
-    assert p.lines.columns == ["amount", "date", "name", "tags", "merchant", "subcategory", "account", "note"]
-    assert dlg.merchants_panel.lines.columns == ["amount", "date", "name", "tags", "type", "category",
-                                                 "subcategory", "account", "note"]  # the merchant left out
-    names = [p.lines.table.item(r, 2).text() for r in range(p.lines.table.rowCount())]
-    row = names.index("SUNRISE 1")
-    assert p.lines.table.item(row, 3).text() == "Party"
-    s._data["transactions_columns"] = {"memo": False, "fitid": False, "note": False}  # changed in Transactions
-    p.refresh()
-    assert "note" not in p.lines.columns
+    assert hidden(p.lines, "memo") and hidden(p.lines, "fitid") and not hidden(p.lines, "name")
 
 
 def test_the_merchants_are_only_as_wide_as_their_text(qapp, db, food):
@@ -263,18 +264,14 @@ def test_accounts_and_tags_show_their_transactions_beside_them(qapp, db, food):
     tag_id = db.conn.execute("SELECT id FROM tags WHERE name = 'Party'").fetchone()[0]
     sunrise = db.conn.execute("SELECT id FROM transactions WHERE name = 'SUNRISE 1'").fetchone()[0]
     db.set_tags_for_transaction(sunrise, [tag_id])
-    dlg, p, opened = panel_on(db)
+    dlg, p, _ = panel_on(db)
     a = dlg.accounts_panel
     assert a.split.orientation() == Qt.Horizontal and not a.lines.isHidden()
     a.table.selectRow(0)
-    assert a.lines.title.text() == "Card — 4 transactions"  # Big Box's two parts are one; no total
-    assert a.lines.table.rowCount() == 5
+    assert a.lines.title.text() == "Card" and len(shown(a.lines)) == 4  # Big Box once, with its parts
     tg = dlg.tags_panel
     tg.table.selectRow(0)
-    assert tg.lines.title.text() == "Party — 1 transaction · $10.00"
-    tg.lines._double_clicked(0, 0)
-    (text, panel), filters = opened[-1]
-    assert panel == "tags" and filters["from_day"] == "2026-05-01"
+    assert tg.lines.title.text() == "Party" and shown(tg.lines) == ["SUNRISE 1"]
 
 
 def test_manage_follows_changes_made_in_the_window(qapp, db, food):

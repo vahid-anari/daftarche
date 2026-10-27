@@ -41,8 +41,10 @@ def _delete_kept_windows():
     _delete_kept()
     # Python's cycle collector runs in whichever thread happens to allocate: left for later, a
     # window's wrapper from this test could be freed in the sign-in server's thread of a later
-    # one (test_phone_link), which crashed Qt now and then. Collected here, on the main thread.
+    # one (test_phone_link), which crashed Qt now and then. Collected here, on the main thread;
+    # what is still alive then is set aside (gc.freeze), so the next collections stay quick.
     gc.collect()
+    gc.freeze()
 
 
 def _delete_kept():

@@ -13,7 +13,7 @@ from PySide6.QtGui import QBrush, QColor, QFont, QFontMetrics, QPalette
 from daftarche.style import get_settings
 from daftarche.widgets import SingleSelectCombo
 from daftarche.icons import IconPickerDialog, emoji_icon, suggest_icon
-from daftarche.tx_list import SHOW_KEY, TransactionList, line_filters, net_spent
+from daftarche.tx_list import SHOW_KEY, TransactionList
 
 
 NO_MERCHANT = "(no merchant)"
@@ -156,11 +156,8 @@ class ManageDialog(QDialog):
         self.cats_panel = CatsRulesPanel(self.db, self._changed, open_merchant=self.open_merchant,
                                          show_transactions=self._show_in_window)
         self.tags_panel = TagsPanel(self.db, self._changed)
-        self.merchants_panel = MerchantsPanel(self.db, self._changed, self._show_merchant, notify=self.notify,
-                                              show_filtered=lambda text, **f: self._show_in_window(text, "merchants", **f))
+        self.merchants_panel = MerchantsPanel(self.db, self._changed, self._show_merchant, notify=self.notify)
 
-        for panel, name in ((self.accounts_panel, "accounts"), (self.tags_panel, "tags")):
-            panel.open_filtered = lambda text, name=name, **f: self._show_in_window(text, name, **f)
         self.tabs.addTab(self.accounts_panel, "🏦  Accounts")
         self.tabs.addTab(self.cats_panel, "🏷️  Categories")
         self.tabs.addTab(self.merchants_panel, "🏪  Merchants")
@@ -269,10 +266,9 @@ class AccountsPanel(QWidget):
         row, _ = _icon_buttons([("＋", "Add Account", self.add), ("✏️", "Edit Account", self.edit),
                                 ("🗑️", "Delete Account", self.delete)])
         left_col.addLayout(row)
-        self.lines = TransactionList(open_line=self._open_line, leave_out=("account",))
+        self.lines = TransactionList(self.db, self.on_change)
         self.split = _two_rows(left, self.lines, side_by_side=True)
         layout.addWidget(self.split, 1)
-        self.open_filtered = None  # (text, **filters) → Transactions, from Manage
         self.set_show_lines(bool(get_settings().get(SHOW_KEY)))
 
     def showEvent(self, event):
@@ -296,12 +292,7 @@ class AccountsPanel(QWidget):
         if item is None:
             self.lines.clear("Select an account to see its transactions")
             return
-        self.lines.set_lines(self.db.get_lines(account_id=item.data(Qt.UserRole)), item.text(), total=False)
-
-    def _open_line(self, line):
-        if self.open_filtered:
-            text, filters = line_filters(line)
-            self.open_filtered(text, accounts=[line["account"]] if line["account"] else [], **filters)
+        self.lines.show_transactions(item.text(), {"account": [item.text()]})
 
     def refresh(self):
         rows = self.table.selectionModel().selectedRows()
@@ -651,7 +642,7 @@ class CatsRulesPanel(QWidget):
         top_col.setSpacing(6)
         top_col.addWidget(self.merchant_table, 1, Qt.AlignLeft)
         top_col.addWidget(hint)
-        self.lines = TransactionList(open_line=self._open_line, leave_out=("type", "category"))
+        self.lines = TransactionList(self.db, self.on_change)
         self.lines.btn_all.clicked.connect(self.merchant_table.clearSelection)
         self.split = _two_rows(top, self.lines)
         m_col.addWidget(self.split, 1)
@@ -851,17 +842,13 @@ class CatsRulesPanel(QWidget):
         if not cat:
             self.lines.clear()
             return
+        kind = self._selected_data(self.type_table)
         where = f"{cat['name']} › {sub['name']}" if sub else cat["name"]
         who = (m["merchant"] or NO_MERCHANT) + " in " if m else ""
-        self.lines.set_lines(self.db.get_lines(cat["id"], sub["id"] if sub else None,
-                                               m["merchant"] if m else None), who + where,
-                             hide=(("merchant",) if m else ()) + (("subcategory",) if sub else ()))
-
-    def _open_line(self, line):
-        """In Transactions: that day's transactions of its merchant there (so this one, mostly)."""
-        if self.show_transactions:
-            text, filters = line_filters(line)
-            self.show_transactions(text, **filters)
+        filters = {"type": [kind["name"]] if kind else [], "category": [cat["name"]],
+                   "subcategory": [sub["name"]] if sub else [], "merchant": [m["merchant"]] if m else []}
+        self.lines.show_transactions(who + where, filters, hidden=("type", "category") + (("merchant",) if m else ())
+                                     + (("subcategory",) if sub else ()))
 
     def _fill_merchants(self, cat_data=None, sub_data=None):
         from daftarche.widgets import money
@@ -1566,10 +1553,9 @@ class TagsPanel(QWidget):
         row, _ = _icon_buttons([("＋", "Add Tag", self.add), ("✏️", "Rename Tag", self.rename),
                                 ("🗑️", "Delete Tag", self.delete)])
         left_col.addLayout(row)
-        self.lines = TransactionList(open_line=self._open_line)
+        self.lines = TransactionList(self.db, self.on_change)
         self.split = _two_rows(left, self.lines, side_by_side=True)
         layout.addWidget(self.split, 1)
-        self.open_filtered = None  # (text, **filters) → Transactions, from Manage
         self.set_show_lines(bool(get_settings().get(SHOW_KEY)))
 
     def showEvent(self, event):
@@ -1592,13 +1578,7 @@ class TagsPanel(QWidget):
         if tag_id is None:
             self.lines.clear("Select a tag to see its transactions")
             return
-        lines = self.db.get_lines(tag_id=tag_id)
-        self.lines.set_lines(lines, name, total=net_spent(lines))
-
-    def _open_line(self, line):
-        if self.open_filtered:
-            text, filters = line_filters(line)
-            self.open_filtered(text, **filters)
+        self.lines.show_transactions(name, {"tags": [name]})
 
     def refresh(self):
         kept, _ = self._selected()
@@ -1665,13 +1645,12 @@ class MerchantsPanel(QWidget):
     COL_NAME, COL_TX, COL_RULES, COL_TOTAL = range(4)
     R_TEXT, R_SETS, R_TYPE, R_ACCOUNT = range(4)
 
-    def __init__(self, db, on_change, show_transactions=None, notify=None, show_filtered=None):
+    def __init__(self, db, on_change, show_transactions=None, notify=None):
         super().__init__()
         self.db = db
         self.on_change = on_change
         self.show_transactions = show_transactions  # (merchant, "" = none) → Transactions, from the window
         self.notify = notify or (lambda text: None)  # (text) → a line at the bottom of Manage
-        self.show_filtered = show_filtered  # (text, **filters) → Transactions (one of its transactions)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(16, 14, 16, 8)
         layout.setSpacing(16)
@@ -1771,7 +1750,7 @@ class MerchantsPanel(QWidget):
         row.addSpacing(14)
         row.addWidget(self.rules_hint, 1)
         top_col.addLayout(row)
-        self.lines = TransactionList(open_line=self._open_line, leave_out=("merchant",))
+        self.lines = TransactionList(self.db, self.on_change)
         self.split = _two_rows(top, self.lines)
         right.addWidget(self.split, 1)
         layout.addLayout(right, 7)
@@ -1794,13 +1773,8 @@ class MerchantsPanel(QWidget):
         if m is None:
             self.lines.clear()
             return
-        lines = self.db.get_lines(merchant=m["merchant"])
-        self.lines.set_lines(lines, m["merchant"] or NO_MERCHANT, total=net_spent(lines))
-
-    def _open_line(self, line):
-        if self.show_filtered:
-            text, filters = line_filters(line)
-            self.show_filtered(text, **filters)
+        self.lines.show_transactions(m["merchant"] or NO_MERCHANT, {"merchant": [m["merchant"]]},
+                                     hidden=("merchant",))
 
     # ── the merchants ─────────────────────────────────────────────────────────
     def refresh(self):
