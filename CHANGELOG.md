@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.33.1 — 2026-10-27
+
+- When the data was saved by a newer Daftarche (another copy on the Mac was updated first), the
+  message now offers **Check for Updates**: the usual update notice, with Update Now and restart,
+  instead of only closing.
+
 ## 0.33.0 — 2026-10-27
 
 - A rule can be for several accounts: in the rule window (Manage › Merchants) and in the rule rows of

@@ -46,6 +46,33 @@ def refresh_launcher() -> None:
     refresh_if_outdated(APP)
 
 
+def offer_update_for_newer_database(app, message: str) -> int:
+    """The database is from a newer Daftarche: say so, and offer the update check that the window
+    (which cannot open) would have made. Returns the exit code (1: the app did not open)."""
+    from PySide6.QtCore import QTimer
+    from PySide6.QtWidgets import QMessageBox, QWidget
+    from sciwidgets.app.update_ui import AppUpdates
+
+    from daftarche.app_info import APP
+
+    box = QMessageBox(QMessageBox.Warning, APP_DISPLAY_NAME, message)
+    box.setInformativeText("Check for a newer Daftarche now? Your data stays as it is.")
+    check = box.addButton("Check for Updates", QMessageBox.AcceptRole)
+    box.addButton("Quit", QMessageBox.RejectRole)
+    box.setDefaultButton(check)
+    box.exec()
+    if box.clickedButton() is not check:
+        return 1
+    holder = QWidget()  # in place of the main window: the update dialogs' parent, closed by a restart
+    updates = AppUpdates(holder, APP)
+    checker = updates.checker
+    for signal in (checker.updateAvailable, checker.upToDate, checker.checkFailed, checker.accessDenied):
+        signal.connect(lambda *_: QTimer.singleShot(0, app.quit))  # after its notice (shown first) is closed
+    updates.check(manual=True)
+    app.exec()
+    return 1
+
+
 def run_view() -> int:
     import time
 
@@ -92,11 +119,9 @@ def run_view() -> int:
     try:
         window = MainWindow()
     except NewerDatabaseError as exc:
-        from PySide6.QtWidgets import QMessageBox
         if splash:
             splash.close()
-        QMessageBox.critical(None, APP_DISPLAY_NAME, str(exc))
-        return 1
+        return offer_update_for_newer_database(app, str(exc))
     updates = window.help.updates
 
     def show_window() -> None:
