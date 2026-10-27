@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.33.0 — 2026-10-27
+
+- A rule can be for several accounts: in the rule window (Manage › Merchants) and in the rule rows of
+  Edit Merchant / Category, **Accounts** is a box to tick one or several; none ticked is All (also
+  accounts added later). The rules list shows All, the account, or "2 accounts" (hold the pointer
+  over it for their names). "Matches N" and "Also set … on them" count the ticked accounts.
+- When rules match the same words, the one for fewer accounts wins; one for all accounts comes last.
+- Deleting an account deletes the rules that were only for it (they used to become rules for all
+  accounts); merging accounts moves their rules, and the rule already there wins a tie.
+- The database layout changes (7): on the first start, Daftarche saves the file as it was in the
+  backups folder (`daftarche-before-layout-7.db`) and then moves each rule's account into the new
+  table. Rules that were the same but for their account become one rule, where that cannot change
+  which rule an import picks. Older Daftarche versions cannot open the updated file.
+- Manage › Merchants: the rules list leaves out Type when all of a merchant's rules have the same one.
+- `tools/remap_categories.py` and `tools/compare_rules.py` read the rules' accounts the new way.
+
 ## 0.32.0 — 2026-10-27
 
 - A shop where you buy many kinds of things: select its transactions in Transactions and

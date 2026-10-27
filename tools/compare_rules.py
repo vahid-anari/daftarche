@@ -30,13 +30,13 @@ def old_length(value, pattern):
 def pick(rules, account_id, name, memo, length, newest_wins):
     best, best_key = None, None
     for r in rules:
-        if r["account_id"] not in (None, account_id):
+        if r["accounts"] and account_id not in r["accounts"]:
             continue
         n, m = length(name, r["name"]), length(memo, r["memorandum"])
         if n is None or m is None:
             continue
-        key = (n + m + (0 if newest_wins else (1 if r["account_id"] else 0)),
-               r["account_id"] is not None if newest_wins else 0,
+        key = (n + m + (0 if newest_wins else (1 if r["accounts"] else 0)),
+               bool(r["accounts"]) if newest_wins else 0,
                r["id"] if newest_wins else -r["id"])
         if best_key is None or key > best_key:
             best, best_key = r, key
@@ -59,7 +59,13 @@ def main():
         path = DB_PATH
     conn = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
-    rules = conn.execute("SELECT * FROM import_mappings ORDER BY id").fetchall()
+    accounts = {}  # rule id → its accounts (layout 7: table rule_accounts; before: its account_id)
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'rule_accounts'").fetchone():
+        for rule_id, account_id in conn.execute("SELECT rule_id, account_id FROM rule_accounts"):
+            accounts.setdefault(rule_id, set()).add(account_id)
+    rules = []
+    for r in conn.execute("SELECT * FROM import_mappings ORDER BY id"):
+        rules.append({**dict(r), "accounts": accounts.get(r["id"]) or ({r["account_id"]} - {None})})
     subs = {r["id"]: f'{r["cat"]} › {r["name"]}' for r in conn.execute(
         "SELECT s.id, s.name, c.name AS cat FROM subcategories s JOIN categories c ON c.id = s.category_id")}
     by_type = {}

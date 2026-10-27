@@ -18,9 +18,8 @@ from PySide6.QtWidgets import (
 
 from daftarche.db import UNCATEGORIZED_CAT, UNCATEGORIZED_SUB, rule_match_length
 from daftarche.style import get_settings
-from daftarche.widgets import SingleSelectCombo, SymbolButton, add_subcategory_items
+from daftarche.widgets import AccountsCombo, SingleSelectCombo, SymbolButton, add_subcategory_items
 
-ALL_ACCOUNTS = "All"
 OPPOSITE = {"Income": "Expense", "Expense": "Income"}
 
 
@@ -31,9 +30,10 @@ def _match(names, typed):
 
 
 def _rule_matches(rule, account, name, memo):
-    """Would ``rule`` (account, name, memo, merchant) categorize this transaction?"""
-    r_account, r_name, r_memo = rule[:3]
-    if r_account and r_account != account:
+    """Would ``rule`` (accounts, name, memo, merchant) categorize this transaction? Its
+    accounts: a tuple of names, empty for all."""
+    r_accounts, r_name, r_memo = rule[:3]
+    if r_accounts and account not in r_accounts:
         return False
     return rule_match_length(name, r_name) is not None and rule_match_length(memo, r_memo) is not None
 
@@ -42,6 +42,11 @@ def _typing_combo():
     combo = SingleSelectCombo()
     combo.allow_typing()
     return combo
+
+
+def _accounts_key(names):
+    """A rule's account names as compared here: a tuple in one order (empty: all accounts)."""
+    return tuple(sorted(names or (), key=str.casefold))
 
 
 class CategoryDialog(QDialog):
@@ -220,13 +225,8 @@ class CategoryDialog(QDialog):
         layout.addWidget(btns)
 
     def _account_combo(self, current):
-        combo = SingleSelectCombo()
-        combo.addItem(ALL_ACCOUNTS)
-        combo.addItems(self._accounts)
-        if current and current not in self._accounts:
-            combo.addItem(current)  # a closed account
-        combo.setCurrentIndex(max(combo.findText(current or ALL_ACCOUNTS), 0))
-        return combo
+        """A rule's accounts (``current``: their names; empty: all)."""
+        return AccountsCombo(self._accounts, current or (), parent=self)
 
     # ── type, merchant ────────────────────────────────────────────────────────
 
@@ -358,15 +358,15 @@ class CategoryDialog(QDialog):
             type_id = self.db.get_type_id(key[0]) if key[0] else None
             for r in (self.db.get_rules_for_subcategory(sub["id"]) if sub else []):
                 if r["type_id"] == type_id:
-                    values = (r["account_name"], r["name"] or "", r["memorandum"] or "", r["merchant"] or "")
+                    values = (_accounts_key(r["accounts"]), r["name"] or "", r["memorandum"] or "",
+                              r["merchant"] or "")
                     entries.append({"id": r["id"], "orig": values, "values": values, "deleted": False})
             self._rules[key] = entries
         return self._rules[key]
 
     def _keep_shown_edits(self):
         for entry, account, name, memo, merchant in self._rule_rows:
-            acc = account.currentText()
-            entry["values"] = (None if acc == ALL_ACCOUNTS else acc, name.text().strip(), memo.text().strip(),
+            entry["values"] = (_accounts_key(account.accounts()), name.text().strip(), memo.text().strip(),
                                merchant.text().strip())
 
     def _show_rules(self, cat, cat_name, sub_name):
@@ -389,7 +389,7 @@ class CategoryDialog(QDialog):
             self.rules_title.setText(f"Rules for {cat_name} › {sub_name}" if sub_name != UNCATEGORIZED_SUB
                                      else f"Rules for {cat_name} (no sub-category)")
         entries = [e for e in self._entries_for(key, cat, sub_name) if not e["deleted"]]
-        for col, title in enumerate(("Account", "Name", "Memo", "Merchant") if entries else ()):
+        for col, title in enumerate(("Accounts", "Name", "Memo", "Merchant") if entries else ()):
             head = QLabel(title)
             head.setProperty("class", "dim-label")
             self._grid.addWidget(head, 0, col)
@@ -429,12 +429,12 @@ class CategoryDialog(QDialog):
         name, memo = self.new_name.text().strip(), self.new_memo.text().strip()
         if not name and not memo:
             return  # a blank row is no rule
-        acc = self.new_account.currentText()
+        accounts = _accounts_key(self.new_account.accounts())
         self._keep_shown_edits()
-        values = (None if acc == ALL_ACCOUNTS else acc, name, memo, self.new_rule_merchant.text().strip())
+        values = (accounts, name, memo, self.new_rule_merchant.text().strip())
         self._rules.setdefault(self._shown_key, []).append(
             {"id": None, "orig": None, "values": values, "deleted": False})
-        self.new_account.setCurrentText(ALL_ACCOUNTS)
+        self.new_account.set_accounts([])
         self.new_name.clear()
         self.new_memo.clear()
         self.new_rule_merchant.setText(self.f_merchant.currentText().strip())
@@ -489,16 +489,17 @@ class CategoryDialog(QDialog):
                 if not key_sub:
                     continue  # names tried on the way and left: nothing to keep
                 for e in entries:
-                    account, name, memo, merchant = e["values"]
+                    accounts, name, memo, merchant = e["values"]
+                    account = list(accounts)
                     if e["deleted"]:
                         if e["id"]:
                             self.db.delete_rule(e["id"])
                     elif e["id"] is None:
-                        self.db.save_mapping(key_type, account, name or None, memo or None,
-                                             subcategory_id=key_sub["id"], category_id=key_cat["id"],
-                                             merchant=merchant or None)
+                        rule_id = self.db.save_mapping(key_type, account, name or None, memo or None,
+                                                       subcategory_id=key_sub["id"], category_id=key_cat["id"],
+                                                       merchant=merchant or None)
                         if key == self._shown_key:
-                            new_rule_ids.append(self.db.get_rule_id(key_type, account, name, memo))
+                            new_rule_ids.append(rule_id)
                     elif e["values"] != e["orig"]:
                         self.db.delete_rule_and_save(e["id"], key_type, account, name or None, memo or None,
                                                      key_sub["id"], key_cat["id"], merchant or None)

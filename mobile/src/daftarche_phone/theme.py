@@ -34,7 +34,13 @@ DARK = Palette(accent="#7c6af7", bg="#1e1c18", surface="#2a2720", raised="#38342
 LIGHT = Palette(accent="#6b57e8", bg="#f5f3ee", surface="#ffffff", raised="#e9e5dc", text="#2a2620",
                 dim="#7a7064", border="#d4ccbe", income="#1f9d55", expense="#d33a2c", transfer="#c97a06")
 
-THEME_CHOICES = {"system": "Like the phone", "dark": "Dark", "light": "Light"}
+THEME_CHOICES = (("system", "Phone", ft.Icons.SMARTPHONE), ("light", "Light", ft.Icons.LIGHT_MODE),
+                 ("dark", "Dark", ft.Icons.DARK_MODE))
+"""Settings › Appearance, as in Vahid's other phone apps: (stored value, label, icon)."""
+
+FONT = "Plex"
+"""IBM Plex Sans (assets/IBMPlexSans.ttf, SIL Open Font License), the font of all three phone apps."""
+FONT_FILES = {FONT: "IBMPlexSans.ttf"}
 
 
 def palette_for(choice, brightness):
@@ -61,7 +67,7 @@ def system_bars(p: Palette):
 def material_theme(p: Palette):
     """A Material theme in these colours, for the controls Flet draws itself."""
     return ft.Theme(
-        system_overlay_style=system_bars(p),
+        font_family=FONT, system_overlay_style=system_bars(p),
         color_scheme=ft.ColorScheme(primary=p.accent, on_primary="#ffffff", secondary=p.accent,
                                     surface=p.surface, on_surface=p.text, on_surface_variant=p.dim,
                                     outline=p.border, outline_variant=p.border,

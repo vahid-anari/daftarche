@@ -194,9 +194,11 @@ def apply(db, moves):
             for rule in rules_of[id(move)]:
                 if not c.execute("SELECT 1 FROM import_mappings WHERE id = ?", (rule["id"],)).fetchone():
                     continue  # already merged into its twin
-                twin = c.execute("""SELECT id, merchant FROM import_mappings WHERE id <> ? AND type_id = ?
-                                    AND account_id IS ? AND name IS ? AND memorandum IS ?""",
-                                 (rule["id"], type_id, rule["account_id"], rule["name"], rule["memorandum"])).fetchone()
+                sets = db._rule_account_sets()  # its accounts (layout 7): a twin is for the same ones
+                twin = next((t for t in c.execute(
+                    """SELECT id, merchant FROM import_mappings WHERE id <> ? AND type_id = ?
+                       AND name IS ? AND memorandum IS ?""", (rule["id"], type_id, rule["name"], rule["memorandum"]))
+                    if sets.get(t["id"], frozenset()) == sets.get(rule["id"], frozenset())), None)
                 if twin:  # the other type already has this rule (Amazon): it stays, with the merchant
                     c.execute("UPDATE import_mappings SET merchant = COALESCE(merchant, ?) WHERE id = ?",
                               (move["merchant"], twin["id"]))

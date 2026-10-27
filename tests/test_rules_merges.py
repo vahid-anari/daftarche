@@ -83,7 +83,6 @@ def test_old_duplicate_rules_are_cleaned_keeping_the_newest(tmp_path):
     db = Database(path)
     c = cat(db, "Food")
     a, b = sub(db, "A", c), sub(db, "B", c)
-    db.conn.execute("DROP INDEX ux_mapping_key")
     type_id = db.get_type_id("Expense")
     for s in (a, b):  # what 0.5.0's save_mapping did with an empty memo
         db.conn.execute("INSERT INTO import_mappings(type_id, account_id, name, memorandum, subcategory_id, "

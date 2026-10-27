@@ -234,7 +234,10 @@ Every rule belongs to a merchant. To see or change them, open \menu{Edit \then M
 \textbf{Merchants} tab: choose a shop on the left, and its rules are on the right. Each line shows the
 bank's words it looks for, and what it sets (a category, or \emph{you choose}: the transaction waits
 in To Review). \button{+} adds a rule: pick the merchant, the type and, if the words say enough, the
-category; as you type the words, the window says how many of your transactions they match. Rules
+category; as you type the words, the window says how many of your transactions they match.
+\textbf{Accounts} is \emph{All} until you tick some: then the rule reads only the statements of those
+accounts, one or several (say, your two credit cards). When rules match the same words, the one for
+fewer accounts wins, and one for all accounts comes last. Rules
 that have no merchant yet are under \textbf{(no merchant)} at the bottom: select them and give them
 one with the shop button.
 
@@ -431,6 +434,10 @@ On a Mac it is \texttt{\small Library/Application Support/Daftarche} in your hom
         backed up with everything else.
 \end{itemize}
 You can also save a copy whenever you like with \menu{File \then Back Up Database…} (\key{⌘}\key{S}).
+
+When a new version of Daftarche stores something in a new way, it first saves your data as it was
+in the backups folder (for example \texttt{daftarche-before-layout-7.db}). An older version cannot open
+the updated file, but it can open that copy.
 
 \subsection{Looking at, or going back to, an old copy}
 \menu{File \then Open Database…} shows a backup \emph{without changing anything}: a bar on top reminds you

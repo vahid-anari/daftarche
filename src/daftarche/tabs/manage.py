@@ -11,7 +11,7 @@ from PySide6.QtCore import QByteArray, QSize, Qt
 from PySide6.QtGui import QBrush, QColor, QFont, QFontMetrics, QPalette
 
 from daftarche.style import get_settings
-from daftarche.widgets import SingleSelectCombo
+from daftarche.widgets import AccountsCombo, SingleSelectCombo, accounts_label
 from daftarche.icons import IconPickerDialog, emoji_icon, suggest_icon
 from daftarche.tx_list import SHOW_KEY, TransactionList
 from daftarche.past_categories import category_label, entry_icon
@@ -1199,15 +1199,11 @@ class RuleEditDialog(QDialog):
         line = QFrame()
         line.setFrameShape(QFrame.HLine)
         form.addRow(line)
-        self.f_account = SingleSelectCombo()
-        self.f_account.addItem("All")
-        for a in db.get_accounts(active_only=True):
-            self.f_account.addItem(a["name"])
-        account = (existing or {}).get("account_name")
-        if account and self.f_account.findText(account) < 0:
-            self.f_account.addItem(account)  # a closed account
-        self.f_account.setCurrentText(account or "All")
-        form.addRow("Account:", self.f_account)
+        self.f_account = AccountsCombo([a["name"] for a in db.get_accounts(active_only=True)],
+                                       (existing or {}).get("accounts") or ())
+        self.f_account.setToolTip("The accounts whose statements this rule reads: tick one or several. "
+                                  "None ticked: all accounts, also those added later.")
+        form.addRow("Accounts:", self.f_account)
         self.f_name = QLineEdit((existing or {}).get("name") or "")
         self.f_name.setPlaceholderText("Words in the bank's name for it (e.g. AMZN MKTP)")
         form.addRow("Name:", self.f_name)
@@ -1215,7 +1211,8 @@ class RuleEditDialog(QDialog):
         self.f_memo.setPlaceholderText("Words in the memo (optional)")
         form.addRow("Memo:", self.f_memo)
         hint = QLabel("Whole words, any letter case; | joins words that must all appear (e.g. amazon|ca). "
-                      "When several rules match, the one that matched the most text wins.")
+                      "When several rules match, the one that matched the most text wins, then the one "
+                      "for fewer accounts.")
         hint.setProperty("class", "dim-label")
         hint.setWordWrap(True)
         form.addRow(hint)
@@ -1255,7 +1252,7 @@ class RuleEditDialog(QDialog):
 
         self.f_type.currentTextChanged.connect(lambda _: (self._fill_cats(), self._count()))
         self.f_cat.currentTextChanged.connect(lambda _: (self._fill_subs(), self._count()))
-        self.f_account.currentTextChanged.connect(lambda _: self._count())
+        self.f_account.selectionChanged.connect(lambda _: self._count())
         self.f_name.textChanged.connect(lambda _: self._count())
         self.f_memo.textChanged.connect(lambda _: self._count())
         self._fill_cats((existing or {}).get("category_id"), (existing or {}).get("subcategory_id"))
@@ -1343,8 +1340,8 @@ class RuleEditDialog(QDialog):
 
     # ── what it matches ───────────────────────────────────────────────────────
     def _account(self):
-        acc = self.f_account.currentText()
-        return None if acc == "All" else acc
+        """The rule's account names ([]: all accounts)."""
+        return self.f_account.accounts()
 
     def _count(self):
         self._count_matches()
@@ -1357,9 +1354,9 @@ class RuleEditDialog(QDialog):
         if not name and not memo:
             self.matches.setText("")
             return
-        key = (self.f_type.currentText(), self._account())
+        key = (self.f_type.currentText(), tuple(self._account()))
         if key not in self._texts:
-            self._texts[key] = self.db.get_rule_texts(*key)
+            self._texts[key] = self.db.get_rule_texts(key[0], list(key[1]))
         hits = [n or m or "" for n, m in self._texts[key]
                 if rule_match_length(n, name) is not None and rule_match_length(m, memo) is not None]
         if not hits:
@@ -1372,24 +1369,22 @@ class RuleEditDialog(QDialog):
     def _count_apply(self):
         """"Also set … on them": the transactions this rule would take from the rules there are
         (it is the newest, so it wins a tie, as in lookup_mapping). Income and expense rules only."""
-        from daftarche.db import rule_match_length
+        from daftarche.db import rule_match_length, rule_rank
         type_name = self.f_type.currentText()
         name, memo = self.f_name.text().strip(), self.f_memo.text().strip()
         self._claimed = ([], [])
         if (name or memo) and ("Expense" in type_name or "Income" in type_name):
             if type_name not in self._apply_rows:
                 self._apply_rows[type_name] = self.db.rule_apply_rows(type_name, (self.existing or {}).get("id"))
-            account = self._account()
-            acc = self.db.get_account_by_name(account) if account else None
-            acc_id = acc["id"] if acc else (-1 if account else None)
+            accounts = self.db.account_id_set(self._account())
             merchant_only = self._cat_id() is None
             for row in self._apply_rows[type_name]:
-                if acc_id is not None and row["account_id"] != acc_id:
+                if accounts and row["account_id"] not in accounts:
                     continue
                 name_len, memo_len = rule_match_length(row["name"], name), rule_match_length(row["memo"], memo)
                 if name_len is None or memo_len is None:
                     continue
-                if row["best"] is not None and (name_len + memo_len, acc_id is not None) < row["best"][:2]:
+                if row["best"] is not None and rule_rank(name_len + memo_len, accounts, 0)[:3] < row["best"][:3]:
                     continue  # a more specific rule there keeps it
                 self._claimed[1].append(row["id"])
                 if not row["merchant"] or (row["uncategorized"] and not merchant_only):
@@ -1437,14 +1432,15 @@ class RuleEditDialog(QDialog):
             owner = (row["merchant"] if row else None) or NO_MERCHANT
             if QMessageBox.question(
                     self, "Rule",
-                    f"There is already a {v['type_name'].lower()} rule for this text and account "
+                    f"There is already a {v['type_name'].lower()} rule for this text and these accounts "
                     f"(merchant: {owner}).\n\nReplace it with this one?",
                     QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
                 return
         self.accept()
 
     def values(self):
-        """{type_name, account_name, name, memo, category_id, subcategory_id, merchant}: what to save.
+        """{type_name, account_name (a list of names; []: all accounts), name, memo, category_id,
+        subcategory_id, merchant}: what to save.
         You choose: Uncategorized (the merchant only); External Transfer: its Unmatched line; an
         edited rule in the same fixed category keeps its line. subcategory_id None: the category's
         Uncategorized line, made by save_rule (nothing is written before OK)."""
@@ -1728,7 +1724,7 @@ class MerchantsPanel(QWidget):
         self.rules_title = QLabel()
         rules_col.addWidget(self.rules_title)
         self.rules = QTableWidget(0, 4)
-        self.rules.setHorizontalHeaderLabels(["Bank text", "Sets", "Type", "Account"])
+        self.rules.setHorizontalHeaderLabels(["Bank text", "Sets", "Type", "Accounts"])
         h = self.rules.horizontalHeader()
         h.setSectionResizeMode(QHeaderView.ResizeToContents)
         self.rules.setSizeAdjustPolicy(QAbstractScrollArea.AdjustToContents)
@@ -2020,18 +2016,21 @@ class MerchantsPanel(QWidget):
             self.rules_title.setText(f"Rules for <b>{html.escape(m['merchant'])}</b>")
             self.rules_hint.setText("A rule recognises the bank's text and sets this merchant; when the text says "
                                     "enough, a category too, otherwise you choose it (To review). When several "
-                                    "match, the one that matched the most text wins.")
+                                    "match, the one that matched the most text wins, then the one for fewer accounts.")
             rules = self.db.get_rules(m["merchant"])
         for rule in rules:
             r = self.rules.rowCount()
             self.rules.insertRow(r)
             for c, text in enumerate((rule_text(rule), rule_sets(rule), rule["type"] or "—",
-                                      rule["account_name"] or "All")):
+                                      accounts_label(rule["accounts"]))):
                 item = QTableWidgetItem(text)
                 item.setData(Qt.UserRole, rule)
                 if c == self.R_TEXT:
                     item.setToolTip(text)
+                elif c == self.R_ACCOUNT and len(rule["accounts"]) > 1:  # "2 accounts": which
+                    item.setToolTip("\n".join(rule["accounts"]))
                 self.rules.setItem(r, c, item)
+        self.rules.setColumnHidden(self.R_TYPE, len({r["type"] for r in rules}) == 1)  # one type: says nothing
 
     def _selected_rules(self):
         rows = sorted({i.row() for i in self.rules.selectedIndexes()})

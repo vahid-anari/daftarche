@@ -2,6 +2,19 @@
 
 Released with tags `phone-vX.Y.Z`; each release carries the signed APK.
 
+## 0.4.0 — 2026-10-27
+
+The same shape as Vahid's other phone apps (Dot Matrix, Spoolbook):
+
+- **Settings is the fifth tab**, last in the bar (no ⚙ button any more), reached by swiping too;
+  Back from it goes to the Dashboard. Its parts: Connection (Get the Newest Data, Disconnect),
+  Appearance, Updates (Check for Updates, and Download when there is a new version) and About
+  (the app's version, the Mac's Daftarche version, author and licence).
+- The theme choice is **Phone · Light · Dark**, with icons.
+- Every tab ends with room to spare, so its last line clears Android's bar.
+- Messages at the bottom float above the bar and stay for three seconds.
+- The font is IBM Plex Sans (SIL Open Font License), as in the other apps.
+
 ## 0.3.1 — 2026-10-21
 
 - Dashboard: the accounts under the Total Balance are folded; tap the card (▾) to see them. The

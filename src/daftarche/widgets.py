@@ -485,6 +485,39 @@ class CheckComboBox(QToolButton):
 
 
 # StepSpinBox  — custom spin box with visible ▲▼ buttons (macOS-safe)
+class AccountsCombo(CheckComboBox):
+    """The accounts of a rule: tick one or several; none ticked is all accounts ("All"), also
+    those added later. Ticking every one is those accounts only. ``accounts``: the names to
+    offer; ``selected``: those ticked (a closed account among them is offered too)."""
+
+    def __init__(self, accounts, selected=(), parent=None):
+        super().__init__(placeholder="All", parent=parent)
+        self.populate(list(accounts) + [a for a in selected if a not in accounts], keep_selection=False)
+        self.set_selected(selected)
+
+    def accounts(self):
+        """The ticked names, in the list's order; [] for all accounts."""
+        chosen = set(self.get_selected())
+        return [a for a in self._items if a in chosen]
+
+    def _update_display(self):
+        names = self.accounts() if hasattr(self, "_items") else []
+        self.setText(f"{accounts_label(names)}  ▼")
+        self.setToolTip("\n".join(names) if len(names) > 1 else "")
+
+    def set_accounts(self, names):
+        self.set_selected(names or [])
+        self.selectionChanged.emit(self.get_selected())
+
+
+def accounts_label(names):
+    """A rule's accounts in a list: "All", the one name, else how many (bank account names are
+    long; the tooltip has them all)."""
+    if not names:
+        return "All"
+    return names[0] if len(names) == 1 else f"{len(names)} accounts"
+
+
 class StepSpinBox(QWidget):
     valueChanged = Signal(float)
 

@@ -105,7 +105,7 @@ def test_a_merchant_only_rule_offers_the_merchant(qapp, db, hw):
 
 def test_one_account_and_no_matches(qapp, db, hw):
     d = dialog(db)
-    d.f_account.setCurrentText("Chequing")
+    d.f_account.set_accounts(["Chequing"])
     assert d.rb_all.text().startswith("All 1,")
     d.f_name.setText("NOTHING LIKE IT")
     assert d.apply_box.isHidden() and d.to_apply() is None

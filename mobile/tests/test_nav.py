@@ -80,14 +80,13 @@ def test_swiping_changes_the_tab_and_the_bar_follows(app):
     phone._jump()
     phone._swiped(SimpleNamespace(data="3", control=phone._pager))
     assert phone.tab == 3 and page.navigation_bar.selected_index == 3 and phone.nav.depth == 0
-    assert len(phone._pager.controls) == 4 and phone._pager.selected_index == 0  # built once, not again
+    assert len(phone._pager.controls) == 5 and phone._pager.selected_index == 0  # built once, not again
 
 
 def test_sheets_keep_clear_of_androids_buttons(app):
     import flet as ft  # there: the fixture needs it
     phone, page, view = app
     phone._filter_sheet(None)
-    phone._settings()
     phone._tx_sheet(phone.snap.transactions[0])
     for sheet in page.dialogs:
         area = sheet.content

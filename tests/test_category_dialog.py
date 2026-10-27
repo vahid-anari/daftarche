@@ -91,7 +91,7 @@ def test_rules_of_the_chosen_subcategory(qapp, db, food):
     db.save_mapping("Expense", None, name="COSTCO", subcategory_id=groceries, category_id=food)
     db.save_mapping("Expense", "Card", name="FRESHCO", subcategory_id=groceries, category_id=food)
     d = dialog(db, preset_cat="Food", preset_sub="Groceries")
-    assert [(e["values"]) for e, *_ in d._rule_rows] == [(None, "COSTCO", "", ""), ("Card", "FRESHCO", "", "")]
+    assert [(e["values"]) for e, *_ in d._rule_rows] == [((), "COSTCO", "", ""), (("Card",), "FRESHCO", "", "")]
     assert d.rules_title.text() == "Rules for Food › Groceries"
 
     entry, account, name, memo, merchant = d._rule_rows[0]
@@ -104,12 +104,12 @@ def test_rules_of_the_chosen_subcategory(qapp, db, food):
     d._add_rule()  # add one
     d.f_subcat.setCurrentText(UNCAT := "Uncategorized")  # switching away and back keeps the edits
     d.f_subcat.setCurrentText("Groceries")
-    assert [e["values"] for e, *_ in d._rule_rows] == [(None, "COSTCO|GAS", "", "Costco"),
-                                                       (None, "LOBLAWS", "", "Loblaws")]
+    assert [e["values"] for e, *_ in d._rule_rows] == [((), "COSTCO|GAS", "", "Costco"),
+                                                       ((), "LOBLAWS", "", "Loblaws")]
     assert UNCAT
     assert press_ok(d) == (True, False)
-    rules = {(r["account_name"], r["name"]) for r in db.get_rules_for_subcategory(groceries)}
-    assert rules == {(None, "COSTCO|GAS"), (None, "LOBLAWS")}
+    rules = {(tuple(r["accounts"]), r["name"]) for r in db.get_rules_for_subcategory(groceries)}
+    assert rules == {((), "COSTCO|GAS"), ((), "LOBLAWS")}
 
 
 def test_a_rule_needs_a_name_or_memo(qapp, db, food):
@@ -130,7 +130,7 @@ def test_new_rule_applies_to_matching_uncategorized(qapp, db, food):
                   {"key": 3, "account": "Card", "name": "NOFRILLS", "memo": ""}]
     d = dialog(db, preset_cat="Food", preset_sub="Groceries", default_rule=("COSTCO WHOLESALE #512", ""),
                candidates=candidates)
-    assert d.new_name.text() == "COSTCO WHOLESALE #512" and d.new_account.currentText() == "All"
+    assert d.new_name.text() == "COSTCO WHOLESALE #512" and d.new_account.accounts() == []
     assert d.chk_apply.isHidden()
     d.new_name.setText("COSTCO")
     d.new_rule_merchant.setText("Costco")

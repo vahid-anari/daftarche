@@ -1,6 +1,7 @@
 import sqlite3
 from contextlib import contextmanager
 from functools import wraps
+from pathlib import Path
 import pandas as pd
 import re
 from datetime import date as _date
@@ -55,6 +56,18 @@ MONTHS_ORDER = [
 MONTH_NUM = {m: i + 1 for i, m in enumerate(MONTHS_ORDER)}
 
 
+def _norm_text(text):
+    """A rule's text as matching sees it: spaces and letter case aside (lower(), as re.IGNORECASE
+    compares: casefold would make "straße" the same as "STRASSE")."""
+    return " ".join((text or "").split()).lower()
+
+
+def rule_rank(match_length, account_ids, rule_id):
+    """How lookup_mapping ranks the rules that match: the most matched text, then a rule for
+    fewer accounts (one for all accounts last), then the newest."""
+    return (match_length, bool(account_ids), -len(account_ids), rule_id)
+
+
 def rule_match_length(value, pattern):
     """How much of a rule pattern matches ``value``: the total length of its ``|``-separated
     terms when every term appears as whole words (case-insensitive), 0 for an empty pattern
@@ -86,7 +99,8 @@ def _date_str_to_parts(date_str):
         return None, None, None
 
 
-SCHEMA_VERSION = 6  # 2: note; 3: merchant; 4: split transactions; 5: loans; 6: category and sub-category icons
+SCHEMA_VERSION = 7  # 2: note; 3: merchant; 4: split transactions; 5: loans; 6: category and sub-category icons;
+#                    7: a rule for several accounts (table rule_accounts)
 """Database layout version, stored in the file (PRAGMA user_version). Raise it whenever
 _migrate learns something new, so an older Daftarche refuses a database it cannot read."""
 
@@ -118,10 +132,31 @@ class Database:
             raise NewerDatabaseError(
                 f"This database was saved by a newer version of Daftarche (layout {version}; this "
                 f"version knows up to {SCHEMA_VERSION}). Update Daftarche to open it.")
+        if 0 < version < SCHEMA_VERSION:
+            self._copy_before_upgrade(version)
         self.conn.execute("PRAGMA foreign_keys = ON")
         self._create_tables()
         self._migrate()
         self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+
+    def _copy_before_upgrade(self, version):
+        """A copy of the file as it was before a newer layout is written into it (an older
+        Daftarche cannot open the upgraded one; the start-up backup is made after this): in the
+        backups folder for the app's own database, else beside the file."""
+        if str(self.path) == ":memory:":
+            return
+        from daftarche.paths import BACKUP_DIR
+        path = Path(self.path)
+        folder = BACKUP_DIR if path.resolve().parent == BACKUP_DIR.resolve().parent else path.parent
+        target = folder / f"{path.stem}-before-layout-{SCHEMA_VERSION}.db"
+        if target.exists():
+            return
+        folder.mkdir(parents=True, exist_ok=True)
+        copy = sqlite3.connect(target)
+        try:
+            self.conn.backup(copy)
+        finally:
+            copy.close()
 
     @contextmanager
     def transaction(self):
@@ -615,6 +650,7 @@ class Database:
                         AND type_id IN (SELECT id FROM types WHERE name LIKE '%Transfer%')
                         AND category_id IN (SELECT c.id FROM categories c JOIN types ty ON ty.id = c.type_id
                                             WHERE c.name = '{CAT_LOANS}' AND ty.name LIKE '%Transfer%')""")
+        self._move_rule_accounts()
         self._dedupe_rules()
         c.commit()
         self._seed_uncategorized()
@@ -622,17 +658,102 @@ class Database:
         self._seed_loans()
         c.commit()
 
+    def _move_rule_accounts(self):
+        """Layout 7: a rule's accounts are in rule_accounts (none: all accounts), so one rule can
+        be for several. The old column import_mappings.account_id is left empty. Rules that were
+        the same but for their account become one rule for all their accounts."""
+        c = self.conn
+        c.execute("""CREATE TABLE IF NOT EXISTS rule_accounts (
+                         rule_id    INTEGER NOT NULL REFERENCES import_mappings (id) ON DELETE CASCADE,
+                         account_id INTEGER NOT NULL REFERENCES accounts (id) ON DELETE CASCADE,
+                         PRIMARY KEY (rule_id, account_id))""")
+        c.execute("DROP INDEX IF EXISTS ux_mapping_key")  # had the account in it: _same_rule decides now
+        moved = c.execute("SELECT COUNT(*) FROM import_mappings WHERE account_id IS NOT NULL").fetchone()[0]
+        if not moved:
+            return
+        # a rule for an account that is gone never matched: it must not become one for all accounts
+        c.execute("DELETE FROM import_mappings WHERE account_id IS NOT NULL "
+                  "AND account_id NOT IN (SELECT id FROM accounts)")
+        c.execute("""INSERT OR IGNORE INTO rule_accounts (rule_id, account_id)
+                     SELECT id, account_id FROM import_mappings WHERE account_id IS NOT NULL""")
+        c.execute("UPDATE import_mappings SET account_id = NULL WHERE account_id IS NOT NULL")
+        sets = self._rule_account_sets()
+        rows = c.execute("SELECT id, type_id, name, memorandum, merchant, category_id, subcategory_id "
+                         "FROM import_mappings").fetchall()
+        specific = {}  # (type, account) → its rules for one account: all of them, before joining
+        groups = {}
+        for r in rows:
+            if r["id"] in sets:  # a rule for all accounts stays its own
+                for account in sets[r["id"]]:
+                    specific.setdefault((r["type_id"], account), set()).add(r["id"])
+                key = (r["type_id"], _norm_text(r["name"]), _norm_text(r["memorandum"]),
+                       (r["merchant"] or "").strip(), r["category_id"], r["subcategory_id"])
+                groups.setdefault(key, []).append(r["id"])
+        for key, ids in groups.items():
+            members = set(ids)
+            # joined, it would rank below a rule for one of its accounts that it tied with before:
+            # only when it is the one account rule there, the import gives what it gave
+            if len(ids) < 2 or any(specific.get((key[0], a), set()) - members
+                                   for i in ids for a in sets[i]):
+                continue
+            keep = max(ids)
+            for rule_id in ids:
+                if rule_id != keep:
+                    c.execute("INSERT OR IGNORE INTO rule_accounts (rule_id, account_id) "
+                              "SELECT ?, account_id FROM rule_accounts WHERE rule_id = ?", (keep, rule_id))
+                    c.execute("DELETE FROM rule_accounts WHERE rule_id = ?", (rule_id,))
+                    c.execute("DELETE FROM import_mappings WHERE id = ?", (rule_id,))
+
     def _dedupe_rules(self):
-        """One rule per (type, account, name, memo): SQLite's UNIQUE never compares empty (NULL)
-        fields, so saving a rule again used to add a copy. Keep the newest (the one meant last)."""
+        """One rule per (type, accounts, name, memo; letter case and spaces aside): saving a rule
+        again used to add a copy. Keep the newest (the one meant last, and the one that wins)."""
         c = self.conn
         c.execute("UPDATE import_mappings SET name=NULL WHERE TRIM(name)=''")
         c.execute("UPDATE import_mappings SET memorandum=NULL WHERE TRIM(memorandum)=''")
-        c.execute("""DELETE FROM import_mappings WHERE id NOT IN (
-                         SELECT MAX(id) FROM import_mappings
-                         GROUP BY type_id, IFNULL(account_id, -1), IFNULL(name, ''), IFNULL(memorandum, ''))""")
-        c.execute("""CREATE UNIQUE INDEX IF NOT EXISTS ux_mapping_key ON import_mappings
-                         (type_id, IFNULL(account_id, -1), IFNULL(name, ''), IFNULL(memorandum, ''))""")
+        sets = self._rule_account_sets()
+        seen = set()
+        for r in c.execute("SELECT id, type_id, name, memorandum FROM import_mappings ORDER BY id DESC").fetchall():
+            # matched alike (letter case and spaces aside): the older one never won
+            key = (r["type_id"], _norm_text(r["name"]), _norm_text(r["memorandum"]), sets.get(r["id"], frozenset()))
+            if key in seen:
+                c.execute("DELETE FROM rule_accounts WHERE rule_id = ?", (r["id"],))
+                c.execute("DELETE FROM import_mappings WHERE id = ?", (r["id"],))
+            seen.add(key)
+
+    def _rule_account_sets(self):
+        """{rule id: frozenset of its account ids}; a rule for all accounts is not in it."""
+        sets = {}
+        for rule_id, account_id in self.conn.execute("SELECT rule_id, account_id FROM rule_accounts"):
+            sets.setdefault(rule_id, set()).add(account_id)
+        return {k: frozenset(v) for k, v in sets.items()}
+
+    def account_id_set(self, accounts):
+        """Account names (one name, a list, or None/empty for all) → frozenset of their ids.
+        A name that is no account is left out."""
+        if not accounts:
+            return frozenset()
+        if isinstance(accounts, str):
+            accounts = [accounts]
+        ids = set()
+        for name in accounts:
+            acc = self.get_account_by_name(name) if name else None
+            if acc:
+                ids.add(acc["id"])
+        return frozenset(ids)
+
+    def _rule_accounts_named(self, rule_ids):
+        """{rule id: [account names, A to Z]} for these rules (a rule for all: [])."""
+        out = {i: [] for i in rule_ids}
+        for r in self.conn.execute("SELECT ra.rule_id, a.name FROM rule_accounts ra JOIN accounts a "
+                                   "ON a.id = ra.account_id ORDER BY a.name COLLATE NOCASE"):
+            if r["rule_id"] in out:
+                out[r["rule_id"]].append(r["name"])
+        return out
+
+    def _set_rule_accounts(self, rule_id, account_ids):
+        self.conn.execute("DELETE FROM rule_accounts WHERE rule_id = ?", (rule_id,))
+        self.conn.executemany("INSERT INTO rule_accounts (rule_id, account_id) VALUES (?, ?)",
+                              [(rule_id, a) for a in sorted(account_ids)])
 
     def _seed_transfer_categories(self):
         for cat_name in [CAT_INTERNAL_TRANSFER, CAT_EXTERNAL_TRANSFER]:
@@ -1043,18 +1164,36 @@ class Database:
             self.conn.execute("UPDATE transactions SET account_id=? WHERE account_id=?", (new_id, old_id))
             self.conn.execute("UPDATE transactions SET to_account_id=? WHERE to_account_id=?", (new_id, old_id))
             self.conn.execute("UPDATE account_ids SET account_id=? WHERE account_id=?", (new_id, old_id))
-            # the merged-into account's own rule wins where both have the same one
-            self.conn.execute("UPDATE OR IGNORE import_mappings SET account_id=? WHERE account_id=?", (new_id, old_id))
-            self.conn.execute("DELETE FROM import_mappings WHERE account_id=?", (old_id,))
+            self._move_rules_to_account(old_id, new_id)
             self.conn.execute("DELETE FROM accounts WHERE id=?", (old_id,))
         else:
             self.conn.execute("UPDATE accounts SET name=? WHERE name=?", (new_name, old_name))
+
+    def _move_rules_to_account(self, old_id, new_id):
+        """Merging accounts: the rules for ``old_id`` are for ``new_id`` from now on; where that
+        makes one the same as a rule there is already, the one already there wins."""
+        sets = self._rule_account_sets()
+        # those already for new_id first: they are the ones already there, and win
+        for rule_id, accounts in sorted(sets.items(), key=lambda kv: new_id not in kv[1]):
+            if old_id not in accounts:
+                continue
+            row = self.conn.execute("SELECT type_id, name, memorandum FROM import_mappings WHERE id = ?",
+                                    (rule_id,)).fetchone()
+            now = (accounts - {old_id}) | {new_id}
+            if self._same_rule(row["type_id"], now, row["name"], row["memorandum"], exclude=rule_id):
+                self.conn.execute("DELETE FROM import_mappings WHERE id = ?", (rule_id,))
+            else:
+                self._set_rule_accounts(rule_id, now)
 
     @atomic
     def delete_account(self, account_id):
         self.conn.execute("UPDATE transactions SET account_id=NULL WHERE account_id=?", (account_id,))
         self.conn.execute("UPDATE transactions SET to_account_id=NULL WHERE to_account_id=?", (account_id,))
-        self.conn.execute("UPDATE import_mappings SET account_id=NULL WHERE account_id=?", (account_id,))
+        for rule_id, accounts in self._rule_account_sets().items():
+            if accounts == {account_id}:  # it was only for this account: no use without it
+                self.conn.execute("DELETE FROM import_mappings WHERE id = ?", (rule_id,))
+        self.conn.execute("DELETE FROM rule_accounts WHERE account_id = ?", (account_id,))
+        self._dedupe_rules()
         self.conn.execute("DELETE FROM account_ids WHERE account_id=?", (account_id,))
         self.conn.execute("DELETE FROM accounts WHERE id=?", (account_id,))
 
@@ -1698,43 +1837,45 @@ class Database:
     @atomic
     def save_mapping(self, type_name, account_name, name=None, memorandum=None,
                      subcategory_id=None, category_id=None, merchant=None):
-        """Add a rule, or change the rule with the same type, account, name and memo.
+        """Add a rule, or change the rule with the same type, accounts, name and memo. Returns its id.
 
+        ``account_name``: the rule's accounts, one name or a list (None or empty: all accounts).
         A rule sets the merchant and the category; one in Uncategorized sets only the merchant
         (the category is then chosen by hand: Amazon, a friend who pays back)."""
         merchant = (merchant or "").strip() or None
         type_id = self.get_type_id(type_name) if type_name else None
-        acc = self.get_account_by_name(account_name) if account_name else None
-        account_id = acc["id"] if acc else None
+        accounts = self.account_id_set(account_name)
         name = (name or "").strip() or None
         memorandum = (memorandum or "").strip() or None
-        same = self._same_rule(type_id, account_id, name, memorandum)
+        same = self._same_rule(type_id, accounts, name, memorandum)
         if same:  # matching ignores letter case, so "kobo" is the rule "KOBO": that one is changed
             self.conn.execute("UPDATE import_mappings SET subcategory_id=?, category_id=?, merchant=? WHERE id=?",
                               (subcategory_id, category_id, merchant, same["id"]))
-        else:
-            self.conn.execute(
-                "INSERT INTO import_mappings(type_id, account_id, name, memorandum, subcategory_id, category_id, "
-                "merchant) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (type_id, account_id, name, memorandum, subcategory_id, category_id, merchant))
+            return same["id"]
+        rule_id = self.conn.execute(
+            "INSERT INTO import_mappings(type_id, name, memorandum, subcategory_id, category_id, merchant) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (type_id, name, memorandum, subcategory_id, category_id, merchant)).lastrowid
+        self._set_rule_accounts(rule_id, accounts)
+        return rule_id
 
-    def _same_rule(self, type_id, account_id, name, memorandum):
-        """The rule with this type, account, name and memo (letter case and spaces aside: a rule
-        matches them the same way), or None."""
-        def norm(text):
-            return " ".join((text or "").split()).casefold()
+    def _same_rule(self, type_id, account_ids, name, memorandum, exclude=None):
+        """The rule with this type, these accounts (a set of ids; empty: all), name and memo
+        (letter case and spaces aside: a rule matches them the same way), or None."""
+        sets = self._rule_account_sets()
+        account_ids = frozenset(account_ids or ())
         for row in self.conn.execute("SELECT id, name, memorandum FROM import_mappings "
-                                     "WHERE type_id IS ? AND account_id IS ? ORDER BY id DESC",
-                                     (type_id, account_id)):
-            if norm(row["name"]) == norm(name) and norm(row["memorandum"]) == norm(memorandum):
+                                     "WHERE type_id IS ? AND id IS NOT ? ORDER BY id DESC", (type_id, exclude)):
+            if (sets.get(row["id"], frozenset()) == account_ids and _norm_text(row["name"]) == _norm_text(name)
+                    and _norm_text(row["memorandum"]) == _norm_text(memorandum)):
                 return row
         return None
 
     def get_rule_id(self, type_name, account_name, name=None, memorandum=None):
-        """The id of the rule with this type, account (None = all), name and memo (letter case aside)."""
+        """The id of the rule with this type, accounts (a name or a list; None = all), name and
+        memo (letter case aside)."""
         type_id = self.get_type_id(type_name) if type_name else None
-        acc = self.get_account_by_name(account_name) if account_name else None
-        row = self._same_rule(type_id, acc["id"] if acc else None, (name or "").strip() or None,
+        row = self._same_rule(type_id, self.account_id_set(account_name), (name or "").strip() or None,
                               (memorandum or "").strip() or None)
         return row["id"] if row else None
 
@@ -1743,17 +1884,28 @@ class Database:
         their type, account, category and sub-category; by type, then bank text."""
         where, params = ("(m.merchant IS NULL OR TRIM(m.merchant) = '')", ()) if no_merchant else \
             ("m.merchant = ?", (merchant,))
-        return [dict(r) for r in self.conn.execute(f"""
-            SELECT m.id, m.type_id, ty.name AS type, m.account_id, a.name AS account_name, m.name,
+        rules = [dict(r) for r in self.conn.execute(f"""
+            SELECT m.id, m.type_id, ty.name AS type, m.name,
                    m.memorandum, m.category_id, c.name AS category, m.subcategory_id, s.name AS subcategory,
                    m.merchant
             FROM import_mappings m LEFT JOIN types ty ON ty.id = m.type_id
-                 LEFT JOIN accounts a ON a.id = m.account_id
                  LEFT JOIN categories c ON c.id = m.category_id
                  LEFT JOIN subcategories s ON s.id = m.subcategory_id
             WHERE {where}
-            ORDER BY m.type_id, IFNULL(m.name, '') COLLATE NOCASE, IFNULL(m.memorandum, '') COLLATE NOCASE,
-                     IFNULL(a.name, '')""", params)]
+            ORDER BY m.type_id, IFNULL(m.name, '') COLLATE NOCASE, IFNULL(m.memorandum, '') COLLATE NOCASE""",
+            params)]
+        return self._with_accounts(rules)
+
+    def _with_accounts(self, rules):
+        """Each rule with ``accounts``: its account names, A to Z ([]: all accounts). Rules with
+        the same text are ordered by them, those for all accounts first."""
+        named = self._rule_accounts_named([r["id"] for r in rules])
+        for r in rules:
+            r["accounts"] = named[r["id"]]
+        order = {id(r): i for i, r in enumerate(rules)}
+        return sorted(rules, key=lambda r: (r.get("type_id") or 0, (r["name"] or "").casefold(),
+                                            (r["memorandum"] or "").casefold(),
+                                            [a.casefold() for a in r["accounts"]], order[id(r)]))
 
     def get_no_merchant_total(self):
         """Expenses minus income of the transactions with no merchant (transfers left out), as
@@ -1782,27 +1934,29 @@ class Database:
         return name
 
     def get_rule_texts(self, type_name, account_name=None):
-        """(name, memo) of the transactions a rule of this type and account (None: all) could
-        match: for counting what a rule being written matches."""
+        """(name, memo) of the transactions a rule of this type and accounts (a name or a list;
+        None: all) could match: for counting what a rule being written matches."""
         type_id = self.get_type_id(type_name) if type_name else None
         q, params = "SELECT name, memorandum FROM transactions WHERE type_id IS ?", [type_id]
         if account_name:
-            acc = self.get_account_by_name(account_name)
-            q += " AND (account_id IS ? OR to_account_id IS ?)"
-            params += [acc["id"] if acc else -1] * 2
+            ids = sorted(self.account_id_set(account_name)) or [-1]
+            marks = ", ".join("?" * len(ids))
+            q += f" AND (account_id IN ({marks}) OR to_account_id IN ({marks}))"
+            params += ids + ids
         return [(r["name"], r["memorandum"]) for r in self.conn.execute(q, params)]
 
     def rule_apply_rows(self, type_name, exclude_rule_id=None):
         """The transactions of ``type_name`` a rule being written could be applied to (split ones
-        left out), each with the key of the best saved rule that matches it, as lookup_mapping
+        left out), each with the rule_rank of the best saved rule that matches it, as lookup_mapping
         ranks them (``exclude_rule_id``: the rule being edited does not count):
         [{id, account_id, name, memo, merchant, uncategorized, best}] (best None: no rule)."""
         type_id = self.get_type_id(type_name) if type_name else None
         if type_id is None:
             return []
         uncat_cat, _ = self.get_uncategorized_ids()
-        rules = self.conn.execute("SELECT id, account_id, name, memorandum FROM import_mappings "
+        rules = self.conn.execute("SELECT id, name, memorandum FROM import_mappings "
                                   "WHERE type_id = ? AND id IS NOT ?", (type_id, exclude_rule_id)).fetchall()
+        sets = self._rule_account_sets()
         out = []
         for t in self.conn.execute(
                 """SELECT t.id, COALESCE(t.account_id, t.to_account_id) AS account_id, t.name, t.memorandum,
@@ -1812,13 +1966,14 @@ class Database:
                 (type_id,)):
             best = None
             for r in rules:
-                if r["account_id"] is not None and r["account_id"] != t["account_id"]:
+                accounts = sets.get(r["id"], frozenset())
+                if accounts and t["account_id"] not in accounts:
                     continue
                 name_len = rule_match_length(t["name"], r["name"])
                 memo_len = rule_match_length(t["memorandum"], r["memorandum"])
                 if name_len is None or memo_len is None:
                     continue
-                key = (name_len + memo_len, r["account_id"] is not None, r["id"])
+                key = rule_rank(name_len + memo_len, accounts, r["id"])
                 if best is None or key > best:
                     best = key
             out.append({"id": t["id"], "account_id": t["account_id"], "name": t["name"], "memo": t["memorandum"],
@@ -2210,26 +2365,28 @@ class Database:
 
         A rule's name and memo patterns are terms separated by ``|``; all of them must appear
         as whole words (case-insensitive), so "Ali" matches "E-TRANSFER ALI" and "ALI MOHAMMAD"
-        but not "NATALIE". When several rules match, the most specific wins: the most matched
-        text, then a rule for this account over one for all accounts, then the newest rule.
+        but not "NATALIE". When several rules match, the most specific wins (rule_rank): the most
+        matched text, then a rule for fewer accounts (one for all accounts last), then the newest.
+        The rule comes with ``account_ids``, the set of its accounts (empty: all).
         """
         type_id = self.get_type_id(type_name) if type_name else None
         account_id = None
         if account_name:
             acc = self.get_account_by_name(account_name)
             account_id = acc["id"] if acc else None
-        candidates = self.conn.execute(
-            "SELECT * FROM import_mappings WHERE type_id = ? AND (account_id = ? OR account_id IS NULL)",
-            (type_id, account_id)).fetchall()
+        sets = self._rule_account_sets()
         best, best_key = None, None
-        for row in candidates:
+        for row in self.conn.execute("SELECT * FROM import_mappings WHERE type_id = ?", (type_id,)):
+            accounts = sets.get(row["id"], frozenset())
+            if accounts and account_id not in accounts:
+                continue
             name_len = rule_match_length(name, row["name"])
             memo_len = rule_match_length(memorandum, row["memorandum"])
             if name_len is None or memo_len is None:
                 continue
-            key = (name_len + memo_len, row["account_id"] is not None, row["id"])
+            key = rule_rank(name_len + memo_len, accounts, row["id"])
             if best_key is None or key > best_key:
-                best, best_key = row, key
+                best, best_key = {**dict(row), "account_ids": accounts}, key
         return best
 
     # ── Dashboard / Analytics ─────────────────────────────────────
@@ -2689,21 +2846,10 @@ class Database:
         ).fetchone()[0]
 
     def get_rules_for_subcategory(self, subcategory_id):
-        return self.conn.execute("""
-                                 SELECT m.id,
-                                        m.name,
-                                        m.memorandum,
-                                        a.name as account_name,
-                                        m.account_id,
-                                        m.type_id,
-                                        m.subcategory_id,
-                                        m.category_id,
-                                        m.merchant
-                                 FROM import_mappings m
-                                          LEFT JOIN accounts a ON m.account_id = a.id
-                                 WHERE m.subcategory_id = ?
-                                 ORDER BY a.name, m.name, m.memorandum
-                                 """, (subcategory_id,)).fetchall()
+        """The rules of a sub-category, each with ``accounts`` (its account names; []: all)."""
+        return self._with_accounts([dict(r) for r in self.conn.execute(
+            "SELECT id, name, memorandum, type_id, subcategory_id, category_id, merchant "
+            "FROM import_mappings WHERE subcategory_id = ?", (subcategory_id,))])
 
     @atomic
     def delete_rule(self, rule_id):

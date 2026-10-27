@@ -25,13 +25,18 @@ from .nav import ASK_EXIT, DASHBOARD, EXIT, RESTORE, BackSteps
 from .seal import SealError
 from .snapshot import (MONTHS, NO_MERCHANT, PALETTE, PERIODS, Snapshot, SnapshotError, money, month_label,
                        period_range)
-from .theme import THEME_CHOICES, material_theme, palette_for
+from .theme import FONT_FILES, THEME_CHOICES, material_theme, palette_for
 from .update import check as check_for_update
 
 TABS = (("Dashboard", ft.Icons.DASHBOARD_OUTLINED, ft.Icons.DASHBOARD),
         ("Transactions", ft.Icons.RECEIPT_LONG_OUTLINED, ft.Icons.RECEIPT_LONG),
         ("Charts", ft.Icons.PIE_CHART_OUTLINE, ft.Icons.PIE_CHART),
-        ("Accounts", ft.Icons.ACCOUNT_BALANCE_OUTLINED, ft.Icons.ACCOUNT_BALANCE))
+        ("Accounts", ft.Icons.ACCOUNT_BALANCE_OUTLINED, ft.Icons.ACCOUNT_BALANCE),
+        ("Settings", ft.Icons.SETTINGS_OUTLINED, ft.Icons.SETTINGS))
+SETTINGS_TAB = 4
+"""Settings is the last tab, as in Vahid's other phone apps."""
+BOTTOM_ROOM = 96
+"""Space under the last item of every tab: it clears Android's bar."""
 PAGE_SIZE = 150
 """Transactions shown at first; "Show more" adds as many again."""
 TOP_CATEGORIES = 7
@@ -93,6 +98,7 @@ class PhoneApp:
     async def start(self):
         page = self.page
         page.title = "Daftarche"
+        page.fonts = FONT_FILES
         page.padding = 0
         page.on_platform_brightness_change = lambda e: self.render()
         page.on_app_lifecycle_state_change = self._lifecycle
@@ -243,10 +249,6 @@ class PhoneApp:
         self.render()
 
     async def _disconnect_here(self, e=None):
-        try:
-            self.page.pop_dialog()
-        except Exception:
-            pass
         await self._forget()
 
     # ── the frame ────────────────────────────────────────────────────────────
@@ -261,9 +263,8 @@ class PhoneApp:
             title=ft.Column([ft.Text("Daftarche", size=20, weight=ft.FontWeight.BOLD, color=p.text),
                              ft.Text(updated, size=11, color=p.dim, visible=bool(updated))], spacing=0),
             bgcolor=p.bg, toolbar_height=60,
-            actions=[ft.IconButton(ft.Icons.REFRESH, icon_color=p.dim, tooltip="Get the newest data", on_click=self._reload),
-                     ft.IconButton(ft.Icons.SETTINGS_OUTLINED, icon_color=p.dim, tooltip="Settings",
-                                   on_click=self._settings)])
+            actions=[ft.IconButton(ft.Icons.REFRESH, icon_color=p.dim, tooltip="Get the newest data",
+                                   on_click=self._reload, visible=bool(self.pairing))])
         page.navigation_bar = ft.NavigationBar(
             selected_index=self.tab, bgcolor=p.surface, indicator_color=ft.Colors.with_opacity(0.3, p.accent),
             on_change=self._tab_changed,
@@ -322,17 +323,19 @@ class PhoneApp:
             self.page.run_task(self._fetch, True)
 
     def _toast(self, text):
-        self.page.show_dialog(ft.SnackBar(ft.Text(text), duration=2500))
+        self.page.show_dialog(ft.SnackBar(ft.Text(text), behavior=ft.SnackBarBehavior.FLOATING, duration=3000))
 
     def _body(self):
-        if self.snap is None:
+        if self.snap is None:  # not connected yet: the welcome, and Settings
             self._pager = None
-            return self._welcome()
-        # all four tabs, side by side: a swipe slides to the next one (the bar follows)
+            return self._settings() if self.tab == SETTINGS_TAB else self._welcome()
+        # all five tabs, side by side: a swipe slides to the next one (the bar follows)
         self._period_rows = {}  # built afresh with the tabs
-        self._pager = ft.PageView([self._dashboard(), self._transactions(), self._charts(), self._accounts()],
-                                  selected_index=self.tab, on_change=self._swiped, expand=True)
+        self._pager = ft.PageView(self._tabs(), selected_index=self.tab, on_change=self._swiped, expand=True)
         return self._pager
+
+    def _tabs(self):
+        return [self._dashboard(), self._transactions(), self._charts(), self._accounts(), self._settings()]
 
     def _redraw(self):
         """Draw the tabs again in place, after a choice inside a tab (a period, a filter, a tapped
@@ -341,8 +344,7 @@ class PhoneApp:
         if self.snap is None or getattr(self, "_pager", None) is None:
             self.render()
             return
-        fresh = [self._dashboard(), self._transactions(), self._charts(), self._accounts()]
-        for old, new in zip(self._pager.controls, fresh):
+        for old, new in zip(self._pager.controls, self._tabs()):
             old.controls = new.controls
         self.page.update()
 
@@ -378,8 +380,8 @@ class PhoneApp:
 
     # ── shared pieces ────────────────────────────────────────────────────────
     def _page(self, controls):
-        return ft.ListView(controls, padding=ft.Padding.only(left=16, right=16, top=4, bottom=24), spacing=12,
-                           expand=True)
+        return ft.ListView(controls, padding=ft.Padding.only(left=16, right=16, top=4, bottom=BOTTOM_ROOM),
+                           spacing=12, expand=True)
 
     def _card(self, content, padding=14, accent=None, on_click=None):
         p = self.p
@@ -912,15 +914,13 @@ class PhoneApp:
             self.render()
 
     async def _check_updates_now(self, e=None):
-        self.page.pop_dialog()
         try:
             self.update_info = await asyncio.to_thread(check_for_update, __version__)
         except (OSError, ValueError) as exc:
             self._toast(f"Could not reach GitHub: {exc}")
             return
         if self.update_info:
-            self.tab = 0
-            self.render()
+            self.render()  # Settings › Updates (and the Dashboard) offer it
         else:
             self._toast(f"Daftarche {__version__} is the newest version.")
 
@@ -945,28 +945,52 @@ class PhoneApp:
     async def _download_update(self, e=None):
         await ft.UrlLauncher().launch_url(self.update_info["apk"], mode=ft.LaunchMode.EXTERNAL_APPLICATION)
 
-    # ── Settings ─────────────────────────────────────────────────────────────
-    def _settings(self, e=None):
+    # ── Settings (the last tab) ──────────────────────────────────────────────
+    def _section(self, title, *controls, note=None):
+        """A part of Settings: its title, a short note under it, then its controls."""
+        p = self.p
+        head = [ft.Text(title, size=15, weight=ft.FontWeight.W_600, color=p.text)]
+        if note:
+            head.append(ft.Text(note, size=13, color=p.dim))
+        return ft.Column([ft.Column(head, spacing=2), *controls], spacing=10)
+
+    def _settings(self):
         s, p = self.snap, self.p
-        about = (f"App {__version__}  ·  data from Daftarche {s.app_version}" if s and s.app_version
-                 else f"App {__version__}")
         name = (self.pairing or {}).get("name") or "this phone"
-        sheet = self._sheet(ft.Container(ft.Column([
-            ft.Text("Settings", size=17, weight=ft.FontWeight.BOLD, color=p.text),
-            ft.Row([ft.Text(f"Connected to Daftarche on the Mac as “{name}”." if self.pairing
-                            else "Not connected.", size=13, color=p.dim, expand=True),
-                    ft.TextButton("Disconnect", on_click=self._disconnect_here, visible=bool(self.pairing))]),
-            ft.Text("Theme", size=13, color=p.dim),
-            ft.SegmentedButton(segments=[ft.Segment(value=k, label=ft.Text(v)) for k, v in THEME_CHOICES.items()],
+        connection = self._section(
+            "Connection",
+            ft.Text(f"Connected to Daftarche on the Mac as “{name}”." if self.pairing else "Not connected.",
+                    size=14, color=p.text),
+            ft.Row([ft.OutlinedButton("Get the Newest Data", icon=ft.Icons.REFRESH, on_click=self._reload),
+                    ft.OutlinedButton("Disconnect", icon=ft.Icons.LINK_OFF, on_click=self._disconnect_here)],
+                   wrap=True, visible=bool(self.pairing)),
+            note="The Mac sends a new copy about a minute after each change; the app gets it when opened.")
+        appearance = self._section(
+            "Appearance",
+            ft.SegmentedButton(segments=[ft.Segment(value=k, label=ft.Text(label), icon=icon)
+                                         for k, label, icon in THEME_CHOICES],
                                selected=[self.theme_choice], show_selected_icon=False, on_change=self._set_theme),
-            ft.Divider(color=p.border),
-            ft.Row([ft.Text(about, size=12, color=p.dim, expand=True),
-                    ft.TextButton("Check for Updates", on_click=self._check_updates_now,
-                                  visible=not self.page.web)]),
-            ft.Text("Read-only: nothing here changes your data. By Vahid Anari, MIT License.", size=12,
-                    color=p.dim)], spacing=10, tight=True),
-            padding=ft.Padding.only(left=20, right=20, top=8, bottom=28)), bgcolor=p.surface, show_drag_handle=True)
-        self.page.show_dialog(sheet)
+            note="Phone: light or dark, as the phone is set.")
+        info = self.update_info
+        updates = self._section(
+            "Updates",
+            ft.Text(f"Daftarche {info['version']} is available: download it, then open the file to install it "
+                    "over this one." if info else f"This is version {__version__}.", size=14, color=p.text),
+            ft.FilledButton("Download", icon=ft.Icons.DOWNLOAD, on_click=self._download_update, visible=bool(info)),
+            ft.OutlinedButton("Check for Updates", icon=ft.Icons.SYNC, on_click=self._check_updates_now),
+            note="New versions come from this project's releases on GitHub.")
+        updates.visible = not self.page.web
+        rows = [("App", __version__)]
+        if s and s.app_version:
+            rows.append(("Data from", f"Daftarche {s.app_version} on the Mac"))
+        about = self._section(
+            "About",
+            *[ft.Row([ft.Text(k, size=14, color=p.dim), ft.Text(v, size=14, color=p.text)],
+                     alignment=ft.MainAxisAlignment.SPACE_BETWEEN) for k, v in rows],
+            ft.Text("By Vahid Anari · MIT License", size=14, color=p.text),
+            ft.Text("Read-only: nothing here changes your data.", size=13, color=p.dim))
+        return ft.ListView([connection, appearance, updates, about], spacing=22, expand=True,
+                           padding=ft.Padding.only(left=16, right=16, top=8, bottom=BOTTOM_ROOM))
 
     async def _set_theme(self, e):
         self.theme_choice = list(e.control.selected)[0]

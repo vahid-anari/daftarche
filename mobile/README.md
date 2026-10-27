@@ -31,7 +31,7 @@ The screenshots show invented data (`tools/make_demo_db.py`).
    open the link, press **Copy Link** on the Mac, get the text to the phone (a note, a
    message to yourself) and paste it on the app's first screen.
 
-Later versions: the app looks for one once a day (or Settings › Check for Updates)
+Later versions: the app looks for one once a day (or the Settings tab › Check for Updates)
 and offers **Download**; open the file and install it over the old one. The connection
 and your settings stay.
 
@@ -122,7 +122,12 @@ release, so the desktop app's stays that.
 - `src/daftarche_phone/seal.py`: opening the locked file (a copy of `src/daftarche/seal.py`).
 - `src/daftarche_phone/app.py`: the screens.
 - `src/daftarche_phone/charts.py`: bars and lines from plain controls and a canvas.
-- `src/daftarche_phone/theme.py`: Daftarche's dark and light colours.
+- `src/daftarche_phone/theme.py`: Daftarche's dark and light colours, the font, the theme choices.
+- `src/assets/`: the icon, the splash and the font (IBM Plex Sans, with its licence `IBMPlexSans-OFL.txt`).
+
+The app follows the shape shared by Vahid's phone apps (Dot Matrix, Daftarche, Spoolbook): the
+name in a bar at the top, Settings as the last tab, Phone / Light / Dark, swiping between tabs,
+Back to the first tab, room at the bottom of every list, floating messages, IBM Plex Sans.
 - `src/daftarche_phone/update.py`: is there a newer release (no Flet).
 - `../.github/workflows/phone-release.yml`: builds and publishes the APK.
 
