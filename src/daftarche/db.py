@@ -2165,6 +2165,38 @@ class Database:
             GROUP BY c.name ORDER BY n DESC, c.name""", (merchant.strip(), type_name, UNCATEGORIZED_CAT)).fetchall()
         return [r["name"] for r in rows]
 
+    def merchant_categories(self, merchant, type_name):
+        """What this merchant's transactions of ``type_name`` were given before, as suggestions:
+        [{category_id, subcategory_id, category, subcategory, count, total, last}] (split parts in
+        their own category; Uncategorized left out). Most used first, but the one used last
+        comes first when it is not among the three most used: the next one is often the same."""
+        if not (merchant or "").strip() or not type_name:
+            return []
+        rows = [dict(r) for r in self.conn.execute("""
+            SELECT t.category_id, t.subcategory_id, c.name AS category, s.name AS subcategory,
+                   COUNT(DISTINCT t.id) AS count, SUM(t.amount) AS total, MAX(t.date) AS last
+            FROM tx_lines t JOIN categories c ON c.id = t.category_id
+                 JOIN types ty ON ty.id = t.type_id
+                 LEFT JOIN subcategories s ON s.id = t.subcategory_id
+            WHERE TRIM(t.merchant) = ? COLLATE NOCASE AND ty.name = ? AND c.name <> ?
+            GROUP BY t.category_id, t.subcategory_id""",
+            (merchant.strip(), type_name, UNCATEGORIZED_CAT))]
+        for r in rows:
+            r["total"] = round2(r["total"] or 0)
+        rows.sort(key=lambda r: (-r["count"], r["category"].casefold(), (r["subcategory"] or "").casefold()))
+        latest = max(rows, key=lambda r: r["last"] or "", default=None)
+        if latest is not None and rows.index(latest) >= 3:
+            rows.remove(latest)
+            rows.insert(0, latest)
+        return rows
+
+    @atomic
+    def make_rule_merchant_only(self, rule_id):
+        """The rule sets only the merchant from now on: you choose each transaction's category."""
+        cat, sub = self.get_uncategorized_ids()
+        self.conn.execute("UPDATE import_mappings SET category_id = ?, subcategory_id = ? WHERE id = ?",
+                          (cat, sub, rule_id))
+
     def get_to_review_count(self):
         """Income and expense transactions with no category (all time): the "To review" list."""
         cat_id, _ = self.get_uncategorized_ids()

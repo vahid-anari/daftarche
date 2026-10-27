@@ -14,6 +14,7 @@ from daftarche.style import get_settings
 from daftarche.widgets import SingleSelectCombo
 from daftarche.icons import IconPickerDialog, emoji_icon, suggest_icon
 from daftarche.tx_list import SHOW_KEY, TransactionList
+from daftarche.past_categories import category_label, entry_icon
 
 
 NO_MERCHANT = "(no merchant)"
@@ -1644,6 +1645,7 @@ class TagsPanel(QWidget):
 class MerchantsPanel(QWidget):
     COL_NAME, COL_TX, COL_RULES, COL_TOTAL = range(4)
     R_TEXT, R_SETS, R_TYPE, R_ACCOUNT = range(4)
+    U_NAME, U_TYPE, U_TX, U_TOTAL = range(4)
 
     def __init__(self, db, on_change, show_transactions=None, notify=None):
         super().__init__()
@@ -1715,15 +1717,16 @@ class MerchantsPanel(QWidget):
 
         right = QVBoxLayout()
         right.setSpacing(8)
-        head = QHBoxLayout()
-        self.rules_title = QLabel()
-        self.rules_title.setWordWrap(True)
-        head.addWidget(self.rules_title, 1)
-        right.addLayout(head)
         top = QWidget()
         top_col = QVBoxLayout(top)
         top_col.setContentsMargins(0, 0, 0, 0)
         top_col.setSpacing(8)
+        lists = QHBoxLayout()  # its rules, and beside them the categories it was given
+        lists.setSpacing(18)
+        rules_col = QVBoxLayout()
+        rules_col.setSpacing(8)
+        self.rules_title = QLabel()
+        rules_col.addWidget(self.rules_title)
         self.rules = QTableWidget(0, 4)
         self.rules.setHorizontalHeaderLabels(["Bank text", "Sets", "Type", "Account"])
         h = self.rules.horizontalHeader()
@@ -1737,7 +1740,32 @@ class MerchantsPanel(QWidget):
         self.rules.setAlternatingRowColors(True)
         self.rules.cellDoubleClicked.connect(lambda r, c: self.edit_rule())
         _apply_selection_palette(self.rules)
-        top_col.addWidget(self.rules, 1, Qt.AlignLeft)
+        rules_col.addWidget(self.rules, 1)
+        lists.addLayout(rules_col)
+        self.used_host = QWidget()
+        used_col = QVBoxLayout(self.used_host)
+        used_col.setContentsMargins(0, 0, 0, 0)
+        used_col.setSpacing(8)
+        self.used_title = QLabel("Used in")
+        self.used_title.setToolTip("The categories its transactions have; click one to see only those below")
+        used_col.addWidget(self.used_title)
+        self.used = QTableWidget(0, 4)
+        self.used.setHorizontalHeaderLabels(["Category", "Type", "Tx", "Total"])
+        for col, tip in ((self.U_TX, "Transactions"), (self.U_TOTAL, "Their amounts added up")):
+            self.used.horizontalHeaderItem(col).setToolTip(tip)
+        _compact(self.used)
+        self.used.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Expanding)  # short: always whole; the rules give way
+        self.used.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.used.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.used.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.used.verticalHeader().setVisible(False)
+        self.used.setAlternatingRowColors(True)
+        self.used.itemSelectionChanged.connect(self._update_lines)
+        _apply_selection_palette(self.used)
+        used_col.addWidget(self.used, 1)
+        lists.addWidget(self.used_host)
+        lists.addStretch(1)
+        top_col.addLayout(lists, 1)
         row, buttons = _icon_buttons([
             ("＋", "Add Rule", self.add_rule),
             ("✏️", "Edit Rule", self.edit_rule),
@@ -1751,6 +1779,8 @@ class MerchantsPanel(QWidget):
         row.addWidget(self.rules_hint, 1)
         top_col.addLayout(row)
         self.lines = TransactionList(self.db, self.on_change)
+        self.lines.btn_all.setToolTip("Every category again")
+        self.lines.btn_all.clicked.connect(self.used.clearSelection)
         self.split = _two_rows(top, self.lines)
         right.addWidget(self.split, 1)
         layout.addLayout(right, 7)
@@ -1770,11 +1800,61 @@ class MerchantsPanel(QWidget):
         if self.lines.isHidden():
             return
         m = self._selected()
+        used = self._selected_used()
+        self.lines.btn_all.setVisible(used is not None)
         if m is None:
             self.lines.clear()
             return
-        self.lines.show_transactions(m["merchant"] or NO_MERCHANT, {"merchant": [m["merchant"]]},
-                                     hidden=("merchant",))
+        if used is None:
+            self.lines.show_transactions(m["merchant"] or NO_MERCHANT, {"merchant": [m["merchant"]]},
+                                         hidden=("merchant",))
+            return
+        self.lines.show_transactions(
+            f"{m['merchant']} in {category_label(used['category'], used['subcategory'])}",
+            {"merchant": [m["merchant"]], "type": [used["type"]], "category": [used["category"]],
+             "subcategory": [used["subcategory"]] if used["subcategory"] else []},
+            hidden=("merchant", "type", "category", "subcategory"))
+
+    # ── the categories it was given ──────────────────────────────────────────
+    def _selected_used(self):
+        rows = self.used.selectionModel().selectedRows()
+        return self.used.item(rows[0].row(), 0).data(Qt.UserRole) if rows else None
+
+    def _fill_used(self, m):
+        """Its categories, of each of its types (most transactions first). The one selected stays
+        selected while it is still there."""
+        kept = self._selected_used()
+        key = (lambda e: (e["type"], e["category_id"], e["subcategory_id"]))
+        self.used.blockSignals(True)
+        self.used.setRowCount(0)
+        entries = []
+        if m and m["merchant"]:
+            for kind in sorted(m.get("types") or {}, key=lambda k: -m["types"][k]):
+                for e in self.db.merchant_categories(m["merchant"], kind):
+                    entries.append({**e, "type": kind})
+        entries.sort(key=lambda e: -e["count"])
+        icons = self.db.get_icons()
+        reselect = None
+        for e in entries:
+            r = self.used.rowCount()
+            self.used.insertRow(r)
+            name = QTableWidgetItem(category_label(e["category"], e["subcategory"]))
+            icon = entry_icon(icons, e)
+            if icon:
+                name.setIcon(emoji_icon(icon))
+            name.setData(Qt.UserRole, e)
+            self.used.setItem(r, self.U_NAME, name)
+            self.used.setItem(r, self.U_TYPE, QTableWidgetItem(e["type"]))
+            self.used.setItem(r, self.U_TX, _number_item(e["count"], align=Qt.AlignRight | Qt.AlignVCenter))
+            self.used.setItem(r, self.U_TOTAL, _number_item(round(e["total"], 2), _money(e["total"]),
+                                                            Qt.AlignRight | Qt.AlignVCenter))
+            if kept and key(e) == key(kept):
+                reselect = r
+        self.used.setColumnHidden(self.U_TYPE, len({e["type"] for e in entries}) < 2)  # one type: says nothing
+        if reselect is not None:
+            self.used.selectRow(reselect)
+        self.used.blockSignals(False)
+        self.used_host.setVisible(bool(entries))
 
     # ── the merchants ─────────────────────────────────────────────────────────
     def refresh(self):
@@ -1916,8 +1996,14 @@ class MerchantsPanel(QWidget):
 
     # ── its rules ─────────────────────────────────────────────────────────────
     def _show_rules(self):
-        self._update_lines()
         m = self._selected()
+        if (m or {}).get("merchant") != getattr(self, "_used_of", None):
+            self.used.blockSignals(True)
+            self.used.clearSelection()  # another merchant: all its transactions
+            self.used.blockSignals(False)
+        self._used_of = (m or {}).get("merchant")
+        self._fill_used(m)
+        self._update_lines()
         self.rules.setRowCount(0)
         none = m is not None and not m["merchant"]
         self.btn_set_merchant.setVisible(none)

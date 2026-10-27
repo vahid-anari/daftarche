@@ -147,10 +147,15 @@ class CategoryDialog(QDialog):
             row.addWidget(new)
             new.setFixedWidth(new.sizeHint().width() + 8)
             form.addRow(title, row)
-        self.suggest_hint = QLabel()
-        self.suggest_hint.setProperty("class", "dim-label")
-        self.suggest_hint.setWordWrap(True)
-        form.addRow("", self.suggest_hint)
+        # what this merchant had before: a click fills in the category and sub-category
+        self.past_host = QWidget()
+        self.past_rows = QVBoxLayout(self.past_host)  # rows of three, each as wide as its words
+        self.past_rows.setContentsMargins(0, 0, 0, 0)
+        self.past_rows.setSpacing(6)
+        self.past_label = QLabel("Used before:")
+        self.past_label.setProperty("class", "dim-label")
+        form.insertRow(1 if self.f_type is None else 2, self.past_label, self.past_host)
+        self.past_buttons = []
         layout.addLayout(form)
         self.f_category.currentTextChanged.connect(self._category_changed)
         self.f_subcat.currentTextChanged.connect(lambda _: self._names_changed())
@@ -242,9 +247,49 @@ class CategoryDialog(QDialog):
         set_category_icons(self.f_category, self.db, self.row_type)
         self.f_category.setCurrentText(current)
         self.f_category.blockSignals(False)
-        merchant = self.f_merchant.currentText().strip()
-        self.suggest_hint.setText(f"Used before for {merchant}: {', '.join(used[:4])}" if used else "")
-        self.suggest_hint.setVisible(bool(used))
+        self._fill_past()
+
+    def _fill_past(self):
+        """The "Used before" buttons: this merchant's categories and sub-categories of this type."""
+        from daftarche.icons import emoji_icon
+        from daftarche.past_categories import category_label, entry_icon
+        while self.past_rows.count():
+            row = self.past_rows.takeAt(0).layout()
+            while row is not None and row.count():
+                item = row.takeAt(0)
+                if item.widget() is not None:
+                    item.widget().deleteLater()
+        self.past_buttons = []
+        past = [] if self._merchant_mixed else self.db.merchant_categories(self.f_merchant.currentText(),
+                                                                           self.row_type)
+        icons = self.db.get_icons() if past else {}
+        row = None
+        for i, entry in enumerate(past[:9]):
+            if i % 3 == 0:
+                row = QHBoxLayout()
+                row.setSpacing(6)
+                self.past_rows.addLayout(row)
+            label = category_label(entry["category"], entry["subcategory"]).replace("&", "&&")  # not a shortcut
+            btn = QPushButton(f"{label} · {entry['count']}")
+            btn.setProperty("class", "secondary")
+            btn.setToolTip("Use it: the category and sub-category are filled in")
+            icon = entry_icon(icons, entry)
+            if icon:
+                btn.setIcon(emoji_icon(icon))
+            btn.clicked.connect(lambda _=False, e=entry: self.use_past(e))
+            row.addWidget(btn)
+            self.past_buttons.append(btn)
+        for i in range(self.past_rows.count()):
+            self.past_rows.itemAt(i).layout().addStretch(1)
+        self.past_label.setVisible(bool(past))
+        self.past_host.setVisible(bool(past))
+
+    def use_past(self, entry):
+        """Fill in a category (and sub-category) the merchant had before."""
+        self.f_category.setCurrentText(entry["category"])
+        self._fill_subcats()
+        self.f_subcat.setCurrentText(entry["subcategory"] or UNCATEGORIZED_SUB)
+        self._names_changed()
 
     def _mark_new_merchant(self, text):
         known = _match(self.db.get_merchants(), text) is not None

@@ -197,8 +197,9 @@ so the list gets shorter as you go. When it is empty, you're done.
         Category cell.
   \item Type or pick the \textbf{category} and \textbf{sub-category}. As you type, the list narrows
         to the names that contain your text; a name that doesn't exist yet shows a green
-        \textbf{\color{income}New} and is created when you press OK. Categories you used before for this
-        shop are offered first.
+        \textbf{\color{income}New} and is created when you press OK. Under the merchant,
+        \textbf{Used before} has a button for each category this shop's transactions already have,
+        with how many: one click fills in both boxes.
   \item Below, Daftarche shows the \textbf{rule} it will save: the words of the bank's description
         that identify this shop. Shorten them to what matters, for example just \texttt{MAPLE GROCER}.
   \item Leave \textbf{Also apply the new rule to … matching transactions} ticked, so every other
@@ -209,6 +210,19 @@ so the list gets shorter as you go. When it is empty, you're done.
 Select several rows (hold \key{⌘} or \key{⇧} while clicking) and right-click: \menu{Bulk Edit Merchant /
 Category} gives all of them the same category in one go.
 \end{tip}
+
+\subsection{A shop that sells many things}
+At Amazon you buy household things one week and a book the next; a hotel can be a conference or a
+holiday. For such a shop, choose the category each time. Select its transactions (all from that
+one shop) and right-click: \menu{Use a Category of …} lists the categories its transactions had
+before, the most used first (and the last one you chose on top, when it is not among the first
+three), each with how many. One click sets it, and no rule is made or changed; \menu{Other…} opens
+\menu{Edit Merchant / Category}.
+
+If the shop's rule gives every new transaction one category and you just chose another, Daftarche
+asks whether the rule should set only the merchant from now on, so new ones wait in To Review:
+\button{Only the Merchant} changes the rule; \button{Not Now} leaves it, and asks again the next
+time; \button{Don't Ask for This Rule} leaves it for good.
 
 \subsection{How rules decide}
 A rule matches when all its words appear in the bank's description as whole words, so a rule
@@ -353,8 +367,10 @@ In the Loans window, \button{Starting Balance…} sets what was owed before your
         has none yet, one that suits its name is ready to take. On the right, the merchants whose money
         goes there; double-click one to see its rules, or its numbers to see those transactions.
   \item \textbf{Merchants}: every shop and person, with how much you spent there, and the rules that
-        recognise each one; the line under the list adds up the merchants shown. Rename or merge them,
-        edit their rules, or give a merchant a category for all its transactions at once.
+        recognise each one; the line under the list adds up the merchants shown. Beside the rules,
+        \textbf{Used in} lists the categories the merchant's transactions have, with how many and
+        their total. Rename or merge merchants, edit their rules, or give a merchant a category for
+        all its transactions at once.
   \item \textbf{Tags}: add, rename or delete tags.
 \end{itemize}
 The short headings are \textbf{Tx} (transactions), \textbf{M} (merchants), \textbf{R} (rules),
@@ -367,7 +383,7 @@ in Accounts and Tags. It is the Transactions table itself, with the same columns
 works as there: select one row or several, right-click to edit their merchant and category, split
 them, make them a loan or tag them, double-click a cell to change it. What you change there shows
 in the lists of Manage at once. In Categories, click a merchant to see only its own, and
-\button{Show All} for all again. Drag the line between the lists to give either more room. Manage
+\button{Show All} for all again; in Merchants, click a line of \textbf{Used in} the same way. Drag the line between the lists to give either more room. Manage
 keeps up with what you change elsewhere; the first time it shows transactions it fills the screen,
 and after that it opens at the size and place you left it.
 

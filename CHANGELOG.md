@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.32.0 — 2026-10-27
+
+- A shop where you buy many kinds of things: select its transactions in Transactions and
+  right-click. **Use a Category of …** lists the categories its transactions had before (of the
+  same type), the most used first, and the last one chosen on top when it is not among the first
+  three, each with how many. One click sets it; no rule is made. **Other…** opens Edit Merchant /
+  Category.
+- Edit Merchant / Category: a **Used before** row with a button for each of those categories;
+  one click fills in Category and Sub-Category.
+- When the category you give differs from the one the shop's rule gives, Daftarche asks once:
+  **Only the Merchant** (the rule sets only the merchant from now on; new ones wait in To
+  review), **Not Now** (asks again next time) or **Don't Ask for This Rule**.
+- Manage › Merchants: **Used in**, beside the rules, lists the merchant's categories with how many
+  and their total; a click shows only those transactions below (Show All: all again).
+- The Review button of Transactions no longer shows in Manage's transactions.
+
 ## 0.31.3 — 2026-10-26
 
 - The transactions in Manage are the Transactions table itself and work as there: select one row

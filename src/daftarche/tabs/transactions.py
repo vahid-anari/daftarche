@@ -25,6 +25,7 @@ from daftarche.category_dialog import CategoryDialog
 from daftarche.style import get_settings
 from daftarche.tag_picker import TagsDialog
 from daftarche.icons import emoji_icon, set_category_icons
+from daftarche.past_categories import category_label, entry_icon, offer_merchant_only
 
 NO_MERCHANT = "(no merchant)"
 """The Merchant filter's first line: the transactions without one."""
@@ -875,13 +876,14 @@ class TransactionsTab(QWidget):
                 triggered=lambda: self._edit_row(self.model.index(row_idx, 0))
             ))
 
+        rows = [self.model.get_row(i) for i in selected]
+        self._add_past_categories(menu, selected, rows)
         edit_label = "✏️  Edit Merchant / Category" if n == 1 else "✏️  Bulk Edit Merchant / Category"
         menu.addAction(QAction(edit_label, self, triggered=self._bulk_edit_cat))
         if n == 1:
             parts = self.model.get_row(selected[0]).get("parts")
             menu.addAction(QAction("✂️  Change Split…" if parts else "✂️  Split…", self,
                                    triggered=lambda: self.split_row(selected[0])))
-        rows = [self.model.get_row(i) for i in selected]
         if all(r["type"] and ("Income" in r["type"] or "Expense" in r["type"]) and not r.get("parts") for r in rows):
             menu.addAction(QAction("🤝  Make It a Loan…" if n == 1 else f"🤝  Make Them Loans ({n})…", self,
                                    triggered=lambda: self.make_loans(selected)))
@@ -893,6 +895,59 @@ class TransactionsTab(QWidget):
         menu.addSeparator()
         menu.addAction(QAction(f"🗑️  Delete {n} row{'s' if n > 1 else ''}", self, triggered=self._delete_selected))
         menu.exec(self.table.viewport().mapToGlobal(pos))
+
+    def _add_past_categories(self, menu, selected, rows):
+        """ "Use a Category of Amazon ▸": the categories its transactions had before, one click
+        each, when the selected rows are of one merchant and one type."""
+        merchants = {(r.get("merchant") or "").strip().casefold() for r in rows}
+        types = {r["type"] for r in rows}
+        if len(merchants) != 1 or len(types) != 1 or not next(iter(merchants)):
+            return
+        merchant, kind = rows[0]["merchant"].strip(), rows[0]["type"]
+        past = self.db.merchant_categories(merchant, kind)
+        if not past:
+            return
+        sub = QMenu(f"🏷️  Use a Category of {merchant.replace('&', '&&')}", menu)  # & is not a shortcut
+        icons = self.model.icons or self.db.get_icons()
+        for entry in past[:12]:
+            label = category_label(entry["category"], entry["subcategory"]).replace("&", "&&")
+            action = QAction(f"{label}\t{entry['count']}", sub)
+            icon = entry_icon(icons, entry)
+            if icon:
+                action.setIcon(emoji_icon(icon))
+            action.triggered.connect(lambda _=False, e=entry: self.use_category(selected, e))
+            sub.addAction(action)
+        sub.addSeparator()
+        sub.addAction(QAction("Other…", sub, triggered=self._bulk_edit_cat))
+        menu.addMenu(sub)
+
+    def use_category(self, row_indices, entry):
+        """Give these rows a category their merchant had before (no rule is made or changed,
+        unless you say so when its rule gives another)."""
+        rows = [self.model.get_row(i) for i in row_indices]
+        split = [r for r in rows if r.get("parts")]
+        if split and QMessageBox.question(
+                self, "Split Transactions",
+                f"{len(split)} of these {'are' if len(split) != 1 else 'is'} split. Giving one category "
+                "joins the parts again. Go on?", QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
+            return
+        ids = [r["id"] for r in rows]
+        with self.db.transaction():
+            for r in rows:
+                if r.get("parts"):
+                    self.db.set_splits(r["id"], [])
+                self.db.update_transaction(r["id"], category_id=entry["category_id"],
+                                           subcategory_id=entry["subcategory_id"])
+        offer_merchant_only(self, self.db, rows, entry["category_id"], entry["subcategory_id"])
+        self._notify_change()
+        self._select_ids(ids)
+
+    def _select_ids(self, ids):
+        self.table.clearSelection()
+        for i, r in enumerate(self.model._rows):
+            if r["id"] in ids:
+                self.table.selectionModel().select(
+                    self.model.index(i, 0), QItemSelectionModel.Select | QItemSelectionModel.Rows)
 
     def make_loans(self, row_indices):
         """Income and expense rows → Transfer › Loans with a person (money in stays in, out stays out)."""
@@ -1048,6 +1103,10 @@ class TransactionsTab(QWidget):
                 if dlg.apply_merchants.get(tx_id):
                     changes["merchant"] = dlg.apply_merchants[tx_id]
                 self.db.update_transaction(tx_id, **changes)
+        if cat and cat["name"] != UNCATEGORIZED_CAT:  # rows as they are now (merchant, type)
+            now = [{**r, "merchant": dlg.merchant if dlg.merchant_changed else r.get("merchant"),
+                    "type": dlg.row_type} for r in rows]
+            offer_merchant_only(self, self.db, now, cat["id"], sub["id"] if sub else None)
         self._notify_change()
         self.table.verticalScrollBar().setValue(scroll_pos)
         self.table.clearSelection()

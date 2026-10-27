@@ -48,6 +48,9 @@ class _ManageTransactions(TransactionsTab):
                 "merchant": f.get("merchant", []), "tags": f.get("tags", []), "search": "",
                 "search_fields": self._search_fields, "ids": None}
 
+    def _update_review_button(self):
+        self.btn_review.hide()  # Transactions' own: it sets the filters of the bar hidden here
+
     def refresh(self):
         self._apply_filters()
 
