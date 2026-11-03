@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.33.3 — 2026-11-02
+
+- Manage › Merchants: a 🚩 column to tick the merchants to look at again while tidying up, and
+  untick when done. The 🚩 button beside the search shows only those; a click on the 🚩 header
+  puts them first; the line under the list counts them; right-click ticks or unticks one. The
+  ticks are kept in the settings (on this computer), not in your data, and follow a merchant
+  that is renamed or merged.
+
 ## 0.33.2 — 2026-10-27
 
 - Categories and sub-categories: ＋ and ✏️ open one window for the **name and the icon**. The icon

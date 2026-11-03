@@ -63,7 +63,7 @@ def shop_colour(key):
 
 def test_the_total_columns_take_the_same_colours(qapp, shop):
     m = manage(shop).merchants_panel
-    rows = {m.table.item(r, 0).text(): r for r in range(m.table.rowCount())}
+    rows = {m.table.item(r, m.COL_NAME).text(): r for r in range(m.table.rowCount())}
     assert colour(m.table.item(rows["Shop"], m.COL_TOTAL).foreground()) == "red"
     assert colour(m.table.item(rows["Hardware"], m.COL_TOTAL).foreground()) == "green"
     assert colour(m.table.item(rows["Employer"], m.COL_TOTAL).foreground()) == "green"
@@ -96,8 +96,8 @@ def test_the_merchants_list_is_as_wide_as_its_contents(qapp, shop):
                          merchant="A merchant with a really very long name that goes on and on")
     m.refresh()
     assert m.table.columnWidth(m.COL_NAME) == m.NAME_MAX  # at most
-    long_row = next(r for r in range(m.table.rowCount()) if m.table.item(r, 0).text().startswith("A merchant"))
-    assert m.table.item(long_row, 0).toolTip().endswith("on and on")
+    long_row = next(r for r in range(m.table.rowCount()) if m.table.item(r, m.COL_NAME).text().startswith("A merchant"))
+    assert m.table.item(long_row, m.COL_NAME).toolTip().endswith("on and on")
     m.find.setText("shop")
     assert m.table.columnWidth(m.COL_NAME) == m.NAME_MAX  # looking for one does not change it
     dlg.hide()

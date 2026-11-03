@@ -237,25 +237,25 @@ def test_headers_and_quiet_zeros(qapp, db, food):
     headers = lambda table: [table.horizontalHeaderItem(c).text() for c in range(table.columnCount())]
     assert headers(p.sub_table) == ["Name", "Tx", "M", "R"]
     assert headers(p.merchant_table) == ["Merchant", "Tx", "R", "Total"]
-    assert headers(dlg.merchants_panel.table) == ["Merchant", "Tx", "R", "Total"]
+    assert headers(dlg.merchants_panel.table) == ["🚩", "Merchant", "Tx", "R", "Total"]  # 🚩: 0.33.3
     assert headers(dlg.accounts_panel.table)[-1] == "Tx" and headers(dlg.tags_panel.table) == ["Tag", "Tx"]
     rows = {p.merchant_table.item(r, 0).text(): r for r in range(p.merchant_table.rowCount())}
     none = rows["(no merchant)"]
     assert p.merchant_table.item(none, p.M_RULES).text() == "0"  # a number, not —
     mp = dlg.merchants_panel
-    mrows = {mp.table.item(r, 0).text(): r for r in range(mp.table.rowCount())}
+    mrows = {mp.table.item(r, mp.COL_NAME).text(): r for r in range(mp.table.rowCount())}
     assert mp.table.item(mrows["(no merchant)"], mp.COL_TOTAL).text() == "$30.00"
     zero = mp.table.item(mrows["Sunrise"], mp.COL_RULES)
-    assert zero.text() == "0" and zero.foreground().color().name() != mp.table.item(mrows["Sunrise"], 0).foreground().color().name()
+    assert zero.text() == "0" and zero.foreground().color().name() != mp.table.item(mrows["Sunrise"], mp.COL_NAME).foreground().color().name()
 
 
 def test_the_merchants_totals_line(qapp, db, food):
     dlg, p, _ = panel_on(db, shown=False)
     mp = dlg.merchants_panel
-    line = [mp.totals.item(0, c).text() for c in range(4)]
+    line = [mp.totals.item(0, c).text() for c in range(1, 5)]  # after the 🚩 column
     assert line == ["2 merchants", "4", "0", "$136.00"]  # Sunrise, Big Box (all of it), the one with none
     mp.find.setText("sun")
-    assert [mp.totals.item(0, c).text() for c in range(4)] == ["1 merchant", "2", "0", "$6.00"]
+    assert [mp.totals.item(0, c).text() for c in range(1, 5)] == ["1 merchant", "2", "0", "$6.00"]
 
 
 def test_accounts_and_tags_show_their_transactions_beside_them(qapp, db, food):

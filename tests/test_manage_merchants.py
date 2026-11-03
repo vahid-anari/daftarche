@@ -55,7 +55,7 @@ def test_merchants_tab_lists_merchants_and_their_rules(qapp, db, shops):
     shown = []
     dlg = keep(ManageDialog(db, lambda: None, show_merchant=shown.append))
     panel = dlg.merchants_panel
-    names = [panel.table.item(r, 0).text() for r in range(panel.table.rowCount())]
+    names = [panel.table.item(r, panel.COL_NAME).text() for r in range(panel.table.rowCount())]
     assert names == ["Walmart", "walmart.ca"]
     panel.table.selectRow(0)
     panel.open_transactions()

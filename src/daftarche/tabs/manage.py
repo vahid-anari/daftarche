@@ -1754,7 +1754,9 @@ class TagsPanel(QWidget):
 
 # MerchantsPanel — the shops and people (left) and the rules that recognise each one (right)
 class MerchantsPanel(QWidget):
-    COL_NAME, COL_TX, COL_RULES, COL_TOTAL = range(4)
+    COL_FLAG, COL_NAME, COL_TX, COL_RULES, COL_TOTAL = range(5)
+    FLAG_KEY = "merchants_flagged"
+    """Settings: the merchants ticked 🚩 to look at again (while tidying up; kept on this computer)."""
     R_TEXT, R_SETS, R_TYPE, R_ACCOUNT = range(4)
     U_NAME, U_TYPE, U_TX, U_TOTAL = range(4)
 
@@ -1778,18 +1780,23 @@ class MerchantsPanel(QWidget):
             ("✏️", "Rename / Merge", self.rename),
             ("🏷️", "Set Category… (its rules and transactions)", self.set_category),
             ("📋", "Its Transactions", self.open_transactions),
-            ("🗑️", "Delete Merchant", self.delete)])
+            ("🗑️", "Delete Merchant", self.delete),
+            ("🚩", "Only those ticked 🚩 (to look at again)", self._only_flagged_changed)])
+        self.btn_only_flagged = self._merchant_btns[-1]
+        self.btn_only_flagged.setCheckable(True)
         left.addLayout(find_row)
-        self.table = QTableWidget(0, 4)
-        self.table.setHorizontalHeaderLabels(["Merchant", "Tx", "R", "Total"])
-        for col, tip in ((self.COL_TX, "Transactions"), (self.COL_RULES, "Its rules"),
+        self.table = QTableWidget(0, 5)
+        self.table.setHorizontalHeaderLabels(["🚩", "Merchant", "Tx", "R", "Total"])
+        for col, tip in ((self.COL_FLAG, "To look at again: tick a merchant, untick it when done "
+                                         "(kept on this computer; a click here puts the ticked first)"),
+                         (self.COL_TX, "Transactions"), (self.COL_RULES, "Its rules"),
                          (self.COL_TOTAL, "Spent minus income (money back counts against it); transfers left out")):
             self.table.horizontalHeaderItem(col).setToolTip(tip)
         h = self.table.horizontalHeader()
         h.setSectionResizeMode(QHeaderView.ResizeToContents)
         h.setSectionResizeMode(self.COL_NAME, QHeaderView.Fixed)  # as wide as the names: _fit_width
         h.setMinimumSectionSize(40)
-        for col, width in ((self.COL_TX, 62), (self.COL_RULES, 72)):  # the headers' padding made them wide
+        for col, width in ((self.COL_FLAG, 44), (self.COL_TX, 62), (self.COL_RULES, 72)):  # padding made them wide
             h.setSectionResizeMode(col, QHeaderView.Fixed)
             h.resizeSection(col, width)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -1801,10 +1808,11 @@ class MerchantsPanel(QWidget):
         self.table.sortByColumn(self.COL_NAME, Qt.AscendingOrder)  # A to Z until a header is clicked
         self.table.cellDoubleClicked.connect(lambda r, c: self.open_transactions())
         self.table.itemSelectionChanged.connect(self._show_rules)
+        self.table.itemChanged.connect(self._flag_changed)
         _apply_selection_palette(self.table)
         left.addWidget(self.table, 1)
         # the sums of the merchants shown, always in sight under their columns
-        self.totals = QTableWidget(1, 4)
+        self.totals = QTableWidget(1, 5)
         self.totals.horizontalHeader().hide()
         self.totals.verticalHeader().hide()
         self.totals.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -1816,10 +1824,12 @@ class MerchantsPanel(QWidget):
         self.totals.setToolTip("The merchants shown (all, or those you looked for) added up")
         h.sectionResized.connect(lambda col, _old, new: self.totals.setColumnWidth(col, new))
         left.addWidget(self.totals)
-        _list_menu(self.table, [("✏️  Rename / Merge…", self.rename, True),
+        _list_menu(self.table, lambda: [(("🚩  Done (Untick)" if self._is_flagged() else "🚩  Look at Again"),
+                                          self._toggle_flag, True), None,
+                                        ("✏️  Rename / Merge…", self.rename, True),
                                 ("🏷️  Set Category…", self.set_category, True),
                                 ("📋  Its Transactions", self.open_transactions, True), None,
-                                ("🗑️  Delete Merchant", self.delete, True)])
+                                        ("🗑️  Delete Merchant", self.delete, True)])
         lw = QWidget()
         lw.setLayout(left)
         self._left = lw  # as wide as its list (_fit_width): a bigger window widens the rules and transactions
@@ -1983,22 +1993,34 @@ class MerchantsPanel(QWidget):
             rows.append({"merchant": "", "count": n_tx, "rules": n_rules, "total": self.db.get_no_merchant_total(),
                          "rule_targets": set(), "types": {}})
         dim = QBrush(QColor(get_settings().get("text_dim") or "#999"))
+        flagged = self._flagged()
         for m in rows:
             r = self.table.rowCount()
             self.table.insertRow(r)
             none = not m["merchant"]
-            items = [_SortItem(NO_MERCHANT if none else m["merchant"], m["merchant"].casefold(), none),
+            ticked = not none and m["merchant"] in flagged
+            flag = _SortItem("", (0 if ticked else 1, m["merchant"].casefold()), none)
+            if none:
+                flag.setFlags(flag.flags() & ~Qt.ItemIsUserCheckable)  # the line of what has no merchant
+            else:
+                flag.setCheckState(Qt.Checked if ticked else Qt.Unchecked)
+                flag.setToolTip("Look at it again (untick when done)")
+            items = [flag, _SortItem(NO_MERCHANT if none else m["merchant"], m["merchant"].casefold(), none),
                      _SortItem(str(m["count"]), m["count"], none), _SortItem(str(m["rules"]), m["rules"], none),
                      _SortItem(_money(m["total"]), m["total"] or 0, none)]
-            items[0].setData(Qt.UserRole, m)
+            items[self.COL_NAME].setData(Qt.UserRole, m)
+            flag.setData(Qt.UserRole, m)
             if not none:
-                items[0].setToolTip(m["merchant"])  # whole, when the column cuts it
+                items[self.COL_NAME].setToolTip(m["merchant"])  # whole, when the column cuts it
             for c, item in enumerate(items):
+                if c == self.COL_FLAG:
+                    self.table.setItem(r, c, item)
+                    continue
                 if c != self.COL_NAME:
                     item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
                     if c == self.COL_TOTAL:
                         item.setForeground(spent_brush(m["total"]))  # spent red, money in green
-                    elif not round(m[("count", "rules", "total")[c - 1]] or 0, 2):
+                    elif not round(m[("count", "rules", "total")[c - self.COL_TX]] or 0, 2):
                         item.setForeground(_dim())  # 0: written, quietly
                 if none:
                     item.setForeground(dim)
@@ -2012,26 +2034,79 @@ class MerchantsPanel(QWidget):
         self._filter(self.find.text())
         self._show_rules()
 
-    def _filter(self, text):
-        text = text.strip().casefold()
+    def _filter(self, text=None):
+        text = (self.find.text() if text is None else text).strip().casefold()
+        only = self.btn_only_flagged.isChecked()
+        flagged = self._flagged()
         for r in range(self.table.rowCount()):
-            self.table.setRowHidden(r, bool(text) and text not in self.table.item(r, 0).text().casefold())
+            m = self.table.item(r, self.COL_NAME).data(Qt.UserRole)
+            self.table.setRowHidden(r, (bool(text) and text not in self.table.item(r, self.COL_NAME).text().casefold())
+                                    or (only and m["merchant"] not in flagged))
         self._update_totals()
+
+    # ── 🚩 to look at again ───────────────────────────────────────────────────
+    def _flagged(self):
+        return set(get_settings().get(self.FLAG_KEY) or [])
+
+    def _set_flagged(self, names):
+        get_settings().set(self.FLAG_KEY, sorted(names, key=str.casefold))
+
+    def _is_flagged(self):
+        m = self._selected()
+        return bool(m and m["merchant"] in self._flagged())
+
+    def _flag_changed(self, item):
+        if item.column() != self.COL_FLAG:
+            return
+        m = item.data(Qt.UserRole)
+        if not m or not m["merchant"]:
+            return
+        names = self._flagged()
+        (names.add if item.checkState() == Qt.Checked else names.discard)(m["merchant"])
+        self._set_flagged(names)
+        item._key = (0 if m["merchant"] in names else 1, m["merchant"].casefold())
+        if self.btn_only_flagged.isChecked():
+            self._filter()
+        else:
+            self._update_totals()
+
+    def _toggle_flag(self):
+        """Right-click: tick or untick the selected merchant."""
+        r = self.table.currentRow()
+        item = self.table.item(r, self.COL_FLAG) if r >= 0 else None
+        if item is not None and item.flags() & Qt.ItemIsUserCheckable:
+            item.setCheckState(Qt.Unchecked if item.checkState() == Qt.Checked else Qt.Checked)
+
+    def _only_flagged_changed(self):
+        self._filter()
+
+    def _rename_flag(self, old, new):
+        """A ticked merchant renamed (or merged) stays ticked under its new name."""
+        names = self._flagged()
+        if old in names:
+            names.discard(old)
+            names.add(new)
+            self._set_flagged(names)
 
     def _update_totals(self):
         """The line under the merchants: how many are shown, and their numbers added up."""
-        shown = [self.table.item(r, 0).data(Qt.UserRole) for r in range(self.table.rowCount())
+        shown = [self.table.item(r, self.COL_NAME).data(Qt.UserRole) for r in range(self.table.rowCount())
                  if not self.table.isRowHidden(r)]
         named = sum(1 for m in shown if m["merchant"])
         sums = (sum(m["count"] for m in shown), sum(m["rules"] for m in shown),
                 sum(m["total"] or 0 for m in shown))
-        texts = [f"{named} merchant{'s' if named != 1 else ''}", str(sums[0]), str(sums[1]), _money(sums[2])]
+        n_flagged = sum(1 for m in shown if m["merchant"] in self._flagged())
+        texts = [str(n_flagged) if n_flagged else "", f"{named} merchant{'s' if named != 1 else ''}", str(sums[0]),
+                 str(sums[1]), _money(sums[2])]
         bold = QFont(self.table.font())  # the list's font, as the style sheet made it
         bold.setBold(True)
         for c, text in enumerate(texts):
             item = QTableWidgetItem(text)
             item.setFont(bold)
-            if c != self.COL_NAME:
+            if c == self.COL_FLAG:
+                item.setTextAlignment(Qt.AlignCenter)
+                item.setToolTip("Ticked 🚩, among those shown")
+            elif c != self.COL_NAME:
                 item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
             if c == self.COL_TOTAL:
                 item.setForeground(spent_brush(sums[2]))
@@ -2052,13 +2127,14 @@ class MerchantsPanel(QWidget):
         changes with the merchants, never with the window."""
         header = self.table.horizontalHeader()
         fm = QFontMetrics(self.table.font())
-        names = [self.table.item(r, 0).text() for r in range(self.table.rowCount())]
+        names = [self.table.item(r, self.COL_NAME).text() for r in range(self.table.rowCount())]
         widest = max((fm.horizontalAdvance(n) for n in names), default=0) + 28  # with the cell's padding
         header.resizeSection(self.COL_NAME, int(min(max(widest, header.sectionSizeHint(self.COL_NAME), 140),
                                                     self.NAME_MAX)))
-        for c in range(4):
+        columns = range(self.table.columnCount())
+        for c in columns:
             self.totals.setColumnWidth(c, header.sectionSize(c))
-        table_width = (sum(header.sectionSize(c) for c in range(4)) + self.table.verticalScrollBar().sizeHint().width()
+        table_width = (sum(header.sectionSize(c) for c in columns) + self.table.verticalScrollBar().sizeHint().width()
                        + 2 * self.table.frameWidth())
         margins = self._left.layout().contentsMargins()
         self._left.setFixedWidth(max(table_width, 360) + margins.left() + margins.right())
@@ -2067,16 +2143,16 @@ class MerchantsPanel(QWidget):
         r = self.table.currentRow()
         if r < 0 or not self.table.selectionModel().isRowSelected(r, self.table.rootIndex()):
             return None
-        item = self.table.item(r, 0)
+        item = self.table.item(r, self.COL_NAME)
         return item.data(Qt.UserRole) if item else None
 
     def select(self, name):
         """Select a merchant ("" = the no-merchant line)."""
         for r in range(self.table.rowCount()):
-            m = self.table.item(r, 0).data(Qt.UserRole)
+            m = self.table.item(r, self.COL_NAME).data(Qt.UserRole)
             if m and m["merchant"] == name:
                 self.table.selectRow(r)
-                self.table.scrollToItem(self.table.item(r, 0))
+                self.table.scrollToItem(self.table.item(r, self.COL_NAME))
                 return
 
     _select = select  # the name the window used before
@@ -2109,6 +2185,7 @@ class MerchantsPanel(QWidget):
         if existing and not _confirm_merge(self, "merchant", m["merchant"], existing, "transactions and rules"):
             return
         name = self.db.rename_merchant(m["merchant"], new)
+        self._rename_flag(m["merchant"], name)
         self.on_change()
         self.select(name)
 
@@ -2123,6 +2200,7 @@ class MerchantsPanel(QWidget):
                 "deleted; the others stay, under (no merchant).",
                 QMessageBox.Yes | QMessageBox.No, QMessageBox.No) == QMessageBox.Yes:
             self.db.delete_merchant(m["merchant"])
+            self._set_flagged(self._flagged() - {m["merchant"]})
             self.on_change()
 
     def set_category(self):

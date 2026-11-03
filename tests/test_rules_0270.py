@@ -199,7 +199,7 @@ def test_merchants_tab_no_merchant_line_and_set_merchant(qapp, db, shop):
     panel = dlg.merchants_panel
     for order in (Qt.AscendingOrder, Qt.DescendingOrder):
         panel.table.sortByColumn(panel.COL_TX, order)
-        assert panel.table.item(panel.table.rowCount() - 1, 0).text() == NO_MERCHANT  # always last
+        assert panel.table.item(panel.table.rowCount() - 1, panel.COL_NAME).text() == NO_MERCHANT  # always last
     panel.select("")
     assert not panel.btn_set_merchant.isHidden() and panel.rules.rowCount() == 1
     panel.rules.selectRow(0)
