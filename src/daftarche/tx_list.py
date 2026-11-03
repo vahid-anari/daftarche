@@ -4,7 +4,9 @@ double-click, Delete, ⌘C…). Its columns are those Transactions shows."""
 
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
+from daftarche.style import get_settings
 from daftarche.tabs.transactions import COLUMN_KEYS, TransactionsTab
+from daftarche.widgets import money
 
 SHOW_KEY = "manage_show_transactions"  # the "Show transactions" tick beside Manage's tabs
 
@@ -16,7 +18,8 @@ class _ManageTransactions(TransactionsTab):
     _shown = None  # the filters of what Manage selected; None: nothing selected, so no rows
     _hidden = frozenset()  # columns that would show one value for every row
 
-    def __init__(self, db, on_change):
+    def __init__(self, db, on_change, total=True):
+        self._total = total  # one Total (Categories, Merchants, Tags) or Income / Expense / Net (Accounts)
         super().__init__(db, on_change)
         layout = self.layout()
         layout.setContentsMargins(0, 0, 0, 0)
@@ -64,10 +67,25 @@ class _ManageTransactions(TransactionsTab):
         super()._apply_filters()
 
     def _update_summary(self):
-        """As in Transactions, without the sums that say nothing here: those that are 0, and Net
-        when it is only the income or only the expenses."""
+        """``total``: one Total, as the lists of Manage count it: expenses minus income (money back
+        counts against them), transfers left out; red when money was spent, green when more came
+        in, plain at 0. Else as in Transactions, without the sums that say nothing here: those that
+        are 0, and Net when it is only the income or only the expenses."""
         super()._update_summary()
         rows = self._current_rows
+        if self._total:
+            spent = round(sum(r.get("shown_amount", r["amount"]) * (1 if "Expense" in r["type"] else -1)
+                              for r in rows if r["type"] and ("Expense" in r["type"] or "Income" in r["type"])), 2)
+            counted = any(r["type"] and ("Expense" in r["type"] or "Income" in r["type"]) for r in rows)
+            self.lbl_net.setText(f"Total: {money(spent)}")
+            self.lbl_net.setToolTip("Spent minus income (money back counts against it); transfers left out")
+            colour = get_settings().get("expense" if spent > 0 else "income") if spent else ""
+            self.lbl_net.setStyleSheet(f"color: {colour};" if colour else "")
+            self.lbl_net.setVisible(counted)
+            self.lbl_income.hide()
+            self.lbl_expense.hide()
+            self.lbl_transfer.setVisible(not counted and bool(rows))
+            return
         income = any(r["type"] and "Income" in r["type"] for r in rows)
         expense = any(r["type"] and "Expense" in r["type"] for r in rows)
         self.lbl_income.setVisible(income)
@@ -85,8 +103,9 @@ class TransactionList(QWidget):
     """A title (and Show All, for Categories) above the transactions Manage shows.
     ``on_change()``: after an edit made here (Manage refreshes, and the main window)."""
 
-    def __init__(self, db, on_change, parent=None):
+    def __init__(self, db, on_change, parent=None, total=True):
         super().__init__(parent)
+        self._total = total
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
@@ -112,7 +131,7 @@ class TransactionList(QWidget):
 
     def _table(self):
         if self.tx is None:
-            self.tx = _ManageTransactions(self._db, self._on_change)
+            self.tx = _ManageTransactions(self._db, self._on_change, total=self._total)
             self.layout().insertWidget(1, self.tx, 1)
         return self.tx
 

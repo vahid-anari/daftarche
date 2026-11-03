@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.33.2 — 2026-10-27
+
+- Categories and sub-categories: ＋ and ✏️ open one window for the **name and the icon**. The icon
+  chosen shows large beside the name; a click in the grid chooses one (OK keeps it), and the one
+  that suits the name is offered as you type it. The separate icon button is gone.
+- The emoji in that window are drawn whole (they were cut off), and so is one pasted into its
+  field. Any other emoji can be **looked for by name** there (car, cake, money…), among the
+  1,300 or so Python knows; ⌃⌘Space, which did not reach the window, is no longer mentioned.
+- Every list in Manage has a **right-click menu** with the commands of its buttons; on an empty
+  part of the list, only adding one. In Categories, a merchant offers its rules or its
+  transactions there.
+- The buttons of each list are on its **title line**, at the top, so they stay in sight when the
+  list is tall; the rules' hint is under the lists.
+- Merchants: the list of merchants is as wide as its contents (the longest name, at most 300
+  pixels; a longer one ends in "…" and shows whole on hover); a bigger window widens the rules
+  and transactions beside it.
+- Under the transactions in Categories, Merchants and Tags: one **Total**, as the lists count it
+  (spent minus income, transfers left out), instead of a red Expense that ignored money back.
+  Accounts keeps Income, Expense and Net.
+- Totals are coloured by what they mean, everywhere in Manage: red when money was spent, green
+  when more came in (or back), a 0 dim; also in the Total columns and Used in.
+
 ## 0.33.1 — 2026-10-27
 
 - When the data was saved by a newer Daftarche (another copy on the Mac was updated first), the

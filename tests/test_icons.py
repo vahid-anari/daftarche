@@ -96,13 +96,15 @@ def test_merging_keeps_an_icon(db, cats):
 def test_icon_picker(qapp):
     from daftarche.icons import IconPickerDialog
     d = keep(IconPickerDialog("🚗", "Icon for Car"))
-    with mock.patch("daftarche.icons.QMessageBox.warning") as warn:
-        d._choose("Food")
-    assert warn.called and d.icon == "🚗"
+    assert d.typed.text() == "🚗" and not d.preview.pixmap().isNull()  # the current icon, large
+    d.typed.setText("Food")
+    with mock.patch("daftarche.icons.QMessageBox.warning") as warn, mock.patch.object(d, "accept") as ok:
+        d._accept()
+    assert warn.called and not ok.called
     d.typed.setText(" 🚙 ")
-    with mock.patch.object(d, "accept"):
-        d._choose(d.typed.text())
-    assert d.icon == "🚙"
+    with mock.patch.object(d, "accept") as ok:
+        d._accept()
+    assert ok.called and d.icon == "🚙"
 
 
 def test_transactions_table_shows_the_icons(qapp, db, cats):
@@ -132,19 +134,102 @@ def test_manage_sets_an_icon(qapp, db, cats):
     panel.type_table.selectRow(expense)
     car = next(r for r in range(panel.cat_table.rowCount()) if panel.cat_table.item(r, 0).text() == "Car")
     panel.cat_table.selectRow(car)
-    picked = mock.Mock(exec=mock.Mock(return_value=True), icon="🚗")
+    picked = mock.Mock(exec=mock.Mock(return_value=True), icon="🚗", name="Car")
+    picked.name = "Car"
     with mock.patch("daftarche.tabs.manage.IconPickerDialog", return_value=picked):
-        panel._set_cat_icon()
+        panel._rename_cat()  # ✏️: name and icon in one window
     assert db.get_icons()["cat"] == {cats["car"]: "🚗"}
     car = next(r for r in range(panel.cat_table.rowCount()) if panel.cat_table.item(r, 0).text() == "Car")
     assert not panel.cat_table.item(car, 0).icon().isNull()
 
 
 def test_icon_picker_offers_the_suggestion(qapp):
+    from daftarche.icons import IconPickerDialog, suggest_icon
+    d = keep(IconPickerDialog("", "New category", name="", suggest=suggest_icon))
+    assert d.tip.isHidden()
+    d.name_field.setText("Groceries")  # the offer follows the name typed
+    assert not d.tip.isHidden() and "🛒" in d.tip.text() and d.icon == ""  # offered, not chosen
+    d.use_tip.click()
+    assert d.icon == "🛒" and d.typed.text() == "🛒" and d.tip.isHidden()
+    kept = keep(IconPickerDialog("🥕", "Category", name="Groceries", suggest=suggest_icon))
+    assert kept.typed.text() == "🥕" and kept.tip.isHidden()  # its own icon: nothing offered
+
+
+def test_the_grid_draws_pictures_and_marks_the_choice(qapp):
+    from daftarche.icons import PICKER, IconPickerDialog
+    d = keep(IconPickerDialog("☕", "Category", name="Coffee"))
+    btn = d._buttons["☕"]
+    assert btn.text() == "" and not btn.icon().isNull()  # a picture: as text it was cut off
+    assert "highlight" in btn.styleSheet() and d._buttons[PICKER[0]].styleSheet() == ""
+    d._buttons["🍕"].click()  # a click chooses; OK keeps it
+    assert d.icon == "🍕" and d.typed.text() == "🍕" and "highlight" in d._buttons["🍕"].styleSheet()
+    with mock.patch.object(d, "accept"):
+        d._accept()
+    assert (d.name, d.icon) == ("Coffee", "🍕")
+
+
+def test_a_name_is_needed_and_the_loans_name_is_kept(qapp):
     from daftarche.icons import IconPickerDialog
-    d = keep(IconPickerDialog("", "Icon for Groceries", suggested="🛒"))
-    assert d.typed.text() == "🛒"
-    d._choose(d.typed.text())
-    assert d.icon == "🛒"
-    kept = keep(IconPickerDialog("🥕", "Icon for Groceries", suggested="🛒"))
-    assert kept.typed.text() == "🥕"  # its own icon: nothing offered
+    d = keep(IconPickerDialog("", "New category", name="  "))
+    with mock.patch("daftarche.icons.QMessageBox.warning") as warn, mock.patch.object(d, "accept") as ok:
+        d._accept()
+    assert warn.called and not ok.called
+    loans = keep(IconPickerDialog("", "Category", name="Loans", name_locked=True))
+    assert loans.name_field.isReadOnly()
+
+
+def test_add_category_with_its_icon_and_edit_with_merge(qapp, db, cats):
+    from daftarche.tabs.manage import ManageDialog
+    panel = keep(ManageDialog(db, lambda: None)).cats_panel
+    expense = next(r for r in range(panel.type_table.rowCount()) if panel.type_table.item(r, 0).text() == "Expense")
+    panel.type_table.selectRow(expense)
+    new = mock.Mock(exec=mock.Mock(return_value=True), icon="🎁")
+    new.name = "Gifts"
+    with mock.patch("daftarche.tabs.manage.IconPickerDialog", return_value=new):
+        panel._add_cat()
+    gifts = db.get_category_by_name("Gifts", type_name="Expense")
+    assert gifts and gifts["icon"] == "🎁"
+    car = next(r for r in range(panel.cat_table.rowCount()) if panel.cat_table.item(r, 0).text() == "Car")
+    panel.cat_table.selectRow(car)
+    into = mock.Mock(exec=mock.Mock(return_value=True), icon="🚘")
+    into.name = "Gifts"
+    with mock.patch("daftarche.tabs.manage.IconPickerDialog", return_value=into), \
+            mock.patch("daftarche.tabs.manage._confirm_merge", return_value=True):
+        panel._rename_cat()  # renamed to an existing name: merged, and the icon goes to the one kept
+    assert db.get_category_by_name("Car", type_name="Expense") is None
+    assert db.get_category_by_name("Gifts", type_name="Expense")["icon"] == "🚘"
+
+
+def test_right_click_menus_in_manage(qapp, db, cats):
+    from PySide6.QtCore import QPoint
+    from daftarche.tabs.manage import ManageDialog
+    dlg = keep(ManageDialog(db, lambda: None))
+    shown = []
+    with mock.patch("daftarche.tabs.manage._exec_menu",
+                    lambda menu, where: shown.append([a.text() for a in menu.actions() if a.text()])):
+        dlg.cats_panel.cat_table._list_menu(QPoint(5, 400))  # below the rows: only Add
+        dlg.tags_panel.table._list_menu(QPoint(5, 400))
+        db.get_or_create_account("Card")
+        dlg.accounts_panel.refresh()
+        table = dlg.accounts_panel.table
+        assert table.rowCount()
+        table._list_menu(table.visualRect(table.model().index(0, 0)).center())  # on a row
+    assert shown[0] == ["＋  Add Category…"] and shown[1] == ["＋  Add Tag…"]
+    assert shown[2] == ["＋  Add Account…", "✏️  Edit Account…", "🗑️  Delete Account"]
+    assert dlg.accounts_panel.table.selectionModel().selectedRows()  # the row was selected first
+
+
+def test_looking_for_any_emoji_by_name(qapp):
+    from daftarche.icons import IconPickerDialog, search_emoji
+    assert {"🚗", "🚕", "🏎"} <= set(search_emoji("car")) and "💰" in search_emoji("money")
+    assert search_emoji("racing car")[0] == "🏎" and search_emoji("") == [] and search_emoji("zzqq") == []
+    d = keep(IconPickerDialog("", "Category", name="Birthdays"))
+    assert d.found.isHidden()
+    d.search.setText("cake")
+    assert not d.found.isHidden() and d.found.count() > 1
+    item = next(d.found.item(i) for i in range(d.found.count()) if d.found.item(i).data(0x0100) == "🎂")
+    assert not item.icon().isNull()  # drawn as a picture, as the grid
+    d.found.itemClicked.emit(item)
+    assert d.icon == "🎂" and d.typed.text() == "🎂"
+    d.search.setText("zzqq")
+    assert d.found.isHidden() and not d.nothing.isHidden()

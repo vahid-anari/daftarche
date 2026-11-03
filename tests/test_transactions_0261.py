@@ -90,7 +90,7 @@ def test_manage_buttons_are_pictures_with_tooltips(qapp, db):
     from daftarche.tabs.manage import ManageDialog
     dlg = keep(ManageDialog(db, lambda: None))
     buttons = [b for panel in (dlg.cats_panel, dlg.merchants_panel) for b in panel.findChildren(QPushButton)
-               if b.width() == 50 or b.maximumWidth() == 50]
+               if b.maximumWidth() == 42]  # 0.33.2: on the lists' title lines
     assert buttons
     for b in buttons:
         if b.text():
@@ -99,5 +99,5 @@ def test_manage_buttons_are_pictures_with_tooltips(qapp, db):
             assert not b.icon().isNull()  # the emoji as a picture: never cut off
         assert b.toolTip()
     tips = {b.toolTip() for b in buttons}
-    assert {"Add Category", "Rename Sub-Category", "Icon…", "Move to Another Category", "Delete Rule",
-            "Edit Rule"} <= tips
+    assert {"Add Category", "Edit Sub-Category (name and icon)", "Move to Another Category", "Delete Rule",
+            "Edit Rule", "Rename Type"} <= tips and "Icon…" not in tips  # the icon is in the Edit window
