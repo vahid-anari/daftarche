@@ -58,6 +58,8 @@ class DashboardTab(QWidget):
         gl.setColumnStretch(1, 2)
         gl.setColumnStretch(2, 1)
 
+    open_balance_check = None  # set by the window: a click on the Total Balance
+
     # ── Total balance card ────────────────────────────────────────────────────
     def _build_total_balance_card(self):
         frame = QFrame()
@@ -80,6 +82,9 @@ class DashboardTab(QWidget):
         layout.addWidget(val)
 
         self._total_balance_value = val
+        frame.setCursor(Qt.PointingHandCursor)
+        frame.setToolTip("Click for the Balance Check: how this comes from your transactions")
+        frame.mouseReleaseEvent = lambda event: self.open_balance_check and self.open_balance_check()
         return frame
 
     def _update_total_balance_card(self, value):

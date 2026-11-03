@@ -5,9 +5,9 @@ from PySide6.QtWidgets import (
     QToolButton, QListWidget, QListWidgetItem, QWidget,
     QVBoxLayout, QHBoxLayout, QPushButton, QFrame,
     QApplication, QSizePolicy, QLabel, QGridLayout,
-    QLineEdit, QComboBox, QStyledItemDelegate, QTableView, QMessageBox, QCompleter
+    QLineEdit, QComboBox, QStyledItemDelegate, QTableView, QMessageBox, QCompleter, QLayout,
 )
-from PySide6.QtCore import Qt, Signal, QPoint, QDate, QObject, QEvent, QTimer
+from PySide6.QtCore import Qt, Signal, QPoint, QDate, QObject, QEvent, QTimer, QRect, QSize
 from PySide6.QtGui import QColor, QPainter, QPolygon, QPen
 from daftarche.style import get_settings, build_stylesheet, popup_list_stylesheet
 from daftarche.db import MONTHS_ORDER, MONTH_NUM, UNCATEGORIZED_CAT, UNCATEGORIZED_SUB
@@ -1344,3 +1344,76 @@ def _month_back(today, months):
         y -= 1
     last = calendar.monthrange(y, m)[1]
     return today.replace(year=y, month=m, day=min(today.day, last))
+
+
+class FlowLayout(QLayout):
+    """Widgets in a line that goes on to the next line when there is no room (as words do),
+    each line at the right when ``right`` (the sums under a table): nothing is cut off."""
+
+    def __init__(self, parent=None, spacing=28, line_spacing=4, right=False):
+        super().__init__(parent)
+        self._items = []
+        self._spacing, self._line_spacing, self._right = spacing, line_spacing, right
+        self.setContentsMargins(0, 0, 0, 0)
+
+    def addItem(self, item):
+        self._items.append(item)
+
+    def count(self):
+        return len(self._items)
+
+    def itemAt(self, index):
+        return self._items[index] if 0 <= index < len(self._items) else None
+
+    def takeAt(self, index):
+        return self._items.pop(index) if 0 <= index < len(self._items) else None
+
+    def expandingDirections(self):
+        return Qt.Orientation(0)
+
+    def hasHeightForWidth(self):
+        return True
+
+    def heightForWidth(self, width):
+        return self._place(QRect(0, 0, width, 0), move=False)
+
+    def setGeometry(self, rect):
+        super().setGeometry(rect)
+        self._place(rect, move=True)
+
+    def sizeHint(self):
+        shown = [i for i in self._items if not i.isEmpty()]
+        w = sum(i.sizeHint().width() for i in shown) + self._spacing * max(0, len(shown) - 1)
+        h = max((i.sizeHint().height() for i in shown), default=0)
+        m = self.contentsMargins()
+        return QSize(w + m.left() + m.right(), h + m.top() + m.bottom())
+
+    def minimumSize(self):
+        widest = max((i.minimumSize().width() for i in self._items if not i.isEmpty()), default=0)
+        m = self.contentsMargins()
+        return QSize(widest + m.left() + m.right(), self.heightForWidth(widest + m.left() + m.right()))
+
+    def _place(self, rect, move):
+        m = self.contentsMargins()
+        area = rect.adjusted(m.left(), m.top(), -m.right(), -m.bottom())
+        lines, line, used = [], [], 0
+        for item in (i for i in self._items if not i.isEmpty()):
+            w = item.sizeHint().width()
+            if line and used + self._spacing + w > area.width():
+                lines.append((line, used))
+                line, used = [], 0
+            used += (self._spacing if line else 0) + w
+            line.append(item)
+        if line:
+            lines.append((line, used))
+        y = area.y()
+        for items, used in lines:
+            h = max(i.sizeHint().height() for i in items)
+            x = area.x() + (max(0, area.width() - used) if self._right else 0)
+            for item in items:
+                size = item.sizeHint()
+                if move:
+                    item.setGeometry(QRect(QPoint(x, y + (h - size.height()) // 2), size))
+                x += size.width() + self._spacing
+            y += h + self._line_spacing
+        return (y - self._line_spacing - area.y() if lines else 0) + m.top() + m.bottom()

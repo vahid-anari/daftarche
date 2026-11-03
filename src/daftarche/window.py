@@ -124,6 +124,7 @@ class MainWindow(QMainWindow):
         review.setShortcuts([QKeySequence("Ctrl+Shift+R"), QKeySequence("Ctrl+Alt+U")])
         add(view_menu, "Unmatched Transfers…", self.show_unmatched_transfers, QKeySequence("Ctrl+Shift+U"))
         add(view_menu, "Loans…", self.open_loans, QKeySequence("Ctrl+Shift+L"))
+        add(view_menu, "Balance Check…", self.open_balance_check)
         view_menu.addSeparator()
         appearance = view_menu.addMenu("Appearance")
         self.appearance_actions = {}
@@ -189,6 +190,11 @@ class MainWindow(QMainWindow):
         self._loans_dlg = LoansDialog(self.db, self._refresh_all, self._show_loan, self)
         self._loans_dlg.finished.connect(lambda: setattr(self, "_loans_dlg", None))
         self._loans_dlg.show()
+
+    def open_balance_check(self):
+        """View → Balance Check (also a click on the Dashboard's Total Balance)."""
+        from daftarche.balance_check import BalanceCheckDialog
+        BalanceCheckDialog(self.db, self).exec()
 
     def _show_loan(self, person):
         """A person's Transfer › Loans rows; Back brings the Loans window to the front."""
@@ -281,6 +287,7 @@ class MainWindow(QMainWindow):
         self.tabs.currentChanged.connect(self._on_tab_changed)
         self.charts_tab.detail.openRequested.connect(
             lambda filters: self._show_transactions(came_from=self._back_to_tab("Charts", self.charts_tab), **filters))
+        self.dashboard_tab.open_balance_check = self.open_balance_check
         self.dashboard_tab.open_overview = (  # the Dashboard's warning: To review, or the transfers window
             lambda uncategorized: self.show_uncategorized(came_from=self._back_to_tab("Dashboard", self.dashboard_tab))
             if uncategorized else self.show_unmatched_transfers())

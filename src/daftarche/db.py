@@ -1355,7 +1355,7 @@ class Database:
             tag_map.setdefault(tr["transaction_id"], []).append(tr["name"])
         part_map = {}
         for p in self.conn.execute(f"""
-                SELECT sp.transaction_id, sp.amount, sp.note, c.name AS category, s.name AS subcategory,
+                SELECT sp.transaction_id, sp.id, sp.amount, sp.note, c.name AS category, s.name AS subcategory,
                        sp.category_id, sp.subcategory_id
                 FROM transaction_splits sp
                      LEFT JOIN categories c ON c.id = sp.category_id
@@ -1363,14 +1363,15 @@ class Database:
                 WHERE sp.transaction_id IN ({ph}) ORDER BY sp.position, sp.id""", ids):
             part_map.setdefault(p["transaction_id"], []).append(dict(p))
 
-        shown = {}  # with a category filter: how much of a split transaction is in it
+        shown, in_filter = {}, {}  # with a category filter: how much of a split one is in it, which parts
         line_where, line_params = self._line_filter(f)
         if line_where and part_map:
             split_ids = list(part_map)
             for r in self.conn.execute(
-                    f"SELECT l.id, SUM(l.amount) FROM tx_lines l {line_where} AND l.id IN "
-                    f"({','.join('?' * len(split_ids))}) GROUP BY l.id", line_params + split_ids):
-                shown[r[0]] = r[1]
+                    f"SELECT l.id, l.part, l.amount FROM tx_lines l {line_where} AND l.id IN "
+                    f"({','.join('?' * len(split_ids))})", line_params + split_ids):
+                shown[r[0]] = shown.get(r[0], 0) + r[2]
+                in_filter.setdefault(r[0], set()).add(r[1])
 
         result = []
         for r in rows:
@@ -1378,6 +1379,9 @@ class Database:
             d["tags"] = ", ".join(tag_map.get(r["id"], []))
             d["parts"] = part_map.get(r["id"], [])
             d["shown_amount"] = round2(shown[r["id"]]) if r["id"] in shown else d["amount"]
+            # the parts in the category or sub-category filtered by (all of them without a filter)
+            d["shown_parts"] = [p for p in d["parts"] if p["id"] in in_filter[r["id"]]] if r["id"] in in_filter \
+                else d["parts"]
             result.append(d)
         return result
 
@@ -2682,6 +2686,67 @@ class Database:
             balances = {aid: bal for aid, bal in balances.items() if aid in visible_ids}
         return {aid: round2(bal) for aid, bal in balances.items()}
 
+    def balance_breakdown(self):
+        """How the balance of all accounts comes from the transactions (Balance Check):
+        {spent: expenses − income of all of them (the Merchants' Total), no_account / no_date:
+        income − expenses not in any balance (no account, or no date; undated_transfers: how
+        many transfers have no date, also in none), between: moved between two
+        of your accounts, transfers: {category: {"in", "out"}} for transfers with one side only
+        (money from or to outside; Loans among them), accounts: {id: {name, income, expense, in,
+        out, balance}}, computed: the sum of it all, balance: the Total Balance shown}."""
+        accounts = {a["id"]: {"name": a["name"], "income": 0.0, "expense": 0.0, "in": 0.0, "out": 0.0}
+                    for a in self.get_accounts()}
+        spent = no_account = no_date = between = 0.0
+        undated_transfers = 0
+        transfers = {}
+        for r in self.conn.execute("""
+                SELECT t.date, t.account_id, t.to_account_id, t.amount, ty.name AS type, c.name AS category
+                FROM transactions t LEFT JOIN types ty ON ty.id = t.type_id
+                LEFT JOIN categories c ON c.id = t.category_id"""):
+            kind, amount = r["type"] or "", r["amount"] or 0.0
+            aid, taid = r["account_id"], r["to_account_id"]
+            if "Income" in kind or "Expense" in kind:
+                net = amount if "Income" in kind else -amount  # what it adds to a balance
+                spent -= net
+                if not aid:
+                    no_account += net
+                elif not r["date"]:
+                    no_date += net
+                else:
+                    accounts.setdefault(aid, {"name": "?", "income": 0.0, "expense": 0.0, "in": 0.0, "out": 0.0})
+                    accounts[aid]["income" if "Income" in kind else "expense"] += amount
+            elif "Transfer" in kind:
+                if not r["date"]:  # in no balance, and not in the sums below either
+                    undated_transfers += 1
+                    continue
+                for side, key in ((aid, "out"), (taid, "in")):
+                    if side:
+                        accounts.setdefault(side, {"name": "?", "income": 0.0, "expense": 0.0, "in": 0.0, "out": 0.0})
+                        accounts[side][key] += amount
+                if aid and taid:
+                    between += amount
+                elif aid or taid:
+                    t = transfers.setdefault(r["category"] or "(no category)", {"in": 0.0, "out": 0.0})
+                    t["in" if taid else "out"] += amount
+        balances = self.get_latest_account_balances()
+        for aid, a in accounts.items():
+            for key in ("income", "expense", "in", "out"):
+                a[key] = round2(a[key])
+            a["balance"] = balances.get(aid, 0.0)
+        transfers = {k: {"in": round2(v["in"]), "out": round2(v["out"])} for k, v in sorted(transfers.items())}
+        computed = -spent - no_account - no_date + sum(v["in"] - v["out"] for v in transfers.values())
+        # the line under Manage › Merchants counts types as SQL's LIKE does (any letter case,
+        # Expense first): with an odd type name the two could differ, so it is given as it is
+        merchants_total = self.conn.execute("""
+            SELECT SUM(CASE WHEN ty.name LIKE '%Expense%' THEN t.amount
+                            WHEN ty.name LIKE '%Income%' THEN -t.amount ELSE 0 END)
+            FROM transactions t LEFT JOIN types ty ON ty.id = t.type_id""").fetchone()[0] or 0
+        return {"spent": round2(spent), "merchants_total": round2(merchants_total),
+                "no_account": round2(no_account), "no_date": round2(no_date),
+                "between": round2(between), "transfers": transfers, "accounts": accounts,
+                "undated_transfers": undated_transfers,
+                "computed": round2(computed), "balance": self.get_current_total_balance()}
+
     def get_current_total_balance(self):
         return round2(sum(self.get_latest_account_balances().values()))
 
@@ -2923,6 +2988,14 @@ class Database:
             "SELECT color FROM accounts WHERE id=?", (account_id,)
         ).fetchone()
         return row["color"] if row else None
+
+    def line_totals(self, column):
+        """{id: the sum of the amounts} by type, category or sub-category (``column``: "type_id",
+        "category_id" or "subcategory_id"), all dates, each part of a split transaction in its own."""
+        if column not in ("type_id", "category_id", "subcategory_id"):
+            raise ValueError(column)
+        return {r[0]: round2(r[1] or 0) for r in self.conn.execute(
+            f"SELECT {column}, SUM(amount) FROM tx_lines GROUP BY {column}")}
 
     def get_transaction_count_for_type(self, type_id):
         return self.conn.execute(

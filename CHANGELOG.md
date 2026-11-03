@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.35.0 — 2026-11-03
+
+- **Balance Check** (View › Balance Check…, or a click on the Dashboard's Total Balance): the
+  Total Balance built up again from the transactions, a line at a time — income less expenses
+  (the line under Manage › Merchants), transfers with only one of your accounts (from or to
+  outside, the starting money among them; Loans; one-sided Internal Transfers), what moved
+  between your accounts — with where to compare each, whether the two agree, and each account's
+  income, expenses, transfers in and out and balance.
+- Manage › Categories: the transactions are under all the lists, across the whole width, with a
+  line to drag between them; each list is as wide as its text and scrolls only up and down.
+  Type, Category and Sub-Category have a **Total** column (red spent, green money in; "—" for transfers).
+- A split transaction seen in one category (a category filter, or Manage) shows its share
+  there — "$40.00 of $100.00" — and that part's category and sub-category, instead of the
+  whole amount and "Split (2)"; the tooltip lists the parts.
+- Manage: the sums under the transactions go on to a second line when the room is narrow, so
+  the line between a list and its transactions can be dragged much further; at first a list
+  takes at most half the width. The buttons of Accounts and Tags stay at their list's top right
+  corner (they went to the far right of the window with Show transactions off).
+
 ## 0.34.4 — 2026-11-03
 
 - Manage: when the transactions shown are only loans (Transfer › Loans, or one person's), the line

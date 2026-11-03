@@ -140,7 +140,7 @@ def test_view_menu_and_dashboard_link(qapp, monkeypatch, tmp_path):
         w = window_module.MainWindow()
     view = next(a.menu() for a in w.menuBar().actions() if a.text() == "View")
     assert [(a.text(), a.shortcut().toString()) for a in view.actions() if a.text()] == [
-        ("To Review", "Ctrl+Shift+R"), ("Unmatched Transfers…", "Ctrl+Shift+U"), ("Loans…", "Ctrl+Shift+L"),
+        ("To Review", "Ctrl+Shift+R"), ("Unmatched Transfers…", "Ctrl+Shift+U"), ("Loans…", "Ctrl+Shift+L"), ("Balance Check…", ""),
         ("Appearance", ""), ("Refresh", "Ctrl+R")]
     with mock.patch.object(w, "show_uncategorized") as unc, mock.patch.object(w, "show_unmatched_transfers") as unm:
         w.dashboard_tab._alert_uncategorized = 3

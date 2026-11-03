@@ -235,7 +235,7 @@ def test_sub_categories_count_their_merchants_and_rules(qapp, db, food):
 def test_headers_and_quiet_zeros(qapp, db, food):
     dlg, p, _ = panel_on(db, shown=False)
     headers = lambda table: [table.horizontalHeaderItem(c).text() for c in range(table.columnCount())]
-    assert headers(p.sub_table) == ["Name", "Tx", "M", "R"]
+    assert headers(p.sub_table) == ["Name", "Tx", "M", "R", "Total"]  # Total: 0.35.0
     assert headers(p.merchant_table) == ["Merchant", "Tx", "R", "Total"]
     assert headers(dlg.merchants_panel.table) == ["🚩", "Merchant", "Tx", "R", "Total"]  # 🚩: 0.33.3
     assert headers(dlg.accounts_panel.table)[-1] == "Tx" and headers(dlg.tags_panel.table) == ["Tag", "Tx"]

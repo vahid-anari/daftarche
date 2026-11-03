@@ -2,12 +2,12 @@
 Transactions table itself, without its filter bar, so it works exactly as there (right-click,
 double-click, Delete, ⌘C…). Its columns are those Transactions shows."""
 
-from PySide6.QtWidgets import QHBoxLayout, QHeaderView, QLabel, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QHeaderView, QLabel, QPushButton, QSizePolicy, QVBoxLayout, QWidget
 
 from daftarche.db import TRANSFER_LOAN
 from daftarche.style import get_settings
 from daftarche.tabs.transactions import COLUMN_KEYS, TransactionsTab, cell_text
-from daftarche.widgets import money
+from daftarche.widgets import FlowLayout, money
 
 SHOW_KEY = "manage_show_transactions"  # the "Show transactions" tick beside Manage's tabs
 
@@ -35,7 +35,27 @@ class _ManageTransactions(TransactionsTab):
         # columns sized by _fit_columns from every row's text: Qt's own ResizeToContents lays out
         # every cell, too slow for a click on a list
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
-        self.lbl_income.parentWidget().layout().setSpacing(14)  # the sums' line: it fits a narrow column
+        self._wrap_sums()
+
+    def _wrap_sums(self):
+        """The sums under the table go on to a second line when the room beside the list is
+        narrow (instead of keeping the line between them from going further)."""
+        row = self.lbl_income.parentWidget().layout()
+        row.setSpacing(14)
+        sums = QWidget()
+        flow = FlowLayout(sums, spacing=14, right=True)
+        for label in (self.lbl_income, self.lbl_expense, self.lbl_net, self.lbl_transfer):
+            row.removeWidget(label)
+            flow.addWidget(label)
+        policy = QSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        policy.setHeightForWidth(True)
+        sums.setSizePolicy(policy)
+        for i in reversed(range(row.count())):  # the stretch before them: the sums take that room
+            if row.itemAt(i).spacerItem() is not None:
+                row.takeAt(i)
+        row.addWidget(sums, 1)
+        sums.setStyleSheet("background: transparent;")
+        self.sums = sums
 
     def show(self, filters, hidden=()):
         """``filters``: lists of names, as Transactions' boxes hold them: type, account, category,

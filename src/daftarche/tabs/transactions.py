@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (
     QMenu, QMessageBox, QDialog, QFormLayout, QDialogButtonBox,
     QCheckBox, QFrame, QSizePolicy,
     QStyledItemDelegate, QStyle, QFileDialog, QApplication, QTextEdit,
-    QListWidget, QListWidgetItem, QInputDialog
+    QListWidget, QListWidgetItem, QInputDialog, QStyleOptionViewItem
 )
 from PySide6.QtCore import Qt, QSize, QAbstractTableModel, QModelIndex, QItemSelectionModel, QTimer
 from PySide6.QtGui import QColor, QAction, QBrush, QShortcut, QKeySequence, QIcon, QPainter, QPen, QPixmap
@@ -85,6 +85,34 @@ class NullDelegate(QStyledItemDelegate):
         return None
 
 
+class AmountDelegate(NullDelegate):
+    """The Amount column: a split transaction's share in the category shown, then " of $100.00"
+    (its whole amount) in the dim colour."""
+
+    def paint(self, painter, option, index):
+        text = index.data(Qt.DisplayRole) or ""
+        if OF not in text:
+            super().paint(painter, option, index)
+            return
+        share, whole = text.split(OF, 1)
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        opt.text = ""
+        style = opt.widget.style() if opt.widget else QApplication.style()
+        style.drawControl(QStyle.CE_ItemViewItem, opt, painter, opt.widget)
+        rect = style.subElementRect(QStyle.SE_ItemViewItemText, opt, opt.widget)
+        fm = opt.fontMetrics
+        tail = OF + whole
+        painter.save()
+        painter.setFont(opt.font)
+        painter.setPen(QColor(get_settings().get("text_dim") or "#999"))
+        painter.drawText(rect, Qt.AlignRight | Qt.AlignVCenter, tail)
+        brush = index.data(Qt.ForegroundRole)
+        painter.setPen(brush.color() if isinstance(brush, QBrush) else opt.palette.text().color())
+        painter.drawText(rect.adjusted(0, 0, -fm.horizontalAdvance(tail), 0), Qt.AlignRight | Qt.AlignVCenter, share)
+        painter.restore()
+
+
 # AccountDelegate  — custom painter for the Account column (col 5)
 #                    draws "From → To" for transfers using account colors
 class AccountDelegate(QStyledItemDelegate):
@@ -161,15 +189,50 @@ def row_value(row, col):
     return value or "" if col == COL_TAGS else value
 
 
+OF = " of "  # "$40.00 of $100.00": a split transaction's share in the category shown
+
+
+def partial(row):
+    """A split transaction of which only some parts are in the category (or sub-category)
+    filtered by: its share is shown, with the whole amount after "of"."""
+    parts = row.get("parts") or []
+    shown = row.get("shown_parts")
+    return bool(parts) and shown is not None and len(shown) < len(parts)
+
+
+def _parts_text(parts, col):
+    """Category (``col`` COL_CAT) or sub-category text of these parts of a split transaction."""
+    if col == COL_CAT:
+        cats = {p["category"] for p in parts}
+        return parts[0]["category"] if len(cats) == 1 else f"Split ({len(parts)})"
+    subs = {(p["category"], p["subcategory"]) for p in parts}
+    if len(subs) == 1:
+        sub = parts[0]["subcategory"]
+        return "—" if sub in (None, UNCATEGORIZED_SUB) else sub
+    return f"Split ({len(parts)})" if len({p["category"] for p in parts}) == 1 else "—"
+
+
+def _parts_tip(row):
+    lines = [f"{money(p['amount'])}   {p['category']} › {p['subcategory']}"
+             + (f"  ·  {p['note']}" if p.get("note") else "") for p in row.get("parts") or []]
+    if partial(row):
+        lines.insert(0, f"Split: {money(row['shown_amount'])} of its {money(row['amount'])} is here")
+    return "\n".join(lines)
+
+
 def cell_text(row, col):
     """The text a cell shows (``TxModel.data``'s DisplayRole): also used to size Manage's columns
     from every row."""
     parts = row.get("parts") or []
-    if parts and col in (COL_CAT, COL_SUBCAT):  # split: "Split (n)"
+    if parts and col in (COL_CAT, COL_SUBCAT):  # split: "Split (n)"; only some parts here: theirs
+        if partial(row):
+            return _parts_text(row["shown_parts"], col)
         shared = len({p["category"] for p in parts}) == 1
         if col == COL_CAT:
             return parts[0]["category"] if shared else f"Split ({len(parts)})"
         return f"Split ({len(parts)})" if shared else "—"
+    if col == COL_AMOUNT and partial(row):
+        return f"{money(row['shown_amount'])}{OF}{money(row['amount'])}"
     if col == COL_DATE:
         return _date_text(row["date"])
     if col == COL_SUBCAT and _category_only(row):
@@ -213,14 +276,13 @@ class TxModel(QAbstractTableModel):
         col = index.column()
         parts = row.get("parts") or []
         if parts and col in (COL_CAT, COL_SUBCAT):  # split: "Split (n)", the parts on hover
+            if partial(row):
+                parts = row["shown_parts"]  # only some of them in the category shown: theirs
             shared = len({p["category"] for p in parts}) == 1
             if role == Qt.DisplayRole:
-                if col == COL_CAT:
-                    return parts[0]["category"] if shared else f"Split ({len(parts)})"
-                return f"Split ({len(parts)})" if shared else "—"
+                return cell_text(row, col)
             if role == Qt.ToolTipRole:
-                return "\n".join(f"{money(p['amount'])}   {p['category']} › {p['subcategory']}"
-                                 + (f"  ·  {p['note']}" if p.get("note") else "") for p in parts)
+                return _parts_tip(row)
             if role == Qt.ForegroundRole:
                 return QBrush(QColor(get_settings().get("accent")))
             if role == Qt.DecorationRole and col == COL_CAT and shared and self.icons:
@@ -245,6 +307,9 @@ class TxModel(QAbstractTableModel):
 
         if role == Qt.DisplayRole:
             return cell_text(row, col)
+
+        if role == Qt.ToolTipRole and col == COL_AMOUNT and partial(row):
+            return _parts_tip(row)
 
         if role == Qt.ToolTipRole and no_sub:
             return "No sub-category (that is fine: it counts in its category)"
@@ -478,6 +543,7 @@ class TransactionsTab(QWidget):
         self.table.setModel(self.model)
         self.table.setItemDelegate(NullDelegate(self.table))
         self.table.setItemDelegateForColumn(COL_ACCOUNT, AccountDelegate(self.model, self.table))
+        self.table.setItemDelegateForColumn(COL_AMOUNT, AmountDelegate(self.table))
         for col in (COL_NAME, COL_MEMO, COL_FITID):
             self.table.setItemDelegateForColumn(col, ReadOnlyCopyDelegate(self.table))
         self.table.setItemDelegateForColumn(COL_NOTE, QStyledItemDelegate(self.table))  # typed in place
@@ -554,8 +620,8 @@ class TransactionsTab(QWidget):
             self.lbl_rows_info.setText(f"Rows: {total}  |  Selected: {len(sel_rows)}")
 
             if amount_selected:
-                sel_sum = sum(
-                    (r["amount"] or 0) * (
+                sel_sum = sum(  # a split one's share when only some of its parts are shown
+                    (r.get("shown_amount", r["amount"]) or 0) * (
                         1 if r["type"] and "Income" in r["type"] else
                         -1 if r["type"] and "Expense" in r["type"] else 0
                     )
