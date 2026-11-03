@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
     QColorDialog, QCheckBox, QFormLayout, QLineEdit,
     QDialogButtonBox, QFrame, QSizePolicy, QAbstractScrollArea, QRadioButton, QButtonGroup, QSplitter, QMenu
 )
-from PySide6.QtCore import QByteArray, QSize, Qt
+from PySide6.QtCore import QByteArray, QItemSelectionModel, QSize, Qt
 from PySide6.QtGui import QBrush, QColor, QFont, QFontMetrics, QPalette
 
 from daftarche.style import get_settings
@@ -1757,7 +1757,7 @@ class MerchantsPanel(QWidget):
     COL_FLAG, COL_NAME, COL_TX, COL_RULES, COL_TOTAL = range(5)
     FLAG_KEY = "merchants_flagged"
     """Settings: the merchants ticked 🚩 to look at again (while tidying up; kept on this computer)."""
-    R_TEXT, R_SETS, R_TYPE, R_ACCOUNT = range(4)
+    R_TEXT, R_SETS, R_TYPE, R_ACCOUNT, R_TX = range(5)
     U_NAME, U_TYPE, U_TX, U_TOTAL = range(4)
 
     def __init__(self, db, on_change, show_transactions=None, notify=None):
@@ -1808,6 +1808,7 @@ class MerchantsPanel(QWidget):
         self.table.sortByColumn(self.COL_NAME, Qt.AscendingOrder)  # A to Z until a header is clicked
         self.table.cellDoubleClicked.connect(lambda r, c: self.open_transactions())
         self.table.itemSelectionChanged.connect(self._show_rules)
+        self.table.cellClicked.connect(lambda r, c: self._show_all())  # the merchant again: all of its
         self.table.itemChanged.connect(self._flag_changed)
         _apply_selection_palette(self.table)
         left.addWidget(self.table, 1)
@@ -1856,18 +1857,21 @@ class MerchantsPanel(QWidget):
             ("🗑️", "Delete Rule", self.delete_rules)])
         self.btn_set_merchant = buttons[2]
         rules_col.addLayout(rules_head)
-        self.rules = QTableWidget(0, 4)
-        self.rules.setHorizontalHeaderLabels(["Bank text", "Sets", "Type", "Accounts"])
+        self.rules = QTableWidget(0, 5)
+        self.rules.setHorizontalHeaderLabels(["Bank text", "Sets", "Type", "Accounts", "Tx"])
+        self.rules.horizontalHeaderItem(self.R_TX).setToolTip(
+            "The transactions it recognises and wins now (select it to see them); 0: no use any more?")
         h = self.rules.horizontalHeader()
         h.setSectionResizeMode(QHeaderView.ResizeToContents)
         self.rules.setSizeAdjustPolicy(QAbstractScrollArea.AdjustToContents)
-        self.rules.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Expanding)  # as wide as its text
+        self.rules.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Expanding)  # as wide as its text, first
         self.rules.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.rules.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.rules.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.rules.verticalHeader().setVisible(False)
         self.rules.setAlternatingRowColors(True)
         self.rules.cellDoubleClicked.connect(lambda r, c: self.edit_rule())
+        self.rules.itemSelectionChanged.connect(lambda: self._one_filter(self.used, self.rules))
         _apply_selection_palette(self.rules)
         rules_col.addWidget(self.rules, 1)
         lists.addLayout(rules_col)
@@ -1885,18 +1889,21 @@ class MerchantsPanel(QWidget):
         for col, tip in ((self.U_TX, "Transactions"), (self.U_TOTAL, "Their amounts added up")):
             self.used.horizontalHeaderItem(col).setToolTip(tip)
         _compact(self.used)
-        self.used.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Expanding)  # short: always whole; the rules give way
+        self.used.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Expanding)  # the rules first; it scrolls if need be
         self.used.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.used.setSelectionMode(QAbstractItemView.SingleSelection)
         self.used.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.used.verticalHeader().setVisible(False)
         self.used.setAlternatingRowColors(True)
-        self.used.itemSelectionChanged.connect(self._update_lines)
+        self.used.itemSelectionChanged.connect(lambda: self._one_filter(self.rules, self.used))
         _apply_selection_palette(self.used)
         used_col.addWidget(self.used, 1)
         lists.addWidget(self.used_host)
         lists.addStretch(1)
         top_col.addLayout(lists, 1)
+        self.rules_count = QLabel()  # its transactions and its rules, compared
+        self.rules_count.setWordWrap(True)
+        top_col.addWidget(self.rules_count)
         self.rules_hint = QLabel()  # under the lists, the whole width: few lines
         self.rules_hint.setProperty("class", "dim-label")
         self.rules_hint.setWordWrap(True)
@@ -1904,7 +1911,7 @@ class MerchantsPanel(QWidget):
         _list_menu(self.rules, self._rules_menu)
         self.lines = TransactionList(self.db, self.on_change)
         self.lines.btn_all.setToolTip("Every category again")
-        self.lines.btn_all.clicked.connect(self.used.clearSelection)
+        self.lines.btn_all.clicked.connect(self._show_all)
         self.split = _two_rows(top, self.lines)
         right.addWidget(self.split, 1)
         layout.addLayout(right, 7)
@@ -1925,9 +1932,15 @@ class MerchantsPanel(QWidget):
             return
         m = self._selected()
         used = self._selected_used()
-        self.lines.btn_all.setVisible(used is not None)
+        rules = self._selected_rules()
+        self.lines.btn_all.setVisible(used is not None or bool(rules))
         if m is None:
             self.lines.clear()
+            return
+        if rules:  # what these rules recognise now, whatever merchant it has: the Merchant column shows it
+            which = (f"rule {rule_text(rules[0])}" if len(rules) == 1 else f"{len(rules)} rules")
+            self.lines.show_transactions(f"{m['merchant'] or NO_MERCHANT} · {which}",
+                                         {"ids": self.db.rule_transaction_ids(r["id"] for r in rules)})
             return
         if used is None:
             self.lines.show_transactions(m["merchant"] or NO_MERCHANT, {"merchant": [m["merchant"]]},
@@ -1938,6 +1951,24 @@ class MerchantsPanel(QWidget):
             {"merchant": [m["merchant"]], "type": [used["type"]], "category": [used["category"]],
              "subcategory": [used["subcategory"]] if used["subcategory"] else []},
             hidden=("merchant", "type", "category", "subcategory"))
+
+    def _one_filter(self, other, chosen):
+        """A rule or a line of Used in narrows the transactions below: one of them at a time."""
+        if chosen.selectionModel().hasSelection():
+            other.blockSignals(True)
+            other.clearSelection()
+            other.blockSignals(False)
+        self._update_lines()
+
+    def _show_all(self):
+        """Show All, or a click on the merchant again: all its transactions."""
+        if not (self.rules.selectionModel().hasSelection() or self.used.selectionModel().hasSelection()):
+            return
+        for table in (self.rules, self.used):
+            table.blockSignals(True)
+            table.clearSelection()
+            table.blockSignals(False)
+        self._update_lines()
 
     # ── the categories it was given ──────────────────────────────────────────
     def _selected_used(self):
@@ -2219,12 +2250,22 @@ class MerchantsPanel(QWidget):
             self.used.blockSignals(True)
             self.used.clearSelection()  # another merchant: all its transactions
             self.used.blockSignals(False)
+        same = (m or {}).get("merchant") == getattr(self, "_used_of", None)
+        kept_rules = {r["id"] for r in self._selected_rules()} if same else set()  # after an edit: still those
         self._used_of = (m or {}).get("merchant")
         self._fill_used(m)
-        self._update_lines()
+        self.rules.blockSignals(True)
         self.rules.setRowCount(0)
+        self.rules.blockSignals(False)
+        try:
+            self._fill_rules(m, kept_rules)
+        finally:
+            self._update_lines()
+
+    def _fill_rules(self, m, kept=()):
         none = m is not None and not m["merchant"]
         self.btn_set_merchant.setVisible(none)
+        self.rules_count.setText("")
         if m is None:
             self.rules_title.setText("Rules")
             self.rules_hint.setText("Select a merchant to see the rules that recognise it in the bank's text.")
@@ -2240,9 +2281,19 @@ class MerchantsPanel(QWidget):
                                     "enough, a category too, otherwise you choose it (To review). When several "
                                     "match, the one that matched the most text wins, then the one for fewer accounts.")
             rules = self.db.get_rules(m["merchant"])
+        if none:  # rules with no merchant: only how many each one wins
+            from collections import Counter
+            counts = Counter(self.db.rule_winners().values())
+        else:
+            counts, summary = self.db.merchant_rule_counts(m["merchant"])
+            self.rules_count.setText(self._count_text(summary))
         for rule in rules:
             r = self.rules.rowCount()
             self.rules.insertRow(r)
+            n = counts.get(rule["id"], 0)
+            tx = _number_item(n, align=Qt.AlignRight | Qt.AlignVCenter)
+            tx.setData(Qt.UserRole, rule)
+            self.rules.setItem(r, self.R_TX, tx)
             for c, text in enumerate((rule_text(rule), rule_sets(rule), rule["type"] or "—",
                                       accounts_label(rule["accounts"]))):
                 item = QTableWidgetItem(text)
@@ -2253,6 +2304,29 @@ class MerchantsPanel(QWidget):
                     item.setToolTip("\n".join(rule["accounts"]))
                 self.rules.setItem(r, c, item)
         self.rules.setColumnHidden(self.R_TYPE, len({r["type"] for r in rules}) == 1)  # one type: says nothing
+        self.rules.setColumnHidden(self.R_ACCOUNT, bool(rules) and not any(r["accounts"] for r in rules))  # all All
+        if kept:
+            self.rules.blockSignals(True)
+            for r in range(self.rules.rowCount()):
+                if self.rules.item(r, 0).data(Qt.UserRole)["id"] in kept:
+                    self.rules.selectionModel().select(self.rules.model().index(r, 0),
+                                                       QItemSelectionModel.Select | QItemSelectionModel.Rows)
+            self.rules.blockSignals(False)
+
+    @staticmethod
+    def _count_text(c):
+        """Its transactions and its rules, compared: which of them the rules give, which they do not."""
+        if not c["total"] and not c["elsewhere"]:
+            return ""
+        parts = [f"{c['from_rules']} of its {c['total']} transaction{'s' if c['total'] != 1 else ''} come from "
+                 "these rules"]
+        if c["none"]:
+            parts.append(f"{c['none']} from no rule (set by hand)")
+        if c["other_rule"]:
+            parts.append(f"{c['other_rule']} from another merchant's rule")
+        if c["elsewhere"]:
+            parts.append(f"{c['elsewhere']} more have another merchant now")
+        return " · ".join(parts)
 
     def _rules_menu(self):
         items = [("＋  Add Rule…", self.add_rule, False), None, ("✏️  Edit Rule…", self.edit_rule, True)]

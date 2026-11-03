@@ -37,7 +37,8 @@ class _ManageTransactions(TransactionsTab):
 
     def show(self, filters, hidden=()):
         """``filters``: lists of names, as Transactions' boxes hold them: type, account, category,
-        subcategory, merchant ("" for none), tags. None: nothing to show."""
+        subcategory, merchant ("" for none), tags; and ``ids``: only these transactions. None:
+        nothing to show."""
         self._shown = filters
         self._hidden = frozenset(hidden)
         self._apply_column_visibility()
@@ -49,7 +50,7 @@ class _ManageTransactions(TransactionsTab):
         return {"from_day": None, "to_day": None, "type": f.get("type", []), "account": f.get("account", []),
                 "category": f.get("category", []), "subcategory": f.get("subcategory", []),
                 "merchant": f.get("merchant", []), "tags": f.get("tags", []), "search": "",
-                "search_fields": self._search_fields, "ids": None}
+                "search_fields": self._search_fields, "ids": f.get("ids")}
 
     def _update_review_button(self):
         self.btn_review.hide()  # Transactions' own: it sets the filters of the bar hidden here

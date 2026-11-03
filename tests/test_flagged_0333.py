@@ -107,3 +107,77 @@ def test_right_click_ticks_it(qapp, shops):
     assert m.table.item(row_of(m, "Amazon"), m.COL_FLAG).checkState() == Qt.Checked and m._is_flagged()
     m._toggle_flag()
     assert not m._is_flagged()
+
+
+# ── a rule's transactions ────────────────────────────────────────────────────
+@pytest.fixture
+def ruled(db):
+    db.get_or_create_account("Card")
+    db.get_or_create_account("Bank")
+    uc, us = db.get_uncategorized_ids()
+    add = lambda name, merchant, account="Card": db.add_transaction(  # noqa: E731
+        2026, "May", 1, "Expense", account, 10, us, uc, name=name, merchant=merchant)
+    ids = {"mkt": add("AMAZON MKTP 1", "Amazon"), "prime": add("AMAZON PRIME", "Amazon"),
+           "audible": add("AMAZON AUDIBLE", "Audible"), "bank": add("AMAZON MKTP 2", "Amazon", "Bank"),
+           "other": add("BAKERY", "Bakery")}
+    db.add_category("Shopping", "Expense")
+    shopping = db.get_category_by_name("Shopping", type_name="Expense")["id"]
+    db.update_transaction(ids["prime"], category_id=shopping,
+                          subcategory_id=db.uncategorized_subcategory(shopping)["id"])  # for Used in
+    for name, accounts in (("AMAZON", None), ("AMAZON PRIME", None), ("AMAZON", ["Bank"])):
+        db.save_mapping("Expense", accounts, name=name, subcategory_id=us, category_id=uc, merchant="Amazon")
+    db.conn.commit()
+    rules = {(r["name"], tuple(r["accounts"])): r["id"] for r in db.get_rules("Amazon")}
+    return db, ids, rules
+
+
+def test_a_rules_transactions_are_those_it_wins_now(ruled):
+    db, ids, rules = ruled
+    general = rules[("AMAZON", ())]
+    assert sorted(db.rule_transaction_ids([general])) == sorted([ids["mkt"], ids["audible"]])  # Audible too
+    assert db.rule_transaction_ids([rules[("AMAZON PRIME", ())]]) == [ids["prime"]]  # more text: it wins
+    assert db.rule_transaction_ids([rules[("AMAZON", ("Bank",))]]) == [ids["bank"]]  # fewer accounts: it wins
+    assert db.rule_transaction_ids([]) == []
+
+
+def test_selecting_a_rule_shows_its_transactions_and_the_merchant_again_all(qapp, ruled):
+    from daftarche.style import get_settings
+    from daftarche.tx_list import SHOW_KEY
+    db, ids, rules = ruled
+    get_settings()._data[SHOW_KEY] = True
+    m = panel(db)
+    m.select("Amazon")
+    names = lambda: sorted(r["name"] for r in m.lines.tx.model._rows)  # noqa: E731
+    assert len(names()) == 3
+    row = next(r for r in range(m.rules.rowCount())
+               if m.rules.item(r, 0).data(Qt.UserRole)["id"] == rules[("AMAZON", ())])
+    m.rules.selectRow(row)
+    assert names() == ["AMAZON AUDIBLE", "AMAZON MKTP 1"] and m.lines.title.text().startswith("Amazon · rule")
+    assert not m.lines.btn_all.isHidden()
+    m.refresh()  # after an edit: still that rule
+    assert names() == ["AMAZON AUDIBLE", "AMAZON MKTP 1"]
+    assert m.used.rowCount()
+    m.used.selectRow(0)  # one filter at a time
+    assert not m.rules.selectionModel().hasSelection()
+    m.rules.selectRow(row)
+    assert not m.used.selectionModel().hasSelection()
+    m.table.cellClicked.emit(row_of(m, "Amazon"), m.COL_NAME)  # the merchant again: all of its
+    assert len(names()) == 3 and not m.rules.selectionModel().hasSelection() and m.lines.btn_all.isHidden()
+    m.rules.selectRow(row)
+    m.lines.btn_all.click()
+    assert len(names()) == 3
+
+
+def test_each_rule_counts_its_transactions_and_the_line_compares(qapp, ruled):
+    db, ids, rules = ruled
+    uc, us = db.get_uncategorized_ids()
+    db.add_transaction(2026, "May", 3, "Expense", "Card", 5, us, uc, name="GIFT CARD", merchant="Amazon")  # by hand
+    db.conn.commit()
+    counts, line = db.merchant_rule_counts("Amazon")
+    assert counts == {rules[("AMAZON", ())]: 2, rules[("AMAZON PRIME", ())]: 1, rules[("AMAZON", ("Bank",))]: 1}
+    assert line == {"total": 4, "from_rules": 3, "none": 1, "other_rule": 0, "elsewhere": 1}  # Audible
+    m = panel(db)
+    m.select("Amazon")
+    assert sorted(m.rules.item(r, m.R_TX).text() for r in range(m.rules.rowCount())) == ["1", "1", "2"]
+    assert m.rules_count.text() == ("3 of its 4 transactions come from these rules · 1 from no rule (set by hand)"
+                                    " · 1 more have another merchant now")

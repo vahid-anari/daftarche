@@ -2360,6 +2360,71 @@ class Database:
             WHERE (t.category_id = ? OR t.category_id IS NULL)
               AND (ty.name LIKE '%Income%' OR ty.name LIKE '%Expense%')""", (cat_id,)).fetchone()[0]
 
+    def rule_winners(self):
+        """{transaction id: the id of the rule that recognises and wins it now}, as lookup_mapping
+        ranks them (what an import would give it today); split ones too, those no rule
+        recognises left out. Which rule a transaction came with is not kept: this is how to
+        tell. Kept until the next change."""
+        cached = self._cache.get("rule_winners")
+        if cached and cached[0] == self._data_version:
+            return cached[1]
+        sets = self._rule_account_sets()
+        rules = {}
+
+        def words(pattern):  # every word of every term must be in the text: a quick test before the real one
+            return [w.lower() for term in (pattern or "").split("|") for w in term.split()]
+        for r in self.conn.execute("SELECT id, type_id, name, memorandum FROM import_mappings"):
+            rules.setdefault(r["type_id"], []).append((r, words(r["name"]), words(r["memorandum"])))
+        out = {}
+        for t in self.conn.execute("""SELECT id, type_id, COALESCE(account_id, to_account_id) AS account_id, name,
+                                             memorandum FROM transactions"""):
+            best = None
+            name, memo = t["name"] or "", t["memorandum"] or ""
+            quick = name.isascii() and memo.isascii()  # lower() is what IGNORECASE compares only there
+            name_low, memo_low = name.lower(), memo.lower()
+            for r, name_words, memo_words in rules.get(t["type_id"], ()):
+                accounts = sets.get(r["id"], frozenset())
+                if accounts and t["account_id"] not in accounts:
+                    continue
+                if quick and (any(w not in name_low for w in name_words) or any(w not in memo_low for w in memo_words)):
+                    continue
+                name_len = rule_match_length(t["name"], r["name"])
+                memo_len = rule_match_length(t["memorandum"], r["memorandum"])
+                if name_len is None or memo_len is None:
+                    continue
+                key = rule_rank(name_len + memo_len, accounts, r["id"])
+                if best is None or key > best:
+                    best = key
+            if best is not None:
+                out[t["id"]] = best[3]
+        self._cache["rule_winners"] = (self._data_version, out)
+        return out
+
+    def rule_transaction_ids(self, rule_ids):
+        """The transactions these rules recognise and win now (rule_winners), whatever merchant
+        they have now."""
+        rule_ids = set(rule_ids or ())
+        return [t for t, r in self.rule_winners().items() if r in rule_ids]
+
+    def merchant_rule_counts(self, merchant):
+        """For Manage › Merchants: ({rule id: how many transactions it wins}, for the merchant's
+        rules) and {total: its transactions, from_rules: won by its rules, none: by no rule (set
+        by hand), other_rule: by another merchant's rule, elsewhere: won by its rules but with
+        another merchant now}."""
+        rule_ids = {r["id"] for r in self.get_rules(merchant)}
+        winners = self.rule_winners()
+        counts = {i: 0 for i in rule_ids}
+        for rule in winners.values():
+            if rule in counts:
+                counts[rule] += 1
+        mine = {r[0] for r in self.conn.execute(
+            "SELECT id FROM transactions WHERE IFNULL(TRIM(merchant), '') = ?", ((merchant or "").strip(),))}
+        from_rules = sum(1 for t in mine if winners.get(t) in rule_ids)
+        none = sum(1 for t in mine if t not in winners)
+        won = sum(counts.values())
+        return counts, {"total": len(mine), "from_rules": from_rules, "none": none,
+                        "other_rule": len(mine) - from_rules - none, "elsewhere": won - from_rules}
+
     def lookup_mapping(self, type_name, account_name, name=None, memorandum=None):
         """The rule for a transaction, or None.
 

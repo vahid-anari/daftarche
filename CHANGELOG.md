@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.33.4 — 2026-11-02
+
+- A rule's transactions: select a rule (or several) and the transactions below are only those it
+  recognises and wins now, whatever merchant they have now (the Merchant column shows it). A click
+  on the merchant again, or Show All, shows all of them; a rule and a line of Used in narrow them
+  one at a time.
+- The rules have a **Tx** column (how many transactions each one wins: 0, no use any more?) and a
+  line under them compares: how many of the merchant's transactions come from its rules, from no
+  rule (set by hand), from another merchant's rule, and how many its rules give another merchant.
+- The rules list leaves out Accounts when all of them are for all accounts, and keeps its whole
+  width; Used in beside it scrolls when the window is narrow.
+
 ## 0.33.3 — 2026-11-02
 
 - Manage › Merchants: a 🚩 column to tick the merchants to look at again while tidying up, and

@@ -205,7 +205,7 @@ def test_the_merchants_are_only_as_wide_as_their_text(qapp, db, food):
     from PySide6.QtWidgets import QSizePolicy
     dlg, p, _ = panel_on(db)
     assert p.merchant_table.sizePolicy().horizontalPolicy() == QSizePolicy.Maximum
-    assert dlg.merchants_panel.rules.sizePolicy().horizontalPolicy() == QSizePolicy.Maximum
+    assert dlg.merchants_panel.rules.sizePolicy().horizontalPolicy() == QSizePolicy.Minimum  # 0.33.4: whole
 
 
 def test_the_line_between_the_lists_lights_up_and_has_room(qapp, db, food):
