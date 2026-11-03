@@ -2,10 +2,10 @@
 Transactions table itself, without its filter bar, so it works exactly as there (right-click,
 double-click, Delete, ⌘C…). Its columns are those Transactions shows."""
 
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QHeaderView, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from daftarche.style import get_settings
-from daftarche.tabs.transactions import COLUMN_KEYS, TransactionsTab
+from daftarche.tabs.transactions import COLUMN_KEYS, TransactionsTab, cell_text
 from daftarche.widgets import money
 
 SHOW_KEY = "manage_show_transactions"  # the "Show transactions" tick beside Manage's tabs
@@ -31,8 +31,9 @@ class _ManageTransactions(TransactionsTab):
                         row.itemAt(j).widget().hide()
         self.nav_bar.hide()
         self._period._select_preset(0, emit=False, persist=False)  # all dates; Transactions' own stays
-        # columns as wide as the first rows' text, not all of them: a click on a list stays quick
-        self.table.horizontalHeader().setResizeContentsPrecision(60)
+        # columns sized by _fit_columns from every row's text: Qt's own ResizeToContents lays out
+        # every cell, too slow for a click on a list
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         self.lbl_income.parentWidget().layout().setSpacing(14)  # the sums' line: it fits a narrow column
 
     def show(self, filters, hidden=()):
@@ -66,6 +67,32 @@ class _ManageTransactions(TransactionsTab):
             self._update_summary()
             return
         super()._apply_filters()
+        self._fit_columns()
+
+    def _fit_columns(self):
+        """Each shown column as wide as its widest text in any row (none cut with "…"): the text
+        of every row is measured with the font, and only the widest cell is laid out as Qt does
+        (its icon, margins)."""
+        table, model = self.table, self.model
+        header = table.horizontalHeader()
+        measure = table.fontMetrics().horizontalAdvance
+        rows = model._rows
+        grid = 1 if table.showGrid() else 0
+        for col in range(model.columnCount()):
+            if table.isColumnHidden(col):
+                continue
+            widest, at, seen = -1, None, set()
+            for i, row in enumerate(rows):
+                text = cell_text(row, col)
+                if text not in seen:
+                    seen.add(text)
+                    width = measure(text)
+                    if width > widest:
+                        widest, at = width, i
+            width = header.sectionSizeHint(col)
+            if at is not None:
+                width = max(width, table.sizeHintForIndex(model.index(at, col)).width() + grid)
+            header.resizeSection(col, width)
 
     def _update_summary(self):
         """``total``: one Total, as the lists of Manage count it: expenses minus income (money back

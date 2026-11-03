@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.34.1 — 2026-11-03
+
+- The transactions in Manage: each column is as wide as its longest text in any row, so nothing
+  far down the list is cut with "…" (the widths came from the first rows only). Showing them is
+  also a little quicker.
+
 ## 0.34.0 — 2026-11-03
 
 - Merchants' logos: right-click a merchant in Manage › Merchants and choose **Logo…**. Write the

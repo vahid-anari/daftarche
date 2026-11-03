@@ -135,6 +135,51 @@ class AccountDelegate(QStyledItemDelegate):
         painter.restore()
 
 
+def _date_text(value):
+    """'2026-10-26' → 'Mon  Oct 26, 2026'."""
+    if not value:
+        return ""
+    try:
+        d = date.fromisoformat(value)
+    except ValueError:
+        return value
+    return f"{d.strftime('%A')[:3]}  {MONTHS_ORDER[d.month - 1][:3]} {d.day}, {d.year}"
+
+
+_ROW_KEYS = {COL_TYPE: "type", COL_AMOUNT: "amount", COL_CAT: "category", COL_SUBCAT: "subcategory",
+             COL_TAGS: "tags", COL_NAME: "name", COL_MEMO: "memorandum", COL_FITID: "fitid", COL_NOTE: "note",
+             COL_MERCHANT: "merchant"}
+
+
+def row_value(row, col):
+    if col == COL_DATE:
+        return row["date"] or ""
+    if col == COL_ACCOUNT:
+        account = row["account"] or ""
+        return f"{account} → {row['to_account']}" if row["to_account"] else account
+    value = row.get(_ROW_KEYS[col])
+    return value or "" if col == COL_TAGS else value
+
+
+def cell_text(row, col):
+    """The text a cell shows (``TxModel.data``'s DisplayRole): also used to size Manage's columns
+    from every row."""
+    parts = row.get("parts") or []
+    if parts and col in (COL_CAT, COL_SUBCAT):  # split: "Split (n)"
+        shared = len({p["category"] for p in parts}) == 1
+        if col == COL_CAT:
+            return parts[0]["category"] if shared else f"Split ({len(parts)})"
+        return f"Split ({len(parts)})" if shared else "—"
+    if col == COL_DATE:
+        return _date_text(row["date"])
+    if col == COL_SUBCAT and _category_only(row):
+        return "—"  # a category without a sub-category: nothing missing
+    val = row_value(row, col)
+    if col == COL_AMOUNT:
+        return money(val)
+    return str(val) if val is not None else ""
+
+
 def _category_only(row):
     """A category chosen without a sub-category (its sub-category is "Uncategorized")."""
     return row.get("subcategory") == UNCATEGORIZED_SUB and row.get("category") not in (None, UNCATEGORIZED_CAT)
@@ -162,31 +207,6 @@ class TxModel(QAbstractTableModel):
             return None
         row = self._rows[index.row()]
         col = index.column()
-
-        account_str = row["account"] or ""
-        if row["to_account"]:
-            account_str = f"{account_str} → {row['to_account']}"
-
-        # Build date string
-        date_val = row["date"] or ""
-        if date_val:
-            try:
-                d = date.fromisoformat(date_val)
-                wd = d.strftime("%A")
-                date_str = f"{wd[:3]}  {MONTHS_ORDER[d.month - 1][:3]} {d.day}, {d.year}"
-            except Exception:
-                date_str = date_val
-        else:
-            date_str = ""
-
-        keys_vals = [
-            date_str,
-            row["type"], account_str, row["amount"],
-            row["category"], row["subcategory"],
-            row.get("tags") or "",
-            row["name"], row["memorandum"], row["fitid"], row.get("note"), row.get("merchant"),
-        ]
-        val = keys_vals[col]
         parts = row.get("parts") or []
         if parts and col in (COL_CAT, COL_SUBCAT):  # split: "Split (n)", the parts on hover
             shared = len({p["category"] for p in parts}) == 1
@@ -220,11 +240,7 @@ class TxModel(QAbstractTableModel):
             return blank_icon() if self.icons["cat" if col == COL_CAT else "sub"] else None
 
         if role == Qt.DisplayRole:
-            if col == COL_AMOUNT:
-                return money(val)
-            if no_sub:
-                return "—"  # a category without a sub-category: nothing missing
-            return str(val) if val is not None else ""
+            return cell_text(row, col)
 
         if role == Qt.ToolTipRole and no_sub:
             return "No sub-category (that is fine: it counts in its category)"
