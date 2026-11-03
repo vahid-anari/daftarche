@@ -4,12 +4,33 @@ The names stay as they are (search, filters and rules use them); the icon is dra
 """
 import re
 
-from PySide6.QtCore import QRect, QSize, Qt
+from PySide6.QtCore import QRect, QSize, Qt, QTimer
 from PySide6.QtGui import QFont, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
-    QDialog, QDialogButtonBox, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QListView, QListWidget,
-    QListWidgetItem, QMessageBox, QPushButton, QVBoxLayout,
+    QApplication, QDialog, QDialogButtonBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QListView,
+    QListWidget, QListWidgetItem, QMessageBox, QPushButton, QScrollArea, QVBoxLayout, QWidget,
 )
+
+EMOJI_ROWS = 6  # rows of emoji in sight in the icon window; more scroll (the window stays short)
+LOGO_ROWS = 2
+_CELL_H, _GAP = 42, 4
+
+
+def _scroll_grid(grid, rows_shown):
+    """A grid of buttons in a frameless area that scrolls up and down, ``rows_shown`` high."""
+    host = QWidget()
+    grid.setContentsMargins(0, 0, 0, 0)
+    host.setLayout(grid)
+    area = QScrollArea()
+    area.setFrameShape(QFrame.NoFrame)
+    area.setWidgetResizable(True)
+    area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+    area.setWidget(host)
+    rows = max(1, grid.rowCount())
+    area.setFixedHeight(min(rows, rows_shown) * (_CELL_H + _GAP) - _GAP)
+    area.setMinimumWidth(host.sizeHint().width() + (area.verticalScrollBar().sizeHint().width() if rows > rows_shown else 0))
+    return area
+
 
 # the picker's grid: money-related first, then the rest of everyday life
 PICKER = [
@@ -281,7 +302,8 @@ class IconPickerDialog(QDialog):
                 btn.clicked.connect(lambda _=None, m=merchant: self._pick("logo:" + m))
                 logo_grid.addWidget(btn, i // 8, i % 8)
                 self._logo_buttons["logo:" + merchant] = btn
-            layout.addLayout(logo_grid)
+            self.logo_area = _scroll_grid(logo_grid, LOGO_ROWS)
+            layout.addWidget(self.logo_area)
             head_emoji = QLabel("Emoji")
             head_emoji.setProperty("class", "dim-label")
             layout.addWidget(head_emoji)
@@ -297,7 +319,8 @@ class IconPickerDialog(QDialog):
             btn.clicked.connect(lambda _=None, e=emoji: self._pick(e))
             grid.addWidget(btn, i // 8, i % 8)
             self._buttons[emoji] = btn
-        layout.addLayout(grid)
+        self.emoji_area = _scroll_grid(grid, EMOJI_ROWS)
+        layout.addWidget(self.emoji_area)
 
         self.tip = QLabel()
         self.tip.setProperty("class", "dim-label")
@@ -344,10 +367,21 @@ class IconPickerDialog(QDialog):
         btns.accepted.connect(self._accept)
         btns.rejected.connect(self.reject)
         layout.addWidget(btns)
+        screen = (parent.screen() if parent is not None else None) or QApplication.primaryScreen()
+        if screen is not None:  # never taller than the screen above the Dock
+            self.setMaximumHeight(screen.availableGeometry().height() - 40)
         self._pick(self.icon)
         self._show_suggestion()
         if self.name_field is not None and not name_locked:
             self.name_field.setFocus()
+
+    _chosen = None  # (its button, the area it is in)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if self._chosen:  # laid out only now: the current icon's row in sight
+            btn, area = self._chosen
+            QTimer.singleShot(0, lambda: area.ensureWidgetVisible(btn))
 
     # ── the choice ───────────────────────────────────────────────────────────
     def _pick(self, emoji, from_field=False):
@@ -358,7 +392,11 @@ class IconPickerDialog(QDialog):
             self.typed.setText(shown)
             self.typed.blockSignals(False)
         for e, btn in {**self._buttons, **self._logo_buttons}.items():
-            btn.setStyleSheet("border: 2px solid palette(highlight);" if e.casefold() == self.icon.casefold() else "")
+            chosen = e.casefold() == self.icon.casefold()
+            btn.setStyleSheet("border: 2px solid palette(highlight);" if chosen else "")
+            if chosen:  # in sight, also when it is in a row further down
+                self._chosen = btn, (self.logo_area if e.startswith("logo:") else self.emoji_area)
+                self._chosen[1].ensureWidgetVisible(btn)
         if self.icon:
             self.preview.setPixmap(emoji_icon(self.icon).pixmap(QSize(48, 48)))
             self.preview.setText("")

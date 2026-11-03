@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.34.4 — 2026-11-03
+
+- Manage: when the transactions shown are only loans (Transfer › Loans, or one person's), the line
+  under them says what went Out and came In, and what They owe you / You owe, as the Loans window
+  counts it (starting balances and Mark Settled included), instead of one Transfer sum that
+  added money lent and money paid back together.
+- The icon window keeps its emoji in six rows that scroll (the logos in two), so it stays short
+  and no longer goes under the Dock; it is never taller than the screen, and the current icon
+  is scrolled into sight.
+
 ## 0.34.3 — 2026-11-03
 
 - Manage › Merchants: a double-click on a merchant's name opens Rename / Merge, as in Categories

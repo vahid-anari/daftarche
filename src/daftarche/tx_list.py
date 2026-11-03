@@ -4,6 +4,7 @@ double-click, Delete, ⌘C…). Its columns are those Transactions shows."""
 
 from PySide6.QtWidgets import QHBoxLayout, QHeaderView, QLabel, QPushButton, QVBoxLayout, QWidget
 
+from daftarche.db import TRANSFER_LOAN
 from daftarche.style import get_settings
 from daftarche.tabs.transactions import COLUMN_KEYS, TransactionsTab, cell_text
 from daftarche.widgets import money
@@ -101,6 +102,12 @@ class _ManageTransactions(TransactionsTab):
         are 0, and Net when it is only the income or only the expenses."""
         super()._update_summary()
         rows = self._current_rows
+        if rows and all(r.get("transfer_status") == TRANSFER_LOAN for r in rows):
+            self._loans_summary(rows)
+            return
+        for label in (self.lbl_income, self.lbl_expense, self.lbl_transfer, self.lbl_net):
+            label.setToolTip("")  # what the loans' line set
+        self.lbl_transfer.setStyleSheet("")
         if self._total:
             spent = round(sum(r.get("shown_amount", r["amount"]) * (1 if "Expense" in r["type"] else -1)
                               for r in rows if r["type"] and ("Expense" in r["type"] or "Income" in r["type"])), 2)
@@ -120,6 +127,39 @@ class _ManageTransactions(TransactionsTab):
         self.lbl_expense.setVisible(expense)
         self.lbl_net.setVisible(income and expense)
         self.lbl_transfer.setVisible(any(r["type"] and "Transfer" in r["type"] for r in rows))
+
+    def _loans_summary(self, rows):
+        """Only loan rows: what went out and came in, and what the people shown owe now, as the
+        Loans window counts it (their starting balances and what was marked settled too)."""
+        out = round(sum(r["amount"] or 0 for r in rows if r["account_id"] and not r["to_account_id"]), 2)
+        came = round(sum(r["amount"] or 0 for r in rows if r["to_account_id"] and not r["account_id"]), 2)
+        people = {(r.get("merchant") or "").strip().casefold() for r in rows}
+        balances = [e["balance"] for e in self.db.get_loans() if e["merchant"].casefold() in people]
+        owed = round(sum(b for b in balances if b > 0), 2)
+        owe = round(-sum(b for b in balances if b < 0), 2)
+        s = get_settings()
+        self.lbl_income.setText(f"Out: {money(out)}")
+        self.lbl_income.setStyleSheet("")
+        self.lbl_income.setVisible(bool(out))
+        self.lbl_expense.setText(f"In: {money(came)}")
+        self.lbl_expense.setStyleSheet("")
+        self.lbl_expense.setVisible(bool(came))
+        self.lbl_net.setText(f"They owe you: {money(owed)}")
+        self.lbl_net.setStyleSheet(f"color: {s.get('income')};")
+        self.lbl_net.setVisible(bool(owed))
+        self.lbl_transfer.setText(f"You owe: {money(owe)}")
+        self.lbl_transfer.setStyleSheet(f"color: {s.get('expense')};")
+        self.lbl_transfer.setVisible(bool(owe))
+        tip = ("As the Loans window counts it: money out − money in, with the starting balance and "
+               "what was marked settled")
+        for label in (self.lbl_net, self.lbl_transfer):
+            label.setToolTip(tip)
+        self.lbl_income.setToolTip("Money that left your accounts: lent, or a loan paid back")
+        self.lbl_expense.setToolTip("Money that came in: borrowed, or paid back to you")
+        if not owed and not owe and balances:
+            self.lbl_net.setText("Settled")
+            self.lbl_net.setStyleSheet("")
+            self.lbl_net.setVisible(True)
 
     def _apply_column_visibility(self):
         super()._apply_column_visibility()
