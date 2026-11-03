@@ -12,7 +12,7 @@ from PySide6.QtGui import QBrush, QColor, QFont, QFontMetrics, QPalette
 
 from daftarche.style import get_settings
 from daftarche.widgets import AccountsCombo, SingleSelectCombo, accounts_label
-from daftarche.icons import IconPickerDialog, emoji_icon, suggest_icon
+from daftarche.icons import IconPickerDialog, blank_icon, emoji_icon, suggest_icon
 from daftarche.tx_list import SHOW_KEY, TransactionList
 from daftarche.past_categories import category_label, entry_icon
 
@@ -854,8 +854,8 @@ class CatsRulesPanel(QWidget):
                 item.setData(Qt.UserRole, c)
                 if col > 0:
                     item.setTextAlignment(Qt.AlignCenter)
-                elif c["icon"]:
-                    item.setIcon(emoji_icon(c["icon"]))
+                elif c["icon"] or any(x["icon"] for x in cats):  # none: a space, in line with the others
+                    item.setIcon(emoji_icon(c["icon"]) if c["icon"] else blank_icon())
                 self.cat_table.setItem(row, col, item)
 
         self.cat_table.blockSignals(False)
@@ -882,8 +882,8 @@ class CatsRulesPanel(QWidget):
                 item.setData(Qt.UserRole, s)
                 if col > 0:
                     item.setTextAlignment(Qt.AlignCenter)
-                elif s["icon"]:  # its own: the others show their category's elsewhere
-                    item.setIcon(emoji_icon(s["icon"]))
+                elif s["icon"] or any(x["icon"] for x in subs):  # its own; none: a space, in line
+                    item.setIcon(emoji_icon(s["icon"]) if s["icon"] else blank_icon())
                 self.sub_table.setItem(row, col, item)
 
         self.sub_table.blockSignals(False)
@@ -1091,7 +1091,7 @@ class CatsRulesPanel(QWidget):
             QMessageBox.information(self, "Select", "Select a type first.")
             return
         dlg = IconPickerDialog("", f"New category under <b>{html.escape(type_data['name'])}</b>",
-                               "Its sub-categories show its icon too, unless they have their own.", self,
+                               "Shown beside its name in the lists and the transactions.", self,
                                name="", suggest=suggest_icon, title="Add Category")
         if not dlg.exec():
             return
@@ -1113,9 +1113,8 @@ class CatsRulesPanel(QWidget):
         from daftarche.db import CAT_LOANS
         loans = self.db.loans_category()
         locked = bool(loans and data["id"] == loans["id"] and data["name"] == CAT_LOANS)
-        dlg = IconPickerDialog(data["icon"], "Category", "Its sub-categories show its icon too, unless they "
-                               "have their own." + (" The Loans window reads this name: it is kept." if locked
-                                                    else ""), self,
+        dlg = IconPickerDialog(data["icon"], "Category", "Shown beside its name in the lists and the transactions."
+                               + (" The Loans window reads this name: it is kept." if locked else ""), self,
                                name=data["name"], suggest=suggest_icon, name_locked=locked, title="Edit Category")
         if not dlg.exec():
             return
@@ -1170,12 +1169,11 @@ class CatsRulesPanel(QWidget):
 
     @staticmethod
     def _sub_icon_hint(cat):
-        return (f"No Icon: it shows its category's ({cat['icon']})." if cat and cat["icon"]
-                else "No Icon: it shows its category's, if that has one.")
+        return "Its own icon, beside its name. No Icon: a space (its category's is beside it already)."
 
     @staticmethod
     def _sub_suggestion(cat):
-        """An icon from the name, unless it is the category's (shown anyway)."""
+        """An icon from the name, unless it is the category's (beside it already)."""
         def suggest(name):
             offer = suggest_icon(name)
             return "" if cat and offer == cat["icon"] else offer

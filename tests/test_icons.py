@@ -27,16 +27,15 @@ def cats(db):
             "produce": db.get_subcategory_by_name("Produce", groc)["id"]}
 
 
-def test_a_sub_category_shows_its_own_icon_or_its_categorys(db, cats):
+def test_a_sub_category_shows_only_its_own_icon(db, cats):
     db.set_category_icon(cats["car"], "🚗")
     db.set_subcategory_icon(cats["gas"], "⛽")
     icons = db.get_icons()
     assert icons["cat"] == {cats["car"]: "🚗"}
-    assert icons["sub"][cats["gas"]] == "⛽" and icons["sub"][cats["ins"]] == "🚗"
-    assert cats["produce"] not in icons["sub"]
+    assert icons["sub"] == {cats["gas"]: "⛽"}  # 0.33.5: Insurance shows none (its category's is beside it)
     assert db.category_icon("Car", "Expense") == "🚗" and db.category_icon("Car", "Income") == ""
-    db.set_subcategory_icon(cats["gas"], "")  # No Icon: the category's again
-    assert db.get_icons()["sub"][cats["gas"]] == "🚗"
+    db.set_subcategory_icon(cats["gas"], "")  # No Icon
+    assert db.get_icons()["sub"] == {}
 
 
 def test_an_older_database_gets_the_icon_columns(tmp_path):
@@ -123,7 +122,9 @@ def test_transactions_table_shows_the_icons(qapp, db, cats):
     assert not tab.model.data(tab.model.index(shell, COL_CAT), Qt.DecorationRole).isNull()
     assert not tab.model.data(tab.model.index(shell, COL_SUBCAT), Qt.DecorationRole).isNull()
     assert tab.model.data(tab.model.index(shell, COL_CAT), Qt.DisplayRole) == "Car"  # the name stays
-    assert tab.model.data(tab.model.index(rows["LOBLAWS"], COL_CAT), Qt.DecorationRole) is None
+    from daftarche.icons import blank_icon
+    groceries = tab.model.data(tab.model.index(rows["LOBLAWS"], COL_CAT), Qt.DecorationRole)
+    assert groceries is blank_icon()  # no icon: a space, so the names stay in line
 
 
 def test_manage_sets_an_icon(qapp, db, cats):

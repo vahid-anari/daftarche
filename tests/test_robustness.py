@@ -176,12 +176,18 @@ def test_start_up_follows_the_splash_setting(qapp, monkeypatch, tmp_path, second
     monkeypatch.setattr(window_module, "DB_PATH", tmp_path / "w.db")
     monkeypatch.setattr(style.get_settings(), "_data", {**style.DEFAULTS, "splash_seconds": seconds})
     monkeypatch.setattr(main, "after_start", lambda updates: None)
+    import sciwidgets.splash as splash_module
+    shown_at_start = []
+
+    class Recording(splash_module.SplashScreen):  # was it on screen when made? (not "still, 0.1 s later":
+        def __init__(self, *args, **kwargs):      # a slow machine builds the window for longer than that)
+            super().__init__(*args, **kwargs)
+            shown_at_start.append(self.isVisible())
+    monkeypatch.setattr(splash_module, "SplashScreen", Recording)
     seen = {}
 
-    def exec_briefly():  # instead of the real event loop: look at the screen, then stop
-        QTest.qWait(100)
-        visible = [w for w in qapp.topLevelWidgets() if w.isVisible()]
-        seen["splash"] = any(type(w).__name__ == "SplashScreen" for w in visible)
+    def exec_briefly():  # instead of the real event loop: wait for the window, then stop
+        seen["splash"] = any(shown_at_start)
         QTest.qWait(int(seconds * 1000) + 500)
         seen["window"] = any(type(w).__name__ == "MainWindow" and w.isVisible() for w in qapp.topLevelWidgets())
         for w in qapp.topLevelWidgets():

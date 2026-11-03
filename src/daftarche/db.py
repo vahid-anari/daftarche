@@ -595,7 +595,7 @@ class Database:
             c.execute("PRAGMA foreign_keys = ON")
 
         add_col_if_missing("categories", "icon", "TEXT")  # an emoji shown before the name (layout 6)
-        add_col_if_missing("subcategories", "icon", "TEXT")  # its own, else its category's (layout 6)
+        add_col_if_missing("subcategories", "icon", "TEXT")  # its own (layout 6)
 
         # Tags tables — ensure indices exist for older DBs
         c.execute("CREATE INDEX IF NOT EXISTS idx_tx_tags_tx  ON transaction_tags(transaction_id)")
@@ -975,14 +975,15 @@ class Database:
 
     @atomic
     def set_subcategory_icon(self, subcategory_id, icon):
-        """A sub-category's own icon; none (None or "") shows its category's."""
+        """A sub-category's own icon; none (None or ""): none is shown (its category's is beside it)."""
         self.conn.execute("UPDATE subcategories SET icon=? WHERE id=?", (clean_icon(icon) or None, subcategory_id))
 
     def get_icons(self):
         """What to show before category names, kept until the next change:
-        {"cat": {category id: icon}, "sub": {sub-category id: own icon or its category's},
-         "sub_own": {sub-category id: own icon}, "cat_name": {(type name, name): icon},
-         "sub_name": {(category id, name): icon}}. Ids and names without an icon are left out."""
+        {"cat": {category id: icon}, "sub": {sub-category id: its own icon}, "sub_own": the same,
+         "cat_name": {(type name, name): icon}, "sub_name": {(category id, name): own icon}}.
+        Ids and names without an icon are left out. A sub-category shows only its own: its
+        category's is beside it already (0.33.5; before, it showed its category's)."""
         cached = self._cache.get("icons")
         if cached and cached[0] == self._data_version:
             return cached[1]
@@ -991,13 +992,9 @@ class Database:
                                    "LEFT JOIN types t ON t.id = c.type_id WHERE c.icon IS NOT NULL"):
             icons["cat"][r["id"]] = r["icon"]
             icons["cat_name"][(r["type_name"] or "", r["name"])] = r["icon"]
-        for r in self.conn.execute("SELECT id, name, icon, category_id FROM subcategories"):
-            icon = r["icon"] or icons["cat"].get(r["category_id"])
-            if r["icon"]:
-                icons["sub_own"][r["id"]] = r["icon"]
-            if icon:
-                icons["sub"][r["id"]] = icon
-                icons["sub_name"][(r["category_id"], r["name"])] = icon
+        for r in self.conn.execute("SELECT id, name, icon, category_id FROM subcategories WHERE icon IS NOT NULL"):
+            icons["sub_own"][r["id"]] = icons["sub"][r["id"]] = r["icon"]
+            icons["sub_name"][(r["category_id"], r["name"])] = r["icon"]
         self._cache["icons"] = (self._data_version, icons)
         return icons
 

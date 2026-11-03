@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.33.5 — 2026-11-02
+
+- A sub-category with no icon of its own shows none (it used to show its category's, which is
+  beside it already); a name without an icon keeps an empty space, so the names stay in line —
+  in Transactions, the lists of Manage and the category boxes.
+- Tests: the splash test no longer depends on how fast the machine builds the window.
+
 ## 0.33.4 — 2026-11-02
 
 - A rule's transactions: select a rule (or several) and the transactions below are only those it

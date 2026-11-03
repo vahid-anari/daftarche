@@ -128,6 +128,19 @@ def emoji_icon(emoji):
     return _qicons[emoji]
 
 
+_blank = None
+
+
+def blank_icon():
+    """An empty picture as big as an icon: a name without one stays in line with those that have one."""
+    global _blank
+    if _blank is None:
+        pix = QPixmap(64, 64)
+        pix.fill(Qt.transparent)
+        _blank = QIcon(pix)
+    return _blank
+
+
 def set_category_icons(combo, db, type_name=None):
     """Put each category's icon beside its name in a category combo (names unchanged)."""
     icons = db.get_icons()["cat_name"]

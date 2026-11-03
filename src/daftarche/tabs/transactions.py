@@ -24,7 +24,7 @@ from daftarche.widgets import (
 from daftarche.category_dialog import CategoryDialog
 from daftarche.style import get_settings
 from daftarche.tag_picker import TagsDialog
-from daftarche.icons import emoji_icon, set_category_icons
+from daftarche.icons import blank_icon, emoji_icon, set_category_icons
 from daftarche.past_categories import category_label, entry_icon, offer_merchant_only
 
 NO_MERCHANT = "(no merchant)"
@@ -208,7 +208,10 @@ class TxModel(QAbstractTableModel):
                 return None
             icon = (self.icons["cat"].get(row.get("category_id")) if col == COL_CAT
                     else self.icons["sub"].get(row.get("subcategory_id")))
-            return emoji_icon(icon) if icon else None
+            if icon:
+                return emoji_icon(icon)
+            # none: an empty space, so the names stay in line with those that have one
+            return blank_icon() if self.icons["cat" if col == COL_CAT else "sub"] else None
 
         if role == Qt.DisplayRole:
             if col == COL_AMOUNT:

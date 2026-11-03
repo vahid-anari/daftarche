@@ -116,16 +116,18 @@ def amount_color_key(type_name, amount):
 def add_subcategory_items(combo, db, category_id):
     """A category's sub-categories into ``combo``, with "Uncategorized" first: picking only the
     category is enough, and the sub-category can be set later."""
-    from daftarche.icons import emoji_icon
+    from daftarche.icons import blank_icon, emoji_icon
     names = [s["name"] for s in db.get_subcategories(category_id)]
     start = combo.count()
     combo.addItem(UNCATEGORIZED_SUB)
     combo.addItems([n for n in names if n != UNCATEGORIZED_SUB])
-    icons = db.get_icons()["sub_name"]
+    icons = {n: icon for (cid, n), icon in db.get_icons()["sub_name"].items() if cid == category_id}
     for i in range(start, combo.count()):
-        icon = icons.get((category_id, combo.itemText(i)))
+        icon = icons.get(combo.itemText(i))
         if icon:
             combo.setItemIcon(i, emoji_icon(icon))
+        elif icons:
+            combo.setItemIcon(i, blank_icon())  # in line with those that have one
 
 
 def _same_name(names, typed):
