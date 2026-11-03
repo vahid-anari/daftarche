@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.34.3 — 2026-11-03
+
+- Manage › Merchants: a double-click on a merchant's name opens Rename / Merge, as in Categories
+  and Tags; on its numbers (Tx, Total) it shows its transactions in Transactions, as before.
+
 ## 0.34.2 — 2026-11-03
 
 - Right-click › **Set Merchant…** (in Transactions and in Manage's transactions): one merchant for

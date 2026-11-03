@@ -1816,7 +1816,7 @@ class MerchantsPanel(QWidget):
         self.table.setAlternatingRowColors(True)
         self.table.setSortingEnabled(True)
         self.table.sortByColumn(self.COL_NAME, Qt.AscendingOrder)  # A to Z until a header is clicked
-        self.table.cellDoubleClicked.connect(lambda r, c: self.open_transactions())
+        self.table.cellDoubleClicked.connect(self._double_clicked)
         self.table.itemSelectionChanged.connect(self._show_rules)
         self.table.cellClicked.connect(lambda r, c: self._show_all())  # the merchant again: all of its
         self.table.itemChanged.connect(self._flag_changed)
@@ -2213,6 +2213,15 @@ class MerchantsPanel(QWidget):
             QMessageBox.information(self, "Merchants", "Select a merchant: this line holds what has none.")
             return None
         return m
+
+    def _double_clicked(self, row, col):
+        """On the name: Rename / Merge, as in Categories and Tags; on Tx or Total: its
+        transactions in Transactions. The line of those with no merchant has no name to change."""
+        m = self._selected()
+        if col == self.COL_NAME and m and m["merchant"]:
+            self.rename()
+        elif col in (self.COL_NAME, self.COL_TX, self.COL_TOTAL):
+            self.open_transactions()
 
     def open_transactions(self):
         m = self._need(real=False)

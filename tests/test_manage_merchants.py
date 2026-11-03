@@ -155,3 +155,18 @@ def test_net_spent_and_delete_drops_merchant_only_rules(db, shops):
     assert db.delete_merchant("Walmart") == 1  # the merchant-only rule
     left = db.conn.execute("SELECT name, merchant FROM import_mappings").fetchall()
     assert [(r["name"], r["merchant"]) for r in left] == [("WMT", None)]
+
+
+def test_double_click_name_renames_numbers_show(qapp, db, shops):
+    """0.34.3: the name → Rename / Merge (as Categories and Tags); Tx or Total → its transactions."""
+    from daftarche.tabs.manage import ManageDialog
+    shown = []
+    panel = keep(ManageDialog(db, lambda: None, show_merchant=shown.append)).merchants_panel
+    panel.table.selectRow(0)
+    with mock.patch.object(panel, "rename") as rename:
+        panel.table.cellDoubleClicked.emit(0, panel.COL_NAME)
+        assert rename.call_count == 1 and shown == []
+        for col in (panel.COL_TX, panel.COL_TOTAL):
+            panel.table.cellDoubleClicked.emit(0, col)
+        panel.table.cellDoubleClicked.emit(0, panel.COL_RULES)  # the rules are beside it already
+        assert rename.call_count == 1 and shown == ["Walmart", "Walmart"]
