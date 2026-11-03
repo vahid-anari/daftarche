@@ -111,10 +111,23 @@ def suggest_icon(name):
 _qicons = {}
 
 
+_logo_db = None
+
+
+def use_logos(db):
+    """Where the logos come from when an icon is "logo:<merchant>" (the database open now)."""
+    global _logo_db
+    _logo_db = db
+
+
 def emoji_icon(emoji):
-    """A QIcon drawing ``emoji`` (cached); a null icon for none."""
+    """A QIcon drawing ``emoji`` (cached), or a merchant's logo for "logo:<merchant>"; a null
+    icon for none."""
     if not emoji:
         return QIcon()
+    if emoji.startswith("logo:"):
+        from daftarche.logos import logo_icon
+        return logo_icon(_logo_db.logo_for(emoji[5:]) if _logo_db is not None else None)
     if emoji not in _qicons:
         pix = QPixmap(64, 64)
         pix.fill(Qt.transparent)
@@ -212,7 +225,7 @@ class IconPickerDialog(QDialog):
     ``name_locked``: the name is shown but cannot change (Transfer › Loans)."""
 
     def __init__(self, current, about, hint="", parent=None, suggested="", name=None, suggest=None,
-                 name_locked=False, title="Icon"):
+                 name_locked=False, title="Icon", logos=None):
         super().__init__(parent)
         self.setWindowTitle(title)
         self.icon = current or ""
@@ -250,6 +263,28 @@ class IconPickerDialog(QDialog):
         top.addLayout(head, 1)
         layout.addLayout(top)
 
+        self._logo_buttons = {}
+        if logos:  # the merchants' logos saved (Manage › Merchants › Logo…): one can be the icon
+            from daftarche.logos import logo_icon
+            head_logos = QLabel("Logos")
+            head_logos.setProperty("class", "dim-label")
+            layout.addWidget(head_logos)
+            logo_grid = QGridLayout()
+            logo_grid.setSpacing(4)
+            for i, (merchant, data) in enumerate(logos.items()):
+                btn = QPushButton()
+                btn.setIcon(logo_icon(data))
+                btn.setIconSize(QSize(28, 28))
+                btn.setFixedSize(46, 42)
+                btn.setProperty("class", "secondary")
+                btn.setToolTip(merchant)
+                btn.clicked.connect(lambda _=None, m=merchant: self._pick("logo:" + m))
+                logo_grid.addWidget(btn, i // 8, i % 8)
+                self._logo_buttons["logo:" + merchant] = btn
+            layout.addLayout(logo_grid)
+            head_emoji = QLabel("Emoji")
+            head_emoji.setProperty("class", "dim-label")
+            layout.addWidget(head_emoji)
         grid = QGridLayout()
         grid.setSpacing(4)
         for i, emoji in enumerate(PICKER):
@@ -317,12 +352,13 @@ class IconPickerDialog(QDialog):
     # ── the choice ───────────────────────────────────────────────────────────
     def _pick(self, emoji, from_field=False):
         self.icon = emoji or ""
-        if not from_field and self.typed.text().strip() != self.icon:
+        shown = "" if self.icon.startswith("logo:") else self.icon  # a logo is no text for the field
+        if not from_field and self.typed.text().strip() != shown:
             self.typed.blockSignals(True)
-            self.typed.setText(self.icon)
+            self.typed.setText(shown)
             self.typed.blockSignals(False)
-        for e, btn in self._buttons.items():
-            btn.setStyleSheet("border: 2px solid palette(highlight);" if e == self.icon else "")
+        for e, btn in {**self._buttons, **self._logo_buttons}.items():
+            btn.setStyleSheet("border: 2px solid palette(highlight);" if e.casefold() == self.icon.casefold() else "")
         if self.icon:
             self.preview.setPixmap(emoji_icon(self.icon).pixmap(QSize(48, 48)))
             self.preview.setText("")

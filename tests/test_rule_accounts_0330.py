@@ -111,8 +111,9 @@ def test_an_older_database_moves_the_accounts_and_joins_same_rules(tmp_path):
     db.conn.close()
 
     db = Database(path)
-    assert db.conn.execute("PRAGMA user_version").fetchone()[0] == 7
-    before = tmp_path / "old-before-layout-7.db"  # the file as it was, for an older Daftarche
+    from daftarche.db import SCHEMA_VERSION
+    assert db.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION  # 7, then 8 (0.34.0)
+    before = tmp_path / f"old-before-layout-{SCHEMA_VERSION}.db"  # the file as it was, for an older Daftarche
     import sqlite3
     with sqlite3.connect(before) as old:
         assert old.execute("PRAGMA user_version").fetchone()[0] == 6
@@ -189,8 +190,9 @@ def test_the_apps_own_database_is_copied_into_backups(tmp_path, monkeypatch):
     db.conn.commit()
     db.conn.close()
     Database(path).conn.close()
-    assert (tmp_path / "backups" / "daftarche-before-layout-7.db").exists()
-    assert not (tmp_path / "daftarche-before-layout-7.db").exists()
+    from daftarche.db import SCHEMA_VERSION
+    assert (tmp_path / "backups" / f"daftarche-before-layout-{SCHEMA_VERSION}.db").exists()
+    assert not (tmp_path / f"daftarche-before-layout-{SCHEMA_VERSION}.db").exists()
 
 
 # ── found in review ──────────────────────────────────────────────────────────

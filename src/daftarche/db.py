@@ -23,9 +23,18 @@ SUB_MATCHED = "✅ Matched"
 SUB_UNMATCHED = "⚠️ Unmatched"
 
 
+LOGO_PREFIX = "logo:"
+"""A category's icon that is a merchant's logo: "logo:" and the merchant's name."""
+
+
 def clean_icon(text):
     """One emoji from ``text`` ("" for none). Raises ValueError for anything else (letters,
     digits, several emoji): an icon is drawn in a small square beside a name."""
+    if (text or "").startswith(LOGO_PREFIX):  # a merchant's logo (Manage › Merchants › Logo…)
+        name = " ".join(text[len(LOGO_PREFIX):].split())
+        if not name:
+            raise ValueError("Which merchant's logo?")
+        return LOGO_PREFIX + name
     text = "".join((text or "").split())
     if not text:
         return ""
@@ -99,8 +108,8 @@ def _date_str_to_parts(date_str):
         return None, None, None
 
 
-SCHEMA_VERSION = 7  # 2: note; 3: merchant; 4: split transactions; 5: loans; 6: category and sub-category icons;
-#                    7: a rule for several accounts (table rule_accounts)
+SCHEMA_VERSION = 8  # 2: note; 3: merchant; 4: split transactions; 5: loans; 6: category and sub-category icons;
+#                    7: a rule for several accounts (table rule_accounts); 8: merchants' logos (merchant_logos)
 """Database layout version, stored in the file (PRAGMA user_version). Raise it whenever
 _migrate learns something new, so an older Daftarche refuses a database it cannot read."""
 
@@ -651,6 +660,10 @@ class Database:
                         AND category_id IN (SELECT c.id FROM categories c JOIN types ty ON ty.id = c.type_id
                                             WHERE c.name = '{CAT_LOANS}' AND ty.name LIKE '%Transfer%')""")
         self._move_rule_accounts()
+        c.execute("""CREATE TABLE IF NOT EXISTS merchant_logos (
+                         merchant TEXT PRIMARY KEY COLLATE NOCASE,
+                         image    BLOB NOT NULL,
+                         source   TEXT)""")  # layout 8: a PNG of at most 128 px, and where it came from
         self._dedupe_rules()
         c.commit()
         self._seed_uncategorized()
@@ -2141,7 +2154,22 @@ class Database:
                 (target, old_loan["opening"], old_loan["written_off"], old_loan["note"]))
         elif old_loan:
             self.conn.execute("UPDATE loans SET merchant=? WHERE merchant=?", (target, old))
+        self._move_logo(old, target)
         return target
+
+    def _move_logo(self, old, new):
+        """A renamed merchant keeps its logo (merged into one that has a logo: that one stays), and
+        the categories that show it follow."""
+        mine = self.conn.execute("SELECT rowid FROM merchant_logos WHERE merchant = ?", (old,)).fetchone()
+        mine = mine[0] if mine else None
+        if self.conn.execute("SELECT 1 FROM merchant_logos WHERE merchant = ? AND rowid IS NOT ?",
+                             (new, mine)).fetchone():  # another row (also "Café" and "CAFÉ": NOCASE is ASCII only)
+            self.conn.execute("DELETE FROM merchant_logos WHERE rowid IS ?", (mine,))
+        elif mine is not None:
+            self.conn.execute("UPDATE merchant_logos SET merchant = ? WHERE rowid = ?", (new, mine))
+        for table in ("categories", "subcategories"):
+            self.conn.execute(f"UPDATE {table} SET icon = ? WHERE icon = ? COLLATE NOCASE",
+                              (LOGO_PREFIX + new, LOGO_PREFIX + old))
 
     @atomic
     def delete_merchant(self, name):
@@ -2155,7 +2183,50 @@ class Database:
         for table in ("transactions", "import_mappings"):
             self.conn.execute(f"UPDATE {table} SET merchant=NULL WHERE merchant=?", (name,))
         self.conn.execute("DELETE FROM loans WHERE merchant=?", (name,))
+        self.remove_logo(name)
         return gone
+
+    # ── merchants' logos ──────────────────────────────────────────────────────
+    def get_logos(self):
+        """{merchant: PNG bytes} (the names as the logos were saved; look up with logo_for).
+        Kept until the next change."""
+        cached = self._cache.get("logos")
+        if cached and cached[0] == self._data_version:
+            return cached[1]
+        logos = {r["merchant"]: bytes(r["image"]) for r in self.conn.execute(
+            "SELECT merchant, image FROM merchant_logos ORDER BY merchant COLLATE NOCASE")}
+        self._cache["logos"] = (self._data_version, logos)
+        return logos
+
+    def logo_for(self, merchant):
+        """The PNG of a merchant's logo (any letter case), or None."""
+        key = (merchant or "").strip().casefold()
+        return next((image for name, image in self.get_logos().items() if name.casefold() == key), None)
+
+    def logo_source(self, merchant):
+        """Where a merchant's logo came from (a website, or a file's name), or ""."""
+        row = self.conn.execute("SELECT source FROM merchant_logos WHERE merchant = ?",
+                                ((merchant or "").strip(),)).fetchone()
+        return (row["source"] or "") if row else ""
+
+    @atomic
+    def set_logo(self, merchant, image, source=""):
+        """A merchant's logo: ``image``, PNG bytes (logos.normalise made them)."""
+        merchant = (merchant or "").strip()
+        if not merchant or not image:
+            raise ValueError("A logo needs a merchant and a picture.")
+        self.conn.execute("""INSERT INTO merchant_logos (merchant, image, source) VALUES (?, ?, ?)
+                             ON CONFLICT(merchant) DO UPDATE SET image = excluded.image, source = excluded.source""",
+                          (merchant, image, source or None))
+
+    @atomic
+    def remove_logo(self, merchant):
+        """No logo any more; the categories that showed it show none."""
+        merchant = (merchant or "").strip()
+        self.conn.execute("DELETE FROM merchant_logos WHERE merchant = ?", (merchant,))
+        for table in ("categories", "subcategories"):
+            self.conn.execute(f"UPDATE {table} SET icon = NULL WHERE icon = ? COLLATE NOCASE",
+                              (LOGO_PREFIX + merchant,))
 
     @atomic
     def set_merchant_category(self, merchant, type_name, category_id, subcategory_id,

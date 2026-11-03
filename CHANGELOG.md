@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.34.0 — 2026-11-03
+
+- Merchants' logos: right-click a merchant in Manage › Merchants and choose **Logo…**. Write the
+  shop's website and press Get Logo (its app icon, else the icons its page names, else its
+  favicon; taken once from the shop's own site, no other service), or choose a picture file; a
+  preview shows it on a white square with round corners before OK, and No Logo takes it away.
+- The logo shows beside the merchant's name in Manage › Merchants, in the merchants of Categories
+  and in the Merchant column of Transactions; a merchant without one keeps an empty space, so
+  the names stay in line (when no merchant has a logo, there is no space).
+- A category or sub-category can have a merchant's logo as its icon: the icon window has a
+  **Logos** row above the emoji.
+- Icons and logos beside names grow with the font size (Settings).
+- Renaming or merging a merchant takes its logo along (when merged into one that has a logo, that
+  one stays); deleting it removes the logo and a category icon that used it.
+- Logos are kept in your data (layout 8, a new table) and backed up with it; they are not sent to
+  the phone, which shows only emoji. Before the upgrade, a copy is saved in the backups folder
+  (`daftarche-before-layout-8.db`); older versions cannot open the updated file.
+
 ## 0.33.5 — 2026-11-02
 
 - A sub-category with no icon of its own shows none (it used to show its category's, which is

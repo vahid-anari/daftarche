@@ -24,7 +24,8 @@ from daftarche.widgets import (
 from daftarche.category_dialog import CategoryDialog
 from daftarche.style import get_settings
 from daftarche.tag_picker import TagsDialog
-from daftarche.icons import blank_icon, emoji_icon, set_category_icons
+from daftarche.icons import blank_icon, emoji_icon, set_category_icons, use_logos
+from daftarche.logos import icon_size, logo_icon
 from daftarche.past_categories import category_label, entry_icon, offer_merchant_only
 
 NO_MERCHANT = "(no merchant)"
@@ -203,6 +204,11 @@ class TxModel(QAbstractTableModel):
             return None
         no_sub = col == COL_SUBCAT and _category_only(row)
 
+        if role == Qt.DecorationRole and col == COL_MERCHANT:
+            if not self.logos:
+                return None
+            data = self.logos.get((row.get("merchant") or "").strip().casefold())
+            return logo_icon(data) if data else blank_icon()  # none: a space, the names stay in line
         if role == Qt.DecorationRole:
             if not self.icons or col not in (COL_CAT, COL_SUBCAT) or no_sub:
                 return None
@@ -247,6 +253,7 @@ class TxModel(QAbstractTableModel):
 
     on_note_edited = None  # set by the tab: (row, text) → save
     icons = None  # set by the tab: db.get_icons(), the icons beside category names
+    logos = None  # set by the tab: {merchant (any letter case): PNG}, the logos beside merchants
 
     def setData(self, index, value, role=Qt.EditRole):
         if role != Qt.EditRole or index.column() != COL_NOTE or not self.on_note_edited:
@@ -290,6 +297,7 @@ class TransactionsTab(QWidget):
     def __init__(self, db, on_change_cb=None):
         super().__init__()
         self.db = db
+        use_logos(db)  # a category whose icon is a merchant's logo
         self._on_change_cb = on_change_cb
         self._updating = False
         self._navigating = False  # set while a jump (show_matching…) sets the filters: the bar stays
@@ -446,7 +454,7 @@ class TransactionsTab(QWidget):
         # ── Table ─────────────────────────────────────────────────────────────
         self.model = TxModel()
         self.table = EditableTableView()
-        self.table.setIconSize(QSize(18, 18))  # the category icons
+        self.table.setIconSize(icon_size(self.table))  # the category icons and logos, as tall as the text
         self.table.setModel(self.model)
         self.table.setItemDelegate(NullDelegate(self.table))
         self.table.setItemDelegateForColumn(COL_ACCOUNT, AccountDelegate(self.model, self.table))
@@ -673,6 +681,8 @@ class TransactionsTab(QWidget):
         rows = self.db.get_transactions(self._get_filters())
         self._current_rows = list(rows)
         self.model.icons = self.db.get_icons()
+        self.model.logos = {name.casefold(): image for name, image in self.db.get_logos().items()}
+        self.table.setIconSize(icon_size(self.table))  # as the font: Settings may have changed it
         self.model.set_rows(self._current_rows)
         self._update_rows_info()
         self._update_summary()

@@ -54,12 +54,14 @@ def build_snapshot(db, app_version="", now=None):
                 "by_account": {str(a["id"]): [_num(snapshots[p].get(a["id"], 0)) for p in periods]
                                for a in accounts}}
 
-    cat_icons = {r["id"]: r["icon"] for r in conn.execute("SELECT id, icon FROM categories")}
+    def emoji(icon):  # a merchant's logo ("logo:…") does not go to the phone: none there
+        return None if (icon or "").startswith("logo:") else icon
+    cat_icons = {r["id"]: emoji(r["icon"]) for r in conn.execute("SELECT id, icon FROM categories")}
     subs = {}
     for r in conn.execute("SELECT id, name, icon, category_id FROM subcategories ORDER BY name"):
         subs.setdefault(r["category_id"], []).append(
-            {"id": r["id"], "name": r["name"], "icon": r["icon"] or cat_icons.get(r["category_id"])})
-    categories = [{"id": r["id"], "name": r["name"], "type": _kind(r["type_name"]), "icon": r["icon"],
+            {"id": r["id"], "name": r["name"], "icon": emoji(r["icon"]) or cat_icons.get(r["category_id"])})
+    categories = [{"id": r["id"], "name": r["name"], "type": _kind(r["type_name"]), "icon": emoji(r["icon"]),
                    "subcategories": subs.get(r["id"], [])}
                   for r in conn.execute("SELECT c.id, c.name, c.icon, t.name AS type_name FROM categories c "
                                         "LEFT JOIN types t ON t.id = c.type_id ORDER BY t.name, c.name")]
