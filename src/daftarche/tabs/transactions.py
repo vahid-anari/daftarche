@@ -21,7 +21,7 @@ from daftarche.widgets import (
     CheckComboBox, PeriodSelectorWidget, SymbolButton, SingleSelectCombo, ReadOnlyCopyDelegate,
     EditableTableView, DatePicker
 )
-from daftarche.category_dialog import CategoryDialog
+from daftarche.category_dialog import CategoryDialog, MerchantDialog
 from daftarche.style import get_settings
 from daftarche.tag_picker import TagsDialog
 from daftarche.icons import blank_icon, emoji_icon, set_category_icons, use_logos
@@ -178,6 +178,10 @@ def cell_text(row, col):
     if col == COL_AMOUNT:
         return money(val)
     return str(val) if val is not None else ""
+
+
+def _exec_menu(menu, where):
+    menu.exec(where)  # tests replace it
 
 
 def _category_only(row):
@@ -909,6 +913,8 @@ class TransactionsTab(QWidget):
         self._add_past_categories(menu, selected, rows)
         edit_label = "✏️  Edit Merchant / Category" if n == 1 else "✏️  Bulk Edit Merchant / Category"
         menu.addAction(QAction(edit_label, self, triggered=self._bulk_edit_cat))
+        menu.addAction(QAction("🏪  Set Merchant…" if n == 1 else f"🏪  Set Merchant ({n})…", self,
+                               triggered=lambda: self.set_merchant(selected)))
         if n == 1:
             parts = self.model.get_row(selected[0]).get("parts")
             menu.addAction(QAction("✂️  Change Split…" if parts else "✂️  Split…", self,
@@ -923,7 +929,7 @@ class TransactionsTab(QWidget):
         menu.addAction(QAction("✅  Select All", self, triggered=self.table.selectAll))
         menu.addSeparator()
         menu.addAction(QAction(f"🗑️  Delete {n} row{'s' if n > 1 else ''}", self, triggered=self._delete_selected))
-        menu.exec(self.table.viewport().mapToGlobal(pos))
+        _exec_menu(menu, self.table.viewport().mapToGlobal(pos))
 
     def _add_past_categories(self, menu, selected, rows):
         """ "Use a Category of Amazon ▸": the categories its transactions had before, one click
@@ -1136,6 +1142,28 @@ class TransactionsTab(QWidget):
             now = [{**r, "merchant": dlg.merchant if dlg.merchant_changed else r.get("merchant"),
                     "type": dlg.row_type} for r in rows]
             offer_merchant_only(self, self.db, now, cat["id"], sub["id"] if sub else None)
+        self._notify_change()
+        self.table.verticalScrollBar().setValue(scroll_pos)
+        self.table.clearSelection()
+        for i, r in enumerate(self.model._rows):
+            if r["id"] in ids:
+                self.table.selectionModel().select(
+                    self.model.index(i, 0), QItemSelectionModel.Select | QItemSelectionModel.Rows)
+
+    def set_merchant(self, row_indices):
+        """Only the merchant of these rows (any types, split ones too): their categories stay."""
+        rows = [self.model.get_row(i) for i in row_indices]
+        if not rows:
+            return
+        dlg = MerchantDialog(self.db, [r.get("merchant") for r in rows], self)
+        if not dlg.exec():
+            return
+        ids = [r["id"] for r in rows]
+        scroll_pos = self.table.verticalScrollBar().value()
+        with self.db.transaction():
+            for r in rows:
+                if (r.get("merchant") or None) != dlg.merchant:
+                    self.db.update_transaction(r["id"], merchant=dlg.merchant)
         self._notify_change()
         self.table.verticalScrollBar().setValue(scroll_pos)
         self.table.clearSelection()

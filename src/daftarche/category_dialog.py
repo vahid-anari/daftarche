@@ -514,3 +514,66 @@ class CategoryDialog(QDialog):
         self.merchant = _match(self.db.get_merchants(), typed) or typed or None
         self.merchant_changed = typed != self._preset_merchant and not (self._merchant_mixed and not typed)
         self.accept()
+
+
+class MerchantDialog(QDialog):
+    """Set Merchant: one merchant for the selected transactions, nothing else changes (category,
+    sub-category, type, the parts of a split one; no rule is made). ``names``: the merchants
+    they have now. After OK, ``merchant``: the name (an existing one's spelling), None for none."""
+
+    def __init__(self, db, names, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Set Merchant")
+        self.db = db
+        self.merchant = None
+        names = [(n or "").strip() for n in names]
+        self._count = len(names)
+        self._had = sum(1 for n in names if n)
+        shared = {n.casefold() for n in names}
+        layout = QVBoxLayout(self)
+        layout.setSpacing(10)
+        what = "this transaction" if self._count == 1 else f"these {self._count} transactions"
+        head = QLabel(f"The merchant of {what}; their categories stay as they are.")
+        head.setWordWrap(True)
+        layout.addWidget(head)
+        row = QHBoxLayout()
+        self.f_merchant = _typing_combo()
+        self.f_merchant.addItems(db.get_merchants())
+        self.f_merchant.setCurrentText(names[0] if len(shared) == 1 else "")
+        self.f_merchant.lineEdit().setPlaceholderText(
+            "Several now: write one for all" if len(shared) > 1 else "The shop or person (e.g. Amazon, Vahid)")
+        self.f_merchant.setMinimumWidth(380)
+        row.addWidget(self.f_merchant, 1)
+        self.new_merchant = QLabel("New")
+        self.new_merchant.setStyleSheet(f"color: {get_settings().get('income')}; font-weight: bold;")
+        self.new_merchant.setToolTip("Not there yet: added when you press OK")
+        policy = self.new_merchant.sizePolicy()
+        policy.setRetainSizeWhenHidden(True)
+        self.new_merchant.setSizePolicy(policy)
+        row.addWidget(self.new_merchant)
+        layout.addLayout(row)
+        self.note = QLabel()
+        self.note.setProperty("class", "dim-label")
+        self.note.setWordWrap(True)
+        layout.addWidget(self.note)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self._accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        self.f_merchant.currentTextChanged.connect(self._changed)
+        self._changed(self.f_merchant.currentText())
+
+    def _changed(self, text):
+        known = _match(self.db.get_merchants(), text) is not None
+        self.new_merchant.setVisible(bool(text.strip()) and not known)
+        if text.strip() or not self._had:
+            self.note.setText("")
+        else:
+            self.note.setText("Empty: the merchant is taken off "
+                              + ("it." if self._count == 1 else f"them ({self._had} have one now)."))
+        self.note.setVisible(bool(self.note.text()))
+
+    def _accept(self):
+        typed = self.f_merchant.currentText().strip()
+        self.merchant = _match(self.db.get_merchants(), typed) or typed or None
+        self.accept()

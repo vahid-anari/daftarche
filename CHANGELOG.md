@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.34.2 — 2026-11-03
+
+- Right-click › **Set Merchant…** (in Transactions and in Manage's transactions): one merchant for
+  the selected rows, and nothing else changes — their categories, sub-categories, types and the
+  parts of split ones stay as they are, and no rule is made. Rows of different types can be set
+  together (transfers too); an empty box takes the merchant off.
+
 ## 0.34.1 — 2026-11-03
 
 - The transactions in Manage: each column is as wide as its longest text in any row, so nothing
