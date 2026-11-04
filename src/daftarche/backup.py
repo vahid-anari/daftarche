@@ -3,6 +3,7 @@
     backups/daftarche-last.db                          overwritten at every start
     backups/sessions/daftarche-2026-11-03-221500.db    a start that found the data changed since
                                                        the last such copy; the newest KEEP_SESSIONS kept
+    backups/sessions/daftarche-2026-11-03-223000-saved.db   File › Save Checkpoint, among them
     backups/daily/daftarche-2026-11-03.db              first start of each day; the newest KEEP_DAYS
     backups/monthly/daftarche-2026-10.db               first start of each month; the newest KEEP_MONTHS
 
@@ -18,6 +19,7 @@ gets a copy of the monthly snapshots too, with the same rotation; when the folde
 
 import hashlib
 import os
+import re
 import shutil
 import sqlite3
 import tempfile
@@ -29,11 +31,12 @@ from daftarche.paths import BACKUP_DIR
 
 KEEP_MONTHS = 12
 KEEP_DAYS = 14
-KEEP_SESSIONS = 10  # the data as it was at the last starts that found it changed
+KEEP_SESSIONS = 20  # the data at the last starts and Save Checkpoints that found it changed
 LAST_BACKUP = BACKUP_DIR / "daftarche-last.db"
 MONTHLY_GLOB = "daftarche-????-??.db"
 DAILY_GLOB = "daftarche-????-??-??.db"
-SESSION_GLOB = "daftarche-????-??-??-??????.db"
+SAVED = "-saved"  # at the end of a session copy's name: made by Save Checkpoint
+SESSION_NAME = re.compile(r"daftarche-\d{4}-\d\d-\d\d-\d{6}(-saved)?\.db")  # nothing else there counts
 
 
 def folder(kind: str) -> Path:
@@ -90,9 +93,66 @@ def _digest(path: Path) -> str | None:
         return None
 
 
+def _sessions_oldest_first() -> list[Path]:
+    """The session copies in the order they were made: by when each file was written (the time in
+    its name is the clock's, which can go back: a time zone, the end of summer time)."""
+    where = folder("sessions")
+    if not where.is_dir():
+        return []
+    files = [f for f in where.iterdir() if SESSION_NAME.fullmatch(f.name)]
+    return sorted(files, key=lambda f: (f.stat().st_mtime_ns, f.name))
+
+
 def session_backups() -> list[Path]:
-    """The copies made at the last starts, newest first."""
-    return sorted(folder("sessions").glob(SESSION_GLOB), reverse=True)
+    """The copies made at the last starts and Save Checkpoints, the last made first."""
+    return _sessions_oldest_first()[::-1]
+
+
+def session_info(path: Path) -> tuple[datetime | None, bool]:
+    """(when a session copy was made, True when by Save Checkpoint) from its name."""
+    try:
+        when = datetime.strptime(path.name[10:27], "%Y-%m-%d-%H%M%S")
+    except ValueError:
+        when = None
+    return when, path.stem.endswith(SAVED)
+
+
+def _session_copy(source: Path, now: datetime, saved: bool) -> Path:
+    """``source`` (a fresh copy of the data) kept in backups/sessions, unless the newest one there
+    holds the same data: then that one, and none is pushed out. Returns the session copy."""
+    sessions = session_backups()
+    newest = _digest(sessions[0]) if sessions else None
+    if newest is not None and newest == _digest(source):
+        return sessions[0]
+    while list(folder("sessions").glob(f"daftarche-{now:%Y-%m-%d-%H%M%S}*.db")):  # two in one second
+        now += timedelta(seconds=1)
+    session = folder("sessions") / f"daftarche-{now:%Y-%m-%d-%H%M%S}{SAVED if saved else ''}.db"
+    _copy_file(source, session)
+    _keep_newest_sessions(session)
+    return session
+
+
+def _keep_newest_sessions(made: Path) -> None:
+    """The last KEEP_SESSIONS made; ``made``, just written, is always kept."""
+    others = [f for f in _sessions_oldest_first() if f != made]
+    for old in others[:max(0, len(others) - (KEEP_SESSIONS - 1))]:
+        old.unlink()
+
+
+def save_checkpoint(conn: sqlite3.Connection, now: datetime | None = None) -> tuple[Path, bool]:
+    """File › Save Checkpoint: the data now among the session copies. Returns (the copy, True
+    when it is new; False: nothing changed since the newest, which is returned)."""
+    now = now or datetime.now()
+    sessions = folder("sessions")
+    sessions.mkdir(parents=True, exist_ok=True)
+    fresh = sessions / f"daftarche-checkpoint-{now:%Y%m%d%H%M%S%f}.tmp"
+    try:
+        copy_db(conn, fresh)
+        before = session_backups()
+        copy = _session_copy(fresh, now, saved=True)
+        return copy, copy not in before
+    finally:
+        fresh.unlink(missing_ok=True)
 
 
 def _move_old_monthly() -> None:
@@ -124,24 +184,12 @@ def mirror_snapshots(extra_dir: Path | str | None) -> list[Path]:
 def startup_backup(conn: sqlite3.Connection, today: date | None = None,
                    extra_dir: Path | str | None = None, now: datetime | None = None) -> list[Path]:
     """The backups made at start-up; returns the files written, the second one always this
-    start's session copy (a new one, or the newest when nothing changed since: the same data),
-    for File › Revert to When Opened."""
+    start's session copy (a new one, or the newest when nothing changed since: the same data)."""
     now = now or datetime.now()
     today = today or now.date()
     copy_db(conn, LAST_BACKUP)
     written = [LAST_BACKUP]
-    sessions = session_backups()
-    newest = _digest(sessions[0]) if sessions else None
-    if newest is not None and newest == _digest(LAST_BACKUP):
-        written.append(sessions[0])  # nothing changed: no new copy, none pushed out
-    else:
-        session = folder("sessions") / f"daftarche-{now:%Y-%m-%d-%H%M%S}.db"
-        while session.exists():  # two starts in one second: the next free one
-            now += timedelta(seconds=1)
-            session = folder("sessions") / f"daftarche-{now:%Y-%m-%d-%H%M%S}.db"
-        _copy_file(LAST_BACKUP, session)
-        written.append(session)
-        _keep_newest(folder("sessions"), SESSION_GLOB, KEEP_SESSIONS, made=session)
+    written.append(_session_copy(LAST_BACKUP, now, saved=False))  # nothing changed: the newest
     for kind, name, pattern, keep in (("daily", f"daftarche-{today:%Y-%m-%d}.db", DAILY_GLOB, KEEP_DAYS),
                                       ("monthly", f"daftarche-{today:%Y-%m}.db", MONTHLY_GLOB, KEEP_MONTHS)):
         if kind == "monthly":

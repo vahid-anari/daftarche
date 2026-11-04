@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QTabWidget, QWidget, QVBoxLayout,
     QHBoxLayout, QDialog, QFormLayout, QLabel,
     QDialogButtonBox, QPushButton, QColorDialog, QFrame, QGridLayout,
-    QMessageBox, QFileDialog
+    QMessageBox, QFileDialog, QListWidget
 )
 from PySide6.QtCore import QSize, Qt, QTimer, QUrl
 from PySide6.QtGui import QAction, QActionGroup, QColor, QDesktopServices, QFont, QKeySequence, QPalette
@@ -17,7 +17,8 @@ from sciwidgets.style import set_color_scheme
 
 from daftarche.db import Database
 from daftarche.app_info import APP, APP_NAME, APP_VERSION, USER_GUIDE
-from daftarche.backup import copy_db, copy_for_viewing, mirror_snapshots, restore_backup, startup_backup
+from daftarche.backup import (copy_db, copy_for_viewing, mirror_snapshots, restore_backup, save_checkpoint,
+                              session_backups, startup_backup)
 from daftarche.overview import UnmatchedTransfersDialog
 from daftarche.phone_sync import PhoneSender
 from daftarche.paths import BACKUP_DIR, DATA_DIR, DB_PATH
@@ -106,10 +107,10 @@ class MainWindow(QMainWindow):
         add(file_menu, "Open Database…", self.open_database, QKeySequence("Ctrl+O"))
         self.back_action = add(file_menu, "Back to My Database", self.back_to_my_database, QKeySequence("Ctrl+Shift+O"))
         file_menu.addSeparator()
-        self.backup_action = add(file_menu, "Back Up Database…", self._save_backup, QKeySequence("Ctrl+S"))
+        self.checkpoint_action = add(file_menu, "Save Checkpoint", self._save_checkpoint, QKeySequence("Ctrl+S"))
+        self.revert_action = add(file_menu, "Revert to a Save…", self._revert_to_save)  # no shortcut: it replaces data
+        self.backup_action = add(file_menu, "Back Up Database…", self._save_backup, QKeySequence("Ctrl+Shift+S"))
         self.restore_action = add(file_menu, "Restore Backup…", self._restore_backup)  # no shortcut: it replaces data
-        self.revert_action = add(file_menu, "Revert to When Opened…", self._revert_to_opened)
-        self.revert_action.setEnabled(self._opened_copy is not None)
         file_menu.addSeparator()
         add(file_menu, "Show Data Folder", self._show_data_folder)
         file_menu.addSeparator()
@@ -395,9 +396,8 @@ class MainWindow(QMainWindow):
             self.view_label.setToolTip(str(self.viewing))
         self.setWindowTitle(f"{APP_NAME} — {self.viewing.name} (copy)" if viewing else APP_NAME)
         self.back_action.setEnabled(viewing)
-        for action in (self.backup_action, self.restore_action):  # about your own database
-            action.setEnabled(not viewing)
-        self.revert_action.setEnabled(not viewing and self._opened_copy is not None)
+        for action in (self.backup_action, self.restore_action, self.checkpoint_action, self.revert_action):
+            action.setEnabled(not viewing)  # about your own database
         self.setAcceptDrops(not viewing)
 
     def _switch_to(self, db):
@@ -455,33 +455,38 @@ class MainWindow(QMainWindow):
         if destination_path:
             copy_db(self.db.conn, destination_path)
 
-    _opened_copy = None  # this start's copy of the data (File › Revert to When Opened)
-    _opened_at = None
-
     def _auto_backup(self):
         try:
-            written = startup_backup(self.db.conn, extra_dir=self.settings.get("backup_extra_dir"))
-            self._opened_copy, self._opened_at = written[1], datetime.now()
+            startup_backup(self.db.conn, extra_dir=self.settings.get("backup_extra_dir"))
         except Exception as exc:  # the app still opens, but the problem stays in sight
             self.statusBar().showMessage(f"⚠️ Automatic backup failed: {exc}")
-        if getattr(self, "revert_action", None) is not None:
-            self.revert_action.setEnabled(self._opened_copy is not None)
 
-    def _revert_to_opened(self):
-        """File › Revert to When Opened: the data as it was when Daftarche started (after asking);
-        what is there now is kept as a copy first, as with Restore."""
-        if self._opened_copy is None or not self._opened_copy.exists():
-            QMessageBox.information(self, "Revert", "There is no copy from when Daftarche was opened.")
+    def _save_checkpoint(self):
+        """File › Save Checkpoint (⌘S): the data now among the copies made at each start (the
+        last 20), to go back to with Revert to a Save…; nothing new when nothing changed."""
+        try:
+            copy, new = save_checkpoint(self.db.conn)
+        except Exception as exc:
+            QMessageBox.critical(self, "Save Checkpoint", f"Could not save a copy:\n{exc}")
             return
-        when = self._opened_at.strftime("%H:%M") if self._opened_at else "start-up"
-        reply = QMessageBox.question(
-            self, "Revert to When Opened",
-            f"Go back to your data as it was when Daftarche was opened (at {when})?\n\n"
-            "Everything changed since then is undone. What is there now is saved first, "
-            "so this can be undone too (File → Restore Backup…).",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-        if reply == QMessageBox.Yes:
-            self._replace_data(self._opened_copy)
+        from daftarche.backup import session_info
+        when, _saved = session_info(copy)
+        at = when.strftime("%H:%M") if when else ""
+        self.statusBar().showMessage(f"✓ Saved at {at}" if new else f"✓ Nothing changed since the copy of {at}",
+                                     5000)
+
+    def _revert_to_save(self):
+        """File › Revert to a Save…: the data as it was at one of the last starts or Save
+        Checkpoints (the newest chosen at first), after asking; what is there now is kept as a
+        copy first, as with Restore."""
+        copies = session_backups()
+        if not copies:
+            QMessageBox.information(self, "Revert", "There is no saved copy yet: File → Save Checkpoint makes one.")
+            return
+        dlg = RevertDialog(copies, self)
+        if not dlg.exec() or dlg.chosen is None:
+            return
+        self._replace_data(dlg.chosen)
 
     def _save_backup(self):
         path, _ = QFileDialog.getSaveFileName(
@@ -541,6 +546,55 @@ class MainWindow(QMainWindow):
         QMessageBox.information(self, "Restored",
                                 f"Backup restored.\n\nYour data from before the restore was saved as\n{safety.name}\n"
                                 "in the backups folder.")
+
+
+class RevertDialog(QDialog):
+    """File › Revert to a Save…: the copies made at each start and Save Checkpoint, the newest
+    first and chosen; Revert asks once more, then ``chosen`` is the copy."""
+
+    def __init__(self, copies, parent=None):
+        super().__init__(parent)
+        from daftarche.backup import session_info
+        self.setWindowTitle("Revert to a Save")
+        self.copies, self.chosen = list(copies), None
+        layout = QVBoxLayout(self)
+        intro = QLabel("Go back to your data as it was then. Everything changed since is undone; "
+                       "what is there now is saved first, so this can be undone too.")
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+        self.list = QListWidget()
+        today = datetime.now().date()
+        for path in self.copies:
+            when, saved = session_info(path)
+            if when is None:
+                text = path.name
+            else:
+                day = "Today" if when.date() == today else f"{when:%a %b} {when.day}, {when.year}"
+                text = f"{day}  {when:%H:%M:%S}   —   {'Saved' if saved else 'Opened'}"
+            self.list.addItem(text)
+        self.list.setCurrentRow(0)
+        self.list.itemDoubleClicked.connect(lambda _item: self._revert())
+        layout.addWidget(self.list, 1)
+        row = QHBoxLayout()
+        row.addStretch()
+        cancel = QPushButton("Cancel")
+        cancel.setProperty("class", "secondary")
+        cancel.clicked.connect(self.reject)
+        revert = QPushButton("Revert…")
+        revert.clicked.connect(self._revert)
+        row.addWidget(cancel)
+        row.addWidget(revert)
+        layout.addLayout(row)
+        self.resize(460, 420)
+
+    def _revert(self):
+        r = self.list.currentRow()
+        if r < 0:
+            return
+        if QMessageBox.question(self, "Revert", f"Go back to your data of {self.list.item(r).text().split('   —')[0]}?",
+                                QMessageBox.Yes | QMessageBox.No, QMessageBox.No) == QMessageBox.Yes:
+            self.chosen = self.copies[r]
+            self.accept()
 
 
 class ImportDialog(QDialog):

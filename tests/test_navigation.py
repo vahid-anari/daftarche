@@ -48,8 +48,9 @@ def test_four_tabs_and_the_go_menu(win):
     assert win.tabs.currentWidget() is win.charts_tab
     file_menu = next(a.menu() for a in win.menuBar().actions() if a.text() == "File")
     keys = {a.text(): a.shortcut().toString() for a in file_menu.actions() if a.text()}
-    assert keys["Import Statement…"] == "Ctrl+I" and keys["Back Up Database…"] == "Ctrl+S"
-    assert keys["Restore Backup…"] == ""  # on purpose
+    assert keys["Import Statement…"] == "Ctrl+I" and keys["Save Checkpoint"] == "Ctrl+S"
+    assert keys["Back Up Database…"] == "Ctrl+Shift+S"
+    assert keys["Restore Backup…"] == "" and keys["Revert to a Save…"] == ""  # on purpose
 
 
 def test_review_stays_in_transactions(win):

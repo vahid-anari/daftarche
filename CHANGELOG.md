@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.35.4 — 2026-11-04
+
+- Manage › Categories: a list is never cut any more (its Total hidden past its edge) after
+  choosing a type with longer names, or when it is long enough for its scroll bar; and in a short
+  window a long list scrolls its own lines (they could be cut off at the bottom).
+- The columns of the transactions in Manage have a few pixels to spare, so a date is not cut
+  with "…" on a Retina screen.
+- **File › Save Checkpoint** (⌘S): the data now, kept among the copies made at each start
+  (backups/sessions; none when nothing changed since the newest). The last twenty are kept (ten
+  before). **File › Revert to a Save…** (instead of Revert to When Opened) lists them — when, and
+  Opened or Saved — the newest chosen; after asking, the data goes back to the one picked, and
+  what is there now is kept in a copy first. Back Up Database… is now ⇧⌘S.
+- Manage › Categories: right-click a merchant › **Edit Merchant…** — its name and logo, the same
+  window as in the Merchants tab; it stays selected under its new name.
+
 ## 0.35.3 — 2026-11-04
 
 - The edit window's Account has an empty line, so an income (money that came from outside, such

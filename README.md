@@ -117,7 +117,9 @@ keeps its files in one folder:
 
 On Windows the folder is `%APPDATA%\Daftarche`, on Linux `~/.local/share/daftarche`.
 Set `DAFTARCHE_HOME` to use another folder, for example a test copy.
-File → Back Up Database… and Restore Backup… save and load a copy of the database by hand;
+File → Save Checkpoint (⌘S) keeps the data now among the copies made at each start, and Revert
+to a Save… goes back to one of them; Back Up Database… and Restore Backup… save and load a copy
+of the database by hand;
 File → Open Database… shows a backup (through a copy) without changing anything.
 The monthly snapshots sit on the same disk as the database; Settings → Extra
 backup folder also copies them to a folder of your choice (iCloud Drive, an

@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (
     QDialogButtonBox, QFrame, QSizePolicy, QAbstractScrollArea, QRadioButton, QButtonGroup, QSplitter, QMenu,
     QScrollArea,
 )
-from PySide6.QtCore import QByteArray, QItemSelectionModel, QSize, Qt
+from PySide6.QtCore import QByteArray, QItemSelectionModel, QSize, Qt, QTimer
 from PySide6.QtGui import QBrush, QColor, QFont, QFontMetrics, QPalette
 
 from daftarche.style import get_settings
@@ -281,6 +281,7 @@ class ManageDialog(QDialog):
                                          show_transactions=self._show_in_window)
         self.tags_panel = TagsPanel(self.db, self._changed)
         self.merchants_panel = MerchantsPanel(self.db, self._changed, self._show_merchant, notify=self.notify)
+        self.cats_panel.edit_merchant = self.merchants_panel.edit_named
 
         self.tabs.addTab(self.accounts_panel, "🏦  Accounts")
         self.tabs.addTab(self.cats_panel, "🏷️  Categories")
@@ -684,15 +685,25 @@ def _fit_beside(split):
         split._fitted = True
 
 
+class _RowOfLists(QHBoxLayout):
+    """The row of Categories' lists, in a scroll area that scrolls it sideways. Its height is the
+    room there (each list scrolls its own lines), not its height for its width: that would count
+    every line of every list, and cut off a long list in a short window instead of scrolling it."""
+
+    def hasHeightForWidth(self):
+        return False
+
+
 class CatsRulesPanel(QWidget):
     """Types, categories, sub-categories, and the merchants whose money goes there."""
     M_NAME, M_TX, M_RULES, M_TOTAL = range(4)
 
-    def __init__(self, db, on_change, open_merchant=None, show_transactions=None):
+    def __init__(self, db, on_change, open_merchant=None, show_transactions=None, edit_merchant=None):
         super().__init__()
         self.db = db
         self.on_change = on_change
         self.open_merchant = open_merchant  # (name) → Merchants tab
+        self.edit_merchant = edit_merchant  # (name, parent) → its name after Edit Merchant, or None
         self.show_transactions = show_transactions  # (text, **filters) → the main window
         self._build()
 
@@ -700,7 +711,7 @@ class CatsRulesPanel(QWidget):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(10, 10, 10, 10)
         lists = QWidget()  # the four lists side by side; under them (when ticked), the transactions
-        lists_row = QHBoxLayout(lists)
+        lists_row = _RowOfLists(lists)
         lists_row.setContentsMargins(0, 0, 0, 0)
         lists_row.setSpacing(4)
 
@@ -762,6 +773,10 @@ class CatsRulesPanel(QWidget):
         m_w.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         lists_row.addWidget(m_w, 1)
         self._lists = lists
+        self._list_cols = (type_w, cat_w, sub_w, m_w)
+        for table in (self.type_table, self.cat_table, self.sub_table, self.merchant_table):
+            # a list made long (or short again) by the window's height or the line under them
+            table.verticalScrollBar().rangeChanged.connect(lambda *_: QTimer.singleShot(0, self._fit_lists))
         # a narrow window: the row of lists scrolls sideways as one (each list only up and down)
         across = QScrollArea()
         across.setFrameShape(QFrame.NoFrame)
@@ -1004,12 +1019,7 @@ class CatsRulesPanel(QWidget):
                         break
         finally:
             self.merchant_table.blockSignals(False)
-        for table in (self.type_table, self.cat_table, self.sub_table, self.merchant_table):
-            table.setMinimumWidth(table.sizeHint().width())  # never narrower than its text: no side scrolling
-        self._lists.layout().invalidate()
-        self._lists.layout().activate()
-        # never narrower than the lists together: in a narrower window the row scrolls sideways
-        self._lists.setMinimumWidth(self._lists.layout().minimumSize().width())
+        self._fit_lists()
         self._update_lines()
 
     # ── the transactions under the merchants ─────────────────────────────────
@@ -1035,6 +1045,20 @@ class CatsRulesPanel(QWidget):
                    "subcategory": [sub["name"]] if sub else [], "merchant": [m["merchant"]] if m else []}
         self.lines.show_transactions(who + where, filters, hidden=("type", "category") + (("merchant",) if m else ())
                                      + (("subcategory",) if sub else ()))
+
+    def _fit_lists(self):
+        """Each list as wide as its text (never cut, no side scrolling: its columns are laid out
+        first, so a longer name chosen just now counts), and the row of them as wide as they are
+        together: in a narrower window that row scrolls sideways. Its own scroll bar (a long
+        list) is counted too, as the bar takes room from the columns."""
+        for table in (self.type_table, self.cat_table, self.sub_table, self.merchant_table):
+            table.resizeColumnsToContents()
+            bar = table.verticalScrollBar()
+            room = bar.width() if bar.maximum() > 0 else 0  # a long list: its bar is shown
+            columns = sum(table.columnWidth(c) for c in range(table.columnCount()) if not table.isColumnHidden(c))
+            table.setMinimumWidth(columns + room + 2 * table.frameWidth())
+        # the row of lists: as wide as their minimums together, by Qt's own layout (the scroll
+        # area around it keeps that width: no width set here, which would go stale)
 
     def _fill_merchants(self, cat_data=None, sub_data=None):
         from daftarche.widgets import money
@@ -1079,7 +1103,21 @@ class CatsRulesPanel(QWidget):
         if m and m["merchant"] and self.open_merchant:
             items.insert(0, ("🏪  Its Rules (Merchants Tab)", lambda: self._merchant_double_clicked(row, self.M_NAME),
                              True))
+        if m and m["merchant"] and self.edit_merchant:  # the no-merchant line has no name to change
+            items[:0] = [("✏️  Edit Merchant…", lambda: self._edit_merchant(m["merchant"]), True), None]
         return items
+
+    def _edit_merchant(self, name):
+        """Right-click › Edit Merchant…: its name and logo, as in the Merchants tab; the same
+        merchant (by its new name) stays selected here."""
+        new = self.edit_merchant(name, self)
+        if not new:
+            return
+        for r in range(self.merchant_table.rowCount()):
+            m = self.merchant_table.item(r, 0).data(Qt.UserRole)
+            if m and m["merchant"] == new:
+                self.merchant_table.selectRow(r)
+                break
 
     def _merchant_double_clicked(self, row, col):
         item = self.merchant_table.item(row, 0)
@@ -2374,14 +2412,21 @@ class MerchantsPanel(QWidget):
         m = self._need()
         if not m:
             return
-        old = m["merchant"]
-        dlg = LogoDialog(old, self.db.logo_for(old), self.db.logo_source(old), self, edit_name=True)
+        name = self.edit_named(m["merchant"], self)
+        if name:
+            self.select(name)
+
+    def edit_named(self, old, parent):
+        """Edit Merchant for the merchant ``old`` (here, or from a right-click in Categories):
+        its window over ``parent``; returns its name after OK (None: cancelled), the lists here
+        and in the other tabs shown again."""
+        dlg = LogoDialog(old, self.db.logo_for(old), self.db.logo_source(old), parent, edit_name=True)
         if not dlg.exec():
-            return
+            return None
         new = dlg.name
         existing = next((x for x in self.db.get_merchants() if x.casefold() == new.casefold() and x != old), None)
-        if existing and not _confirm_merge(self, "merchant", old, existing, "transactions and rules"):
-            return
+        if existing and not _confirm_merge(parent, "merchant", old, existing, "transactions and rules"):
+            return None
         with self.db.transaction():
             name = self.db.rename_merchant(old, new) if new != old else old
             if dlg.logo_changed:
@@ -2392,7 +2437,7 @@ class MerchantsPanel(QWidget):
         if name != old:
             self._rename_flag(old, name)
         self.on_change()
-        self.select(name)
+        return name
 
     def rename(self):
         m = self._need()

@@ -116,7 +116,8 @@ def test_a_copy_at_each_start_that_changed_something(folder, conn):
         written = backup.startup_backup(conn, now=start + timedelta(hours=i))
     kept = backup.session_backups()
     assert len(kept) == backup.KEEP_SESSIONS and kept[0] == written[1]
-    assert kept[0].name == "daftarche-2026-11-03-210000.db" and kept[0].parent == folder / "sessions"
+    last = start + timedelta(hours=backup.KEEP_SESSIONS + 2)
+    assert kept[0].name == f"daftarche-{last:%Y-%m-%d-%H%M%S}.db" and kept[0].parent == folder / "sessions"
     copy = sqlite3.connect(kept[-1])
     assert copy.execute("SELECT x FROM t").fetchone() == (3,)  # the oldest kept: the 4th start
     copy.close()
@@ -149,8 +150,9 @@ def test_older_monthly_copies_move_into_their_folder(folder, conn):
     assert not (folder / "daftarche-2026-09.db").exists()
 
 
-def test_revert_to_when_opened(qapp, monkeypatch, tmp_path):
-    """File › Revert to When Opened asks first; then the data is this start's copy again."""
+def test_save_checkpoint_and_revert_to_a_save(qapp, monkeypatch, tmp_path):
+    """0.35.4: File › Save Checkpoint keeps the data now among the session copies (none when
+    nothing changed); Revert to a Save… lists them, the newest chosen, asks, then puts one back."""
     from unittest import mock
 
     from PySide6.QtWidgets import QMessageBox
@@ -161,18 +163,47 @@ def test_revert_to_when_opened(qapp, monkeypatch, tmp_path):
     monkeypatch.setattr(window_module, "BACKUP_DIR", tmp_path / "backups")
     monkeypatch.setattr(window_module, "DB_PATH", tmp_path / "w.db")
     w = window_module.MainWindow()
-    assert w.revert_action.isEnabled() and w._opened_copy.parent.name == "sessions"
+    opened = backup.session_backups()
+    assert len(opened) == 1 and backup.session_info(opened[0])[1] is False  # made when opened
+    w._save_checkpoint()  # nothing changed: no new copy
+    assert backup.session_backups() == opened and "Nothing changed" in w.statusBar().currentMessage()
     w.db.get_or_create_account("Card")
     w.db.conn.commit()
+    w._save_checkpoint()
+    copies = backup.session_backups()
+    assert len(copies) == 2 and backup.session_info(copies[0])[1] is True and "Saved at" in w.statusBar().currentMessage()
+    w.db.get_or_create_account("Cash")
+    w.db.conn.commit()
+    dlg = window_module.RevertDialog(copies, w)
+    assert dlg.list.currentRow() == 0 and "Saved" in dlg.list.item(0).text() and "Opened" in dlg.list.item(1).text()
     with mock.patch.object(window_module.QMessageBox, "question", return_value=QMessageBox.No):
-        w._revert_to_opened()
-    assert w.db.get_account_by_name("Card")  # No: nothing changed
-    with mock.patch.object(window_module.QMessageBox, "question", return_value=QMessageBox.Yes), \
+        dlg._revert()
+    assert dlg.chosen is None
+    with mock.patch.object(window_module, "RevertDialog", return_value=mock.Mock(exec=lambda: True, chosen=copies[0])), \
             mock.patch.object(window_module.QMessageBox, "information"):
-        w._revert_to_opened()
+        w._revert_to_save()  # the Save: Card is there, Cash is not
+    assert w.db.get_account_by_name("Card") and not w.db.get_account_by_name("Cash")
+    with mock.patch.object(window_module, "RevertDialog", return_value=mock.Mock(exec=lambda: True, chosen=copies[1])), \
+            mock.patch.object(window_module.QMessageBox, "information"):
+        w._revert_to_save()  # when it was opened: neither
     assert not w.db.get_account_by_name("Card")
     assert list((tmp_path / "backups").glob("daftarche-before-restore-*.db"))  # what was there, kept
     w.close()
+
+
+def test_saves_share_the_twenty(folder, conn):
+    from datetime import datetime, timedelta
+    start = datetime(2026, 11, 4, 9, 0, 0)
+    backup.startup_backup(conn, now=start)
+    for i in range(backup.KEEP_SESSIONS + 5):
+        conn.execute("UPDATE t SET x = ?", (1000 + i,))
+        conn.commit()
+        copy, new = backup.save_checkpoint(conn, now=start + timedelta(minutes=i + 1))
+        assert new
+    kept = backup.session_backups()
+    assert len(kept) == backup.KEEP_SESSIONS == 20 and kept[0] == copy and kept[0].name.endswith("-saved.db")
+    assert backup.save_checkpoint(conn, now=start + timedelta(hours=5)) == (copy, False)
+    assert not list((folder / "sessions").glob("*.tmp"))
 
 
 def test_a_damaged_copy_or_a_clock_set_back_loses_nothing(folder, conn):
@@ -198,3 +229,27 @@ def test_a_damaged_copy_or_a_clock_set_back_loses_nothing(folder, conn):
     twice = backup.startup_backup(conn, now=datetime(2026, 11, 3, 9, 0, 0))
     assert twice[1].name == "daftarche-2026-11-03-090001.db" and twice[1].exists()  # not over the other
     assert not list(folder.rglob("*.part"))
+
+
+def test_a_clock_moved_back_keeps_the_last_saves(folder, conn):
+    """Copies are kept and listed in the order they were made, not by the time in their names
+    (a time zone or the end of summer time sets the clock back); other files there do not count."""
+    from datetime import datetime, timedelta
+    late = datetime(2026, 11, 4, 18, 0, 0)
+    for i in range(backup.KEEP_SESSIONS):
+        conn.execute("UPDATE t SET x = ?", (i,))
+        conn.commit()
+        backup.save_checkpoint(conn, now=late + timedelta(minutes=i))
+    made = []
+    for i in range(3):  # six hours west: the clock says 13:00
+        conn.execute("UPDATE t SET x = ?", (100 + i,))
+        conn.commit()
+        made.append(backup.save_checkpoint(conn, now=datetime(2026, 11, 4, 13, i, 0))[0])
+    kept = backup.session_backups()
+    assert kept[:3] == made[::-1] and len(kept) == backup.KEEP_SESSIONS
+    copy = sqlite3.connect(kept[0])
+    assert copy.execute("SELECT x FROM t").fetchone() == (102,)  # Revert's first row: the last saved
+    copy.close()
+    assert backup.save_checkpoint(conn, now=datetime(2026, 11, 4, 13, 5, 0)) == (made[-1], False)
+    (folder / "sessions" / "daftarche-2026-11-04-130000 copy.db").write_bytes(b"mine")
+    assert all(p.name != "daftarche-2026-11-04-130000 copy.db" for p in backup.session_backups())

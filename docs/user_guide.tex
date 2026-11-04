@@ -404,7 +404,8 @@ In the Loans window, \button{Starting Balance…} sets what was owed before your
         shop's logo: write its website and press \button{Get Logo} (it is taken once from the shop's
         own site and kept in your data), or choose a picture file; a preview shows it before OK, and
         \button{No Logo} takes it away. The logo then shows beside the name here, in Categories and in
-        Transactions; a merchant without one keeps an empty space, so the names stay in line. Logos
+        Transactions; a merchant without one keeps an empty space, so the names stay in line. A
+        right-click on a merchant in Categories offers \menu{Edit Merchant…} too. Logos
         and icons grow with the font size (Settings). Logos stay on the computer: the phone shows
         only the emoji.
   \item \textbf{Tags}: add, rename or delete tags.
@@ -467,8 +468,9 @@ On a Mac it is \texttt{\small Library/Application Support/Daftarche} in your hom
 \subsection{Backups happen by themselves}
 \begin{itemize}
   \item Every time Daftarche starts and finds your data changed since the last time, it saves a
-        copy of it as it was (\texttt{backups/sessions}); the last ten are kept. Starting it again
-        without changing anything adds none, so a few restarts push no older copy out.
+        copy of it as it was (\texttt{backups/sessions}). \menu{File \then Save Checkpoint}
+        (\key{⌘}\key{S}) saves one whenever you like, among them; the last twenty are kept. Starting
+        it again (or saving) without changing anything adds none, so no older copy is pushed out.
   \item On the first start of each day it keeps a daily copy (\texttt{backups/daily}, the last
         fourteen days), and on the first start of each month a monthly one (\texttt{backups/monthly},
         the last twelve), so you can always go back up to a year.
@@ -476,7 +478,8 @@ On a Mac it is \texttt{\small Library/Application Support/Daftarche} in your hom
         too, such as iCloud Drive or an external disk. If your Mac uses Time Machine, the data folder is
         backed up with everything else.
 \end{itemize}
-You can also save a copy whenever you like with \menu{File \then Back Up Database…} (\key{⌘}\key{S}).
+You can also save a copy anywhere you like with \menu{File \then Back Up Database…}
+(\key{⇧}\key{⌘}\key{S}).
 
 When a new version of Daftarche stores something in a new way, it first saves your data as it was
 in the backups folder (for example \texttt{daftarche-before-layout-8.db}). An older version cannot open
@@ -488,8 +491,9 @@ the updated file, but it can open that copy; when it is started, it says so and 
 that you are looking at a copy, and \menu{Back to My Database} returns to your own data.
 \menu{File \then Restore Backup…} really replaces your data with a backup. Daftarche checks the
 file first and keeps a copy of your current data, just in case. Changed several things by mistake?
-\menu{File \then Revert to When Opened…} asks first, then puts your data back as it was when
-Daftarche started (all the changes since then are undone, and kept in a copy too).
+\menu{File \then Revert to a Save…} lists the copies made when Daftarche started and with Save
+Checkpoint, the newest first and chosen; pick one, and after asking it puts your data back as it
+was then (all the changes since are undone, and kept in a copy too).
 
 \begin{careful}[Moving to a new computer]
 Quit Daftarche, copy the whole data folder to the same place on the new computer, install Daftarche

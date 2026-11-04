@@ -12,6 +12,9 @@ from daftarche.widgets import FlowLayout, money
 SHOW_KEY = "manage_show_transactions"  # the "Show transactions" tick beside Manage's tabs
 
 
+SLACK = 4  # pixels beyond the widest text of a column (see _fit_columns)
+
+
 class _ManageTransactions(TransactionsTab):
     """The Transactions table, its filters set by Manage (``show``) instead of by its filter bar,
     which is hidden. Edits made in it are saved and reported as in Transactions."""
@@ -112,7 +115,9 @@ class _ManageTransactions(TransactionsTab):
                         widest, at = width, i
             width = header.sectionSizeHint(col)
             if at is not None:
-                width = max(width, table.sizeHintForIndex(model.index(at, col)).width() + grid)
+                # a few pixels more: text is laid out to fractions of a pixel (a Retina screen),
+                # and a row the measure counted as narrower can need a pixel more ("…")
+                width = max(width, table.sizeHintForIndex(model.index(at, col)).width() + grid + SLACK)
             header.resizeSection(col, width)
 
     def _update_summary(self):
