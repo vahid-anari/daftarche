@@ -1899,7 +1899,7 @@ class MerchantsPanel(QWidget):
         self.find.setClearButtonEnabled(True)
         self.find.textChanged.connect(self._filter)
         find_row, self._merchant_btns = _head(self.find, [
-            ("✏️", "Rename / Merge", self.rename),
+            ("✏️", "Edit Merchant (name and logo)", self.edit),
             ("🏷️", "Set Category… (its rules and transactions)", self.set_category),
             ("📋", "Its Transactions", self.open_transactions),
             ("🗑️", "Delete Merchant", self.delete),
@@ -1948,8 +1948,8 @@ class MerchantsPanel(QWidget):
         h.sectionResized.connect(lambda col, _old, new: self.totals.setColumnWidth(col, new))
         left.addWidget(self.totals)
         _list_menu(self.table, lambda: [(("🚩  Done (Untick)" if self._is_flagged() else "🚩  Look at Again"),
-                                          self._toggle_flag, True), ("🖼️  Logo…", self.set_logo, True), None,
-                                        ("✏️  Rename / Merge…", self.rename, True),
+                                          self._toggle_flag, True), None,
+                                        ("✏️  Edit Merchant…", self.edit, True),
                                 ("🏷️  Set Category…", self.set_category, True),
                                 ("📋  Its Transactions", self.open_transactions, True), None,
                                         ("🗑️  Delete Merchant", self.delete, True)])
@@ -2327,11 +2327,11 @@ class MerchantsPanel(QWidget):
         return m
 
     def _double_clicked(self, row, col):
-        """On the name: Rename / Merge, as in Categories and Tags; on Tx or Total: its
-        transactions in Transactions. The line of those with no merchant has no name to change."""
+        """On the name: Edit Merchant (name and logo), as in Categories and Tags; on Tx or Total:
+        its transactions in Transactions. The line of those with no merchant has no name to change."""
         m = self._selected()
         if col == self.COL_NAME and m and m["merchant"]:
-            self.rename()
+            self.edit()
         elif col in (self.COL_NAME, self.COL_TX, self.COL_TOTAL):
             self.open_transactions()
 
@@ -2353,6 +2353,33 @@ class MerchantsPanel(QWidget):
             self.db.set_logo(name, dlg.image, dlg.source)
         else:
             self.db.remove_logo(name)
+        self.on_change()
+        self.select(name)
+
+    def edit(self):
+        """✏️ Edit Merchant: its name (one that exists already merges the two, after asking) and
+        its logo, in one window; OK keeps both. A logo chosen here wins over the one of a
+        merchant it is merged into."""
+        m = self._need()
+        if not m:
+            return
+        old = m["merchant"]
+        dlg = LogoDialog(old, self.db.logo_for(old), self.db.logo_source(old), self, edit_name=True)
+        if not dlg.exec():
+            return
+        new = dlg.name
+        existing = next((x for x in self.db.get_merchants() if x.casefold() == new.casefold() and x != old), None)
+        if existing and not _confirm_merge(self, "merchant", old, existing, "transactions and rules"):
+            return
+        with self.db.transaction():
+            name = self.db.rename_merchant(old, new) if new != old else old
+            if dlg.logo_changed:
+                if dlg.image:
+                    self.db.set_logo(name, dlg.image, dlg.source)
+                else:
+                    self.db.remove_logo(name)
+        if name != old:
+            self._rename_flag(old, name)
         self.on_change()
         self.select(name)
 

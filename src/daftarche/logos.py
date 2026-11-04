@@ -3,6 +3,7 @@ from a picture file, made a PNG of at most 128 px and kept in the database (merc
 Drawn on a white square with round corners, so a dark logo shows on the dark theme too."""
 
 import html
+import json
 import re
 import ssl
 import urllib.parse
@@ -66,11 +67,54 @@ def _icon_links(page, base):
     return [url for _size, url in sorted(found, reverse=True)]
 
 
+def _manifest_icons(manifest, base):
+    """The icons a web app manifest (JSON) names, the largest first."""
+    try:
+        icons = json.loads(manifest).get("icons") or []
+    except (ValueError, AttributeError):
+        return []
+    found = []
+    for icon in icons:
+        if not isinstance(icon, dict) or not icon.get("src"):
+            continue
+        sizes = re.findall(r"(\d+)x\d+", str(icon.get("sizes") or ""))
+        found.append((max(map(int, sizes)) if sizes else 0, urllib.parse.urljoin(base, icon["src"])))
+    return [url for _size, url in sorted(found, reverse=True)]
+
+
+def _manifest_links(page, base):
+    links = []
+    for tag in re.findall(r"<link\b[^>]*>", page, re.IGNORECASE):
+        rel = re.search(r"""\brel\s*=\s*["']?([^"'>]+)""", tag, re.IGNORECASE)
+        href = re.search(r"""\bhref\s*=\s*["']?([^"' >]+)""", tag, re.IGNORECASE)
+        if rel and href and "manifest" in rel.group(1).lower():
+            links.append(urllib.parse.urljoin(base + "/", html.unescape(href.group(1))))
+    return links
+
+
+GOOD = 96  # a logo at least this wide is sharp enough; a smaller one: look further
+
+
 def fetch(site, get=_get):
     """The logo of a website: (PNG bytes, the address it came from). Tries the app icon a site
-    has for phones (large), then the icons its home page names, then /favicon.ico; keeps the
-    largest picture found. ``get(url) → (bytes, final url)``: replaced in tests."""
+    has for phones (large), then the icons its home page and its web app manifest name, then
+    /favicon.ico, and the same with "www." when nothing sharp was found; keeps the largest
+    picture. ``get(url) → (bytes, final url)``: replaced in tests."""
     root = site_url(site)
+    best = _search(root, get)
+    host = urllib.parse.urlsplit(root).netloc
+    if (best is None or best[0].width() < GOOD) and not host.startswith("www."):
+        other = _search(root.replace("://", "://www.", 1), get)
+        if other is not None and (best is None or other[0].width() > best[0].width()):
+            best = other
+    if best is None:
+        raise LogoError(f"No logo found at {root}: no connection, or the site has no icon. "
+                        "Choose a picture file instead.")
+    return to_png(best[0]), best[1]
+
+
+def _search(root, get):
+    """(the largest picture found on the site at ``root``, its address), or None."""
     tried, best = [], None
 
     def consider(url):
@@ -88,19 +132,28 @@ def fetch(site, get=_get):
 
     for path in _ICON_PATHS:
         consider(root + path)
-    if best is None or best[0].width() < 96:
+    if best is None or best[0].width() < GOOD:
+        manifests = [root + "/manifest.json", root + "/site.webmanifest"]
         try:
             page, final = get(root)
-            for url in _icon_links(page.decode("utf-8", "replace"), final.rstrip("/")):
+            text = page.decode("utf-8", "replace")
+            for url in _icon_links(text, final.rstrip("/")):
                 consider(url)
+            manifests = _manifest_links(text, final.rstrip("/")) + manifests
         except (OSError, ValueError):
             pass
+        for manifest in dict.fromkeys(manifests):
+            if best is not None and best[0].width() >= GOOD:
+                break
+            try:
+                data, final = get(manifest)
+            except (OSError, ValueError):
+                continue
+            for url in _manifest_icons(data.decode("utf-8", "replace"), final)[:3]:
+                consider(url)
     if best is None:
         consider(root + "/favicon.ico")
-    if best is None:
-        raise LogoError(f"No logo found at {root}: no connection, or the site has no icon. "
-                        "Choose a picture file instead.")
-    return to_png(best[0]), best[1]
+    return best
 
 
 def normalise(data):
@@ -154,17 +207,30 @@ def logo_icon(data):
 # ── the window ───────────────────────────────────────────────────────────────
 class LogoDialog(QDialog):
     """A merchant's logo: from its website or a file, with a preview; No Logo takes it away.
-    After OK: ``image`` (PNG bytes, None for no logo) and ``source``."""
+    ``edit_name``: Edit Merchant, its name above the logo, both kept with OK. After OK: ``name``,
+    ``image`` (PNG bytes, None for no logo), ``source``, and ``logo_changed``."""
 
-    def __init__(self, merchant, image=None, source="", parent=None, fetch_logo=fetch):
+    def __init__(self, merchant, image=None, source="", parent=None, fetch_logo=fetch, edit_name=False):
         super().__init__(parent)
-        self.setWindowTitle("Logo")
-        self.merchant = merchant
+        self.setWindowTitle("Edit Merchant" if edit_name else "Logo")
+        self.merchant = self.name = merchant
         self.image, self.source = image, source or ""
+        self.logo_changed = False
         self._fetch = fetch_logo
         layout = QVBoxLayout(self)
         layout.setSpacing(10)
-        head = QLabel(f"Logo for <b>{html.escape(merchant)}</b>")
+        self.name_field = None
+        if edit_name:
+            row = QHBoxLayout()
+            row.addWidget(QLabel("Name:"))
+            self.name_field = QLineEdit(merchant)
+            self.name_field.setToolTip("A name another merchant has already: the two are merged (it asks first)")
+            row.addWidget(self.name_field, 1)
+            layout.addLayout(row)
+            head = QLabel("Logo")
+            head.setProperty("class", "dim-label")
+        else:
+            head = QLabel(f"Logo for <b>{html.escape(merchant)}</b>")
         layout.addWidget(head)
         row = QHBoxLayout()
         row.addWidget(QLabel("Website:"))
@@ -206,13 +272,22 @@ class LogoDialog(QDialog):
         buttons.addWidget(self.btn_none)
         ok = QPushButton("OK")
         ok.setDefault(False)
-        ok.clicked.connect(self.accept)
+        ok.clicked.connect(self._accept)
         cancel = QPushButton("Cancel")
         cancel.clicked.connect(self.reject)
         buttons.addWidget(ok)
         buttons.addWidget(cancel)
         layout.addLayout(buttons)
         self._show()
+
+    def _accept(self):
+        if self.name_field is not None:
+            name = " ".join(self.name_field.text().split())
+            if not name:
+                QMessageBox.warning(self, "Edit Merchant", "Write the merchant's name.")
+                return
+            self.name = name
+        self.accept()
 
     @staticmethod
     def _site_of(source):
@@ -237,6 +312,7 @@ class LogoDialog(QDialog):
             return
         QApplication.restoreOverrideCursor()
         self.image, self.source = image, url
+        self.logo_changed = True
         self._show()
 
     def _choose_file(self):
@@ -254,10 +330,12 @@ class LogoDialog(QDialog):
             return
         from pathlib import Path
         self.source = Path(path).name
+        self.logo_changed = True
         self._show()
 
     def _no_logo(self):
         self.image, self.source = None, ""
+        self.logo_changed = True
         self._show()
 
 

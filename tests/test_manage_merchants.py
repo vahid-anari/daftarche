@@ -158,12 +158,12 @@ def test_net_spent_and_delete_drops_merchant_only_rules(db, shops):
 
 
 def test_double_click_name_renames_numbers_show(qapp, db, shops):
-    """0.34.3: the name → Rename / Merge (as Categories and Tags); Tx or Total → its transactions."""
+    """0.34.3: the name → Edit Merchant (name and logo; 0.35.2); Tx or Total → its transactions."""
     from daftarche.tabs.manage import ManageDialog
     shown = []
     panel = keep(ManageDialog(db, lambda: None, show_merchant=shown.append)).merchants_panel
     panel.table.selectRow(0)
-    with mock.patch.object(panel, "rename") as rename:
+    with mock.patch.object(panel, "edit") as rename:
         panel.table.cellDoubleClicked.emit(0, panel.COL_NAME)
         assert rename.call_count == 1 and shown == []
         for col in (panel.COL_TX, panel.COL_TOTAL):

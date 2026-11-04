@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.35.2 — 2026-11-03
+
+- Manage › Merchants: **Edit Merchant** — a merchant's name and logo in one window (double-click
+  its name, the ✏️ button, or right-click › Edit Merchant…), as a category's name and icon are;
+  OK keeps both, Cancel neither. A name another merchant has merges the two (after asking); a
+  logo chosen there wins over the one of the merchant it is merged into. Rename / Merge… and
+  Logo… are no longer separate.
+- Get Logo finds sharper logos: also the icons a site's web app manifest names (192 or 512 px
+  on most large sites), and the same with "www." when nothing sharp was found.
+- `tools/pick_logos.py`: many merchants' logos at once, from a CSV of merchant and website:
+  each is got from the shop's site, shown with its size beside the one it has now (one under
+  64 px is marked "small" and not ticked by itself), and Apply saves the ticked ones (a copy of
+  the database first). "Also try Google's icons" asks Google's icon service for those still
+  small or not found — only when ticked, as it sends the site's name to Google.
+
 ## 0.35.1 — 2026-11-03
 
 - Manage › Categories: the last line of each type's categories, **(no category)**, holds its

@@ -134,6 +134,14 @@ def test_the_site_and_what_is_tried(qapp):
     assert url == "https://shop.example/img/fav.png"
     data, url = fetch("shop.example", get=web({"https://shop.example/favicon.ico": small}))
     assert url.endswith("/favicon.ico")
+    manifest = b'{"icons": [{"src": "/i/192.png", "sizes": "192x192"}, {"src": "/i/48.png", "sizes": "48x48"}]}'
+    data, url = fetch("shop.example", get=web({"https://shop.example/site.webmanifest": manifest,
+                                               "https://shop.example/i/192.png": big,
+                                               "https://shop.example/favicon.ico": small}))
+    assert url == "https://shop.example/i/192.png"  # 0.35.2: the web app manifest's icons
+    data, url = fetch("shop.example", get=web({"https://shop.example/favicon.ico": small,
+                                               "https://www.shop.example/apple-touch-icon.png": big}))
+    assert url == "https://www.shop.example/apple-touch-icon.png"  # nothing sharp: with www. too
     with pytest.raises(LogoError):
         fetch("shop.example", get=web({}))
     with pytest.raises(LogoError):
@@ -199,7 +207,7 @@ def test_right_click_logo_saves_and_takes_away(qapp, shops):
                     lambda menu, where: shown.append([a.text() for a in menu.actions() if a.text()])):
         r = next(i for i in range(m.table.rowCount()) if m.table.item(i, m.COL_NAME).text() == "StreamBox")
         m.table._list_menu(m.table.visualRect(m.table.model().index(r, m.COL_NAME)).center())
-    assert "🖼️  Logo…" in shown[0]
+    assert "✏️  Edit Merchant…" in shown[0]  # name and logo in one window since 0.35.2
     image = png(qapp, 48)
     with mock.patch("daftarche.tabs.manage.LogoDialog",
                     return_value=mock.Mock(exec=mock.Mock(return_value=True), image=image, source="x.png")):
