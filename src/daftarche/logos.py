@@ -248,6 +248,7 @@ class LogoDialog(QDialog):
         note.setProperty("class", "dim-label")
         note.setWordWrap(True)
         layout.addWidget(note)
+        self._note = note
         preview = QHBoxLayout()
         preview.setSpacing(16)
         self.previews = []
@@ -279,6 +280,23 @@ class LogoDialog(QDialog):
         buttons.addWidget(cancel)
         layout.addLayout(buttons)
         self._show()
+
+    def _fit_note(self):
+        """The wrapped note's height for the width it has: a window's minimum counts it as one
+        line, and the preview under it was cut off by the buttons (the name field above it too)."""
+        need = self._note.heightForWidth(max(1, self._note.width()))
+        if need > 0 and need != self._note.minimumHeight():
+            self._note.setMinimumHeight(need)  # the window's minimum height follows
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._fit_note()
+        if self.height() < self.minimumSizeHint().height():
+            self.resize(self.width(), self.minimumSizeHint().height())
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._fit_note()
 
     def _accept(self):
         if self.name_field is not None:

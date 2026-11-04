@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.35.5 — 2026-11-04
+
+- Manage › Categories: the merchants are listed A to Z (they were by how many transactions); a
+  click on a heading sorts by it — Merchant, Tx, R or Total, numbers largest first — and a second
+  click the other way round. The choice is kept; the line of those with no merchant stays last.
+- Edit Merchant: a logo got after the window opened no longer goes under the buttons (the
+  wrapped note above it was counted as one line).
+
 ## 0.35.4 — 2026-11-04
 
 - Manage › Categories: a list is never cut any more (its Total hidden past its edge) after

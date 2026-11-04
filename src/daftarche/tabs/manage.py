@@ -761,6 +761,12 @@ class CatsRulesPanel(QWidget):
         self.merchant_table.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Expanding)  # as wide as its text
         self.merchant_table.cellDoubleClicked.connect(self._merchant_double_clicked)
         self.merchant_table.itemSelectionChanged.connect(self._update_lines)
+        header = self.merchant_table.horizontalHeader()  # a click on a heading sorts by it
+        header.setSectionsClickable(True)
+        header.setSortIndicatorShown(True)
+        header.sectionClicked.connect(self._sort_merchants)
+        col, desc = self._merchant_sort()
+        header.setSortIndicator(col, Qt.DescendingOrder if desc else Qt.AscendingOrder)
         _list_menu(self.merchant_table, self._merchant_menu)
         hint = QLabel("Double-click a merchant for its rules, its numbers for those transactions. "
                       "R: its rules that send money here.")
@@ -1076,7 +1082,8 @@ class CatsRulesPanel(QWidget):
         type_id = kind["id"] if kind and _placeholder(cat_data) else None  # Uncategorized has every type's
         logos = {name.casefold(): image for name, image in self.db.get_logos().items()}
         table.setIconSize(icon_size(table))
-        for m in self.db.get_merchants_in(cat_data["id"], sub_data["id"] if sub_data else None, type_id):
+        for m in self._sorted_merchants(
+                self.db.get_merchants_in(cat_data["id"], sub_data["id"] if sub_data else None, type_id)):
             row = table.rowCount()
             table.insertRow(row)
             none = not m["merchant"]
@@ -1093,6 +1100,33 @@ class CatsRulesPanel(QWidget):
                 if none:
                     item.setForeground(dim)
                 table.setItem(row, col, item)
+
+    MERCHANT_SORT_KEY = "cats_merchant_sort"
+
+    def _merchant_sort(self):
+        """(column, descending) of the merchants' list: by name, A to Z, until a heading is clicked."""
+        saved = get_settings().get(self.MERCHANT_SORT_KEY)
+        if isinstance(saved, (list, tuple)) and len(saved) == 2 and saved[0] in range(4):
+            return int(saved[0]), bool(saved[1])
+        return self.M_NAME, False
+
+    def _sort_merchants(self, col):
+        """A click on a heading: sort by it (names A to Z, numbers largest first); again: the other
+        way round. Kept for next time."""
+        now, desc = self._merchant_sort()
+        desc = (not desc) if col == now else col != self.M_NAME
+        get_settings().set(self.MERCHANT_SORT_KEY, [col, desc])
+        self.merchant_table.horizontalHeader().setSortIndicator(col, Qt.DescendingOrder if desc else Qt.AscendingOrder)
+        self._reload_merchants(self._selected_data(self.cat_table), self._selected_data(self.sub_table))
+
+    def _sorted_merchants(self, merchants):
+        """In the order chosen; the line of those with no merchant always last."""
+        col, desc = self._merchant_sort()
+        key = {self.M_NAME: lambda m: m["merchant"].casefold(), self.M_TX: lambda m: m["count"],
+               self.M_RULES: lambda m: m["rules"], self.M_TOTAL: lambda m: m["total"]}[col]
+        named = sorted((m for m in merchants if m["merchant"]), key=lambda m: m["merchant"].casefold())
+        named.sort(key=key, reverse=desc)  # ties: by name
+        return named + [m for m in merchants if not m["merchant"]]
 
     def _merchant_menu(self):
         """Right-click on a merchant: its rules (Merchants tab) or its transactions here."""
