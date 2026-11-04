@@ -1,4 +1,5 @@
 import html
+from datetime import datetime
 import os
 import shutil
 from pathlib import Path
@@ -107,6 +108,8 @@ class MainWindow(QMainWindow):
         file_menu.addSeparator()
         self.backup_action = add(file_menu, "Back Up Database…", self._save_backup, QKeySequence("Ctrl+S"))
         self.restore_action = add(file_menu, "Restore Backup…", self._restore_backup)  # no shortcut: it replaces data
+        self.revert_action = add(file_menu, "Revert to When Opened…", self._revert_to_opened)
+        self.revert_action.setEnabled(self._opened_copy is not None)
         file_menu.addSeparator()
         add(file_menu, "Show Data Folder", self._show_data_folder)
         file_menu.addSeparator()
@@ -394,6 +397,7 @@ class MainWindow(QMainWindow):
         self.back_action.setEnabled(viewing)
         for action in (self.backup_action, self.restore_action):  # about your own database
             action.setEnabled(not viewing)
+        self.revert_action.setEnabled(not viewing and self._opened_copy is not None)
         self.setAcceptDrops(not viewing)
 
     def _switch_to(self, db):
@@ -451,11 +455,33 @@ class MainWindow(QMainWindow):
         if destination_path:
             copy_db(self.db.conn, destination_path)
 
+    _opened_copy = None  # this start's copy of the data (File › Revert to When Opened)
+    _opened_at = None
+
     def _auto_backup(self):
         try:
-            startup_backup(self.db.conn, extra_dir=self.settings.get("backup_extra_dir"))
+            written = startup_backup(self.db.conn, extra_dir=self.settings.get("backup_extra_dir"))
+            self._opened_copy, self._opened_at = written[1], datetime.now()
         except Exception as exc:  # the app still opens, but the problem stays in sight
             self.statusBar().showMessage(f"⚠️ Automatic backup failed: {exc}")
+        if getattr(self, "revert_action", None) is not None:
+            self.revert_action.setEnabled(self._opened_copy is not None)
+
+    def _revert_to_opened(self):
+        """File › Revert to When Opened: the data as it was when Daftarche started (after asking);
+        what is there now is kept as a copy first, as with Restore."""
+        if self._opened_copy is None or not self._opened_copy.exists():
+            QMessageBox.information(self, "Revert", "There is no copy from when Daftarche was opened.")
+            return
+        when = self._opened_at.strftime("%H:%M") if self._opened_at else "start-up"
+        reply = QMessageBox.question(
+            self, "Revert to When Opened",
+            f"Go back to your data as it was when Daftarche was opened (at {when})?\n\n"
+            "Everything changed since then is undone. What is there now is saved first, "
+            "so this can be undone too (File → Restore Backup…).",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if reply == QMessageBox.Yes:
+            self._replace_data(self._opened_copy)
 
     def _save_backup(self):
         path, _ = QFileDialog.getSaveFileName(
@@ -495,7 +521,10 @@ class MainWindow(QMainWindow):
 
         if reply != QMessageBox.Yes:
             return
+        self._replace_data(path)
 
+    def _replace_data(self, path):
+        """Your data replaced with the copy at ``path`` (Restore, Revert); a copy of it first."""
         self._close_windows()
         try:
             safety = restore_backup(self.db.conn, path)

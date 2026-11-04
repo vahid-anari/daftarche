@@ -381,7 +381,10 @@ In the Loans window, \button{Starting Balance…} sets what was owed before your
         any other by name (\emph{car}, \emph{cake}, \emph{money}) or paste one; when there is none yet,
         one that suits the name is offered; when merchants have logos, they are in a \textbf{Logos} row
         above the emoji, so a category can have a shop's logo as its icon. A sub-category shows only
-        its own icon (its category's is beside it already). Each list has a \textbf{Total}: all its
+        its own icon (its category's is beside it already). Last in the categories,
+        \textbf{(no category)} holds that type's transactions with none yet (To review), and last in the
+        sub-categories \textbf{(no sub-category)} those with a category only; each shows only when
+        something is in it, and is not renamed or deleted. Each list has a \textbf{Total}: all its
         money, red when spent, green when it came in (transfers have none, as money moves both
         ways). On the right, the merchants whose money
         goes there; double-click one to see its rules, or its numbers to see those transactions.
@@ -462,9 +465,12 @@ On a Mac it is \texttt{\small Library/Application Support/Daftarche} in your hom
 
 \subsection{Backups happen by themselves}
 \begin{itemize}
-  \item Every time Daftarche starts, it saves a copy of your data as it was.
-  \item On the first start of each month it also keeps a monthly copy. The last twelve are kept,
-        so you can always go back up to a year.
+  \item Every time Daftarche starts and finds your data changed since the last time, it saves a
+        copy of it as it was (\texttt{backups/sessions}); the last ten are kept. Starting it again
+        without changing anything adds none, so a few restarts push no older copy out.
+  \item On the first start of each day it keeps a daily copy (\texttt{backups/daily}, the last
+        fourteen days), and on the first start of each month a monthly one (\texttt{backups/monthly},
+        the last twelve), so you can always go back up to a year.
   \item In \menu{Settings}, \textbf{Extra backup folder} copies the monthly backups to a second place
         too, such as iCloud Drive or an external disk. If your Mac uses Time Machine, the data folder is
         backed up with everything else.
@@ -480,7 +486,9 @@ the updated file, but it can open that copy; when it is started, it says so and 
 \menu{File \then Open Database…} shows a backup \emph{without changing anything}: a bar on top reminds you
 that you are looking at a copy, and \menu{Back to My Database} returns to your own data.
 \menu{File \then Restore Backup…} really replaces your data with a backup. Daftarche checks the
-file first and keeps a copy of your current data, just in case.
+file first and keeps a copy of your current data, just in case. Changed several things by mistake?
+\menu{File \then Revert to When Opened…} asks first, then puts your data back as it was when
+Daftarche started (all the changes since then are undone, and kept in a copy too).
 
 \begin{careful}[Moving to a new computer]
 Quit Daftarche, copy the whole data folder to the same place on the new computer, install Daftarche

@@ -56,6 +56,20 @@ def kind_sign(type_name):
     return 1 if "Expense" in type_name else -1 if "Income" in type_name else 0
 
 
+NO_CATEGORY = "(no category)"
+NO_SUB = "(no sub-category)"
+
+
+def _placeholder(data):
+    """The line of a list that holds what has none ("(no category)", "(no sub-category)"): not a
+    real category or sub-category, so it is not renamed, moved or deleted."""
+    return isinstance(data, dict) and bool(data.get("placeholder"))
+
+
+def _shown_name(data):
+    return data["label"] if _placeholder(data) else data["name"]
+
+
 def _total_item(total, type_name):
     """A Total in the lists of Categories: red spent, green money in, 0 dim; for a transfer "—"
     (money moved both ways: a sum would say nothing)."""
@@ -898,6 +912,23 @@ class CatsRulesPanel(QWidget):
             item = _total_item(totals.get(c["id"], 0), kind)
             item.setData(Qt.UserRole, c)
             self.cat_table.setItem(row, 3, item)
+        none = self.db.no_category(type_id) if type_id else None
+        if none and (none["count"] or none["rules"]):  # what has no category yet (To review), last
+            data = {**dict(none["category"]), "placeholder": True, "label": NO_CATEGORY}
+            row = self.cat_table.rowCount()
+            self.cat_table.insertRow(row)
+            items = [QTableWidgetItem(NO_CATEGORY), _number_item(none["count"]), QTableWidgetItem(""),
+                     _total_item(none["total"], kind)]
+            items[0].setForeground(_dim())
+            items[0].setToolTip("Transactions of this type with no category yet (To review): select it to see them, "
+                                "right-click them below to give them one")
+            if any(x["icon"] for x in cats):
+                items[0].setIcon(blank_icon())
+            for col, item in enumerate(items):
+                item.setData(Qt.UserRole, data)
+                if col in (1, 2):
+                    item.setTextAlignment(Qt.AlignCenter)
+                self.cat_table.setItem(row, col, item)
 
         self.cat_table.blockSignals(False)
         self._restore_selection(self.cat_table, sel_cat, key="id")
@@ -910,7 +941,12 @@ class CatsRulesPanel(QWidget):
         self.sub_table.blockSignals(True)
         self.sub_table.setRowCount(0)
 
-        subs = self.db.get_subcategories(cat_id) if cat_id else []
+        from daftarche.db import UNCATEGORIZED_SUB
+        cat = self._selected_data(self.cat_table)
+        subs = self.db.get_subcategories(cat_id) if cat_id and not _placeholder(cat) else []
+        # its "Uncategorized" (a category chosen, no sub-category): "(no sub-category)", last, and
+        # only when something is in it (an empty one is made again when needed)
+        subs = sorted(subs, key=lambda x: x["name"] == UNCATEGORIZED_SUB)
         kind = self._selected_data(self.type_table)
         kind = kind["name"] if kind else ""
         totals = self.db.line_totals("subcategory_id") if subs else {}
@@ -918,19 +954,26 @@ class CatsRulesPanel(QWidget):
             tx = self.db.get_transaction_count_for_subcategory(s["id"])
             merchants = self.db.get_merchant_count_for_subcategory(s["id"])
             rules = self.db.get_rule_count_for_subcategory(s["id"])
+            none = s["name"] == UNCATEGORIZED_SUB
+            if none and not tx and not rules:
+                continue
+            data = {**dict(s), "placeholder": True, "label": NO_SUB} if none else s
 
             row = self.sub_table.rowCount()
             self.sub_table.insertRow(row)
-            for col, val in enumerate([s["name"], str(tx), str(merchants), str(rules)]):
+            for col, val in enumerate([NO_SUB if none else s["name"], str(tx), str(merchants), str(rules)]):
                 item = QTableWidgetItem(val) if col == 0 else _number_item(int(val))
-                item.setData(Qt.UserRole, s)
+                item.setData(Qt.UserRole, data)
                 if col > 0:
                     item.setTextAlignment(Qt.AlignCenter)
                 elif s["icon"] or any(x["icon"] for x in subs):  # its own; none: a space, in line
                     item.setIcon(emoji_icon(s["icon"]) if s["icon"] else blank_icon())
+                if col == 0 and none:
+                    item.setForeground(_dim())
+                    item.setToolTip("Transactions with this category and no sub-category: nothing is missing")
                 self.sub_table.setItem(row, col, item)
             item = _total_item(totals.get(s["id"], 0), kind)
-            item.setData(Qt.UserRole, s)
+            item.setData(Qt.UserRole, data)
             self.sub_table.setItem(row, 4, item)
 
         self.sub_table.blockSignals(False)
@@ -975,7 +1018,7 @@ class CatsRulesPanel(QWidget):
             self.lines.clear()
             return
         kind = self._selected_data(self.type_table)
-        where = f"{cat['name']} › {sub['name']}" if sub else cat["name"]
+        where = f"{_shown_name(cat)} › {_shown_name(sub)}" if sub else _shown_name(cat)
         who = (m["merchant"] or NO_MERCHANT) + " in " if m else ""
         filters = {"type": [kind["name"]] if kind else [], "category": [cat["name"]],
                    "subcategory": [sub["name"]] if sub else [], "merchant": [m["merchant"]] if m else []}
@@ -990,14 +1033,15 @@ class CatsRulesPanel(QWidget):
             self.merchant_title.setText("Merchants")
             return
         where = sub_data or cat_data
-        self.merchant_title.setText(f"Merchants in {where['name']}" +
-                                    ("" if sub_data else "  (all its sub-categories)"))
+        self.merchant_title.setText(f"Merchants in {_shown_name(where)}" +
+                                    ("" if sub_data or _placeholder(cat_data) else "  (all its sub-categories)"))
         dim = QBrush(QColor(get_settings().get("text_dim") or "#999"))
         kind = self._selected_data(self.type_table)
         sign = kind_sign(kind["name"] if kind else "")
+        type_id = kind["id"] if kind and _placeholder(cat_data) else None  # Uncategorized has every type's
         logos = {name.casefold(): image for name, image in self.db.get_logos().items()}
         table.setIconSize(icon_size(table))
-        for m in self.db.get_merchants_in(cat_data["id"], sub_data["id"] if sub_data else None):
+        for m in self.db.get_merchants_in(cat_data["id"], sub_data["id"] if sub_data else None, type_id):
             row = table.rowCount()
             table.insertRow(row)
             none = not m["merchant"]
@@ -1161,11 +1205,21 @@ class CatsRulesPanel(QWidget):
         self.on_change()
         self._select_by_name(self.cat_table, dlg.name)
 
+    def _not_a_real_one(self, data, what):
+        """True (and says so) for the "(no category)" / "(no sub-category)" line."""
+        if not _placeholder(data):
+            return False
+        QMessageBox.information(self, what, f"{_shown_name(data)} holds the transactions that have none: it is "
+                                "not one to change. Give them one: select them below, right-click.")
+        return True
+
     def _rename_cat(self):
         """✏️: the category's name and icon, in one window (Transfer › Loans keeps its name)."""
         data = self._selected_data(self.cat_table)
         if not data:
             QMessageBox.information(self, "Select", "Select a category first.")
+            return
+        if self._not_a_real_one(data, "Category"):
             return
         from daftarche.db import CAT_LOANS
         loans = self.db.loans_category()
@@ -1197,6 +1251,8 @@ class CatsRulesPanel(QWidget):
         if not data:
             QMessageBox.information(self, "Select", "Select a category first.")
             return
+        if self._not_a_real_one(data, "Category"):
+            return
         count = self.db.get_transaction_count_for_category(data["id"])
         msg = f"Delete category '{data['name']}'?"
         if count:
@@ -1211,6 +1267,8 @@ class CatsRulesPanel(QWidget):
         cat_data = self._selected_data(self.cat_table)
         if not cat_data:
             QMessageBox.information(self, "Select", "Select a category first.")
+            return
+        if self._not_a_real_one(cat_data, "Sub-Category"):
             return
         dlg = IconPickerDialog("", f"New sub-category of <b>{html.escape(cat_data['name'])}</b>",
                                self._sub_icon_hint(cat_data), self, name="",
@@ -1243,6 +1301,8 @@ class CatsRulesPanel(QWidget):
         if not data:
             QMessageBox.information(self, "Select", "Select a sub-category first.")
             return
+        if self._not_a_real_one(data, "Sub-Category"):
+            return
         cat = self._selected_data(self.cat_table)
         dlg = IconPickerDialog(data["icon"], "Sub-category", self._sub_icon_hint(cat), self, name=data["name"],
                                suggest=self._sub_suggestion(cat), title="Edit Sub-Category",
@@ -1267,6 +1327,9 @@ class CatsRulesPanel(QWidget):
         selected_subs = self._selected_multi_data(self.sub_table)
         if not selected_subs:
             QMessageBox.information(self, "Select", "Select one or more sub-categories first.")
+            return
+        if any(_placeholder(x) for x in selected_subs) and self._not_a_real_one(
+                next(x for x in selected_subs if _placeholder(x)), "Sub-Category"):
             return
 
         type_data = self._selected_data(self.type_table)
@@ -1300,6 +1363,8 @@ class CatsRulesPanel(QWidget):
         data = self._selected_data(self.sub_table)
         if not data:
             QMessageBox.information(self, "Select", "Select a sub-category first.")
+            return
+        if self._not_a_real_one(data, "Sub-Category"):
             return
         count = self.db.get_transaction_count_for_subcategory(data["id"])
         msg = f"Delete '{data['name']}'?"

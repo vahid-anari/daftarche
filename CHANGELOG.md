@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.35.1 — 2026-11-03
+
+- Manage › Categories: the last line of each type's categories, **(no category)**, holds its
+  transactions with no category yet (To review: Uncategorized belongs to no type, so it was in
+  no list), with how many and their total; select it to see their merchants and the
+  transactions, and give them a category there.
+- A category's "Uncategorized" sub-category is shown as **(no sub-category)**, last, and only
+  when transactions or rules are in it (an empty one is made again when needed).
+- Neither line is renamed, moved or deleted: they say why instead.
+- Backups, each kind in its own folder: **backups/sessions** — a copy at each start that finds
+  the data changed since the last one, the last ten kept (starting again with nothing changed,
+  a test or a restart after an update, adds none and pushes none out); **backups/daily** — the
+  first start of each day, the last fourteen; **backups/monthly** — as before, the last twelve
+  (older monthly copies are moved in). `daftarche-last.db` stays.
+- **File › Revert to When Opened…**: after asking, your data as it was when Daftarche started;
+  what is there now is kept in a copy first, as with Restore.
+
 ## 0.35.0 — 2026-11-03
 
 - **Balance Check** (View › Balance Check…, or a click on the Dashboard's Total Balance): the

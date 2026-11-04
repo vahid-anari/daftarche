@@ -2061,21 +2061,26 @@ class Database:
             ORDER BY l.date DESC, l.id DESC, l.part""", params)
         return [dict(r) for r in rows]
 
-    def get_merchants_in(self, category_id, subcategory_id=None):
+    def get_merchants_in(self, category_id, subcategory_id=None, type_id=None):
         """The merchants of a sub-category (or a whole category), all time, split parts in their
         own category with their own amount: [{merchant ("" for none), count, total, rules}]
         (rules: how many of the merchant's rules send money here). Most transactions first;
-        merchants that only have a rule here come with count 0; no merchant last."""
+        merchants that only have a rule here come with count 0; no merchant last. ``type_id``:
+        only that type's (Uncategorized belongs to no type: its income and expenses apart)."""
         where, key = ("subcategory_id = ?", subcategory_id) if subcategory_id else ("category_id = ?", category_id)
+        params = (key,)
+        if type_id is not None:
+            where += " AND type_id = ?"
+            params = (key, type_id)
         out = {}
         for r in self.conn.execute(f"""
                 SELECT IFNULL(TRIM(merchant), '') AS merchant, COUNT(DISTINCT id) AS n, SUM(amount) AS total
-                FROM tx_lines WHERE {where} GROUP BY IFNULL(TRIM(merchant), '')""", (key,)):
+                FROM tx_lines WHERE {where} GROUP BY IFNULL(TRIM(merchant), '')""", params):
             out[r["merchant"]] = {"merchant": r["merchant"], "count": r["n"], "total": round2(r["total"] or 0),
                                   "rules": 0}
         for r in self.conn.execute(f"""
                 SELECT IFNULL(TRIM(merchant), '') AS merchant, COUNT(*) AS n FROM import_mappings
-                WHERE {where} GROUP BY IFNULL(TRIM(merchant), '')""", (key,)):
+                WHERE {where} GROUP BY IFNULL(TRIM(merchant), '')""", params):
             out.setdefault(r["merchant"], {"merchant": r["merchant"], "count": 0, "total": 0.0, "rules": 0})
             out[r["merchant"]]["rules"] = r["n"]
         return sorted(out.values(), key=lambda m: (m["merchant"] == "", -m["count"], m["merchant"].casefold()))
@@ -3028,6 +3033,19 @@ class Database:
                                           JOIN subcategories s ON m.subcategory_id = s.id
                                  WHERE s.category_id = ?
                                  """, (category_id,)).fetchone()[0]
+
+    def no_category(self, type_id):
+        """A type's transactions with no category (Uncategorized, which belongs to no type):
+        {category: that row, count, total, rules}, each part of a split one in its own."""
+        cat = self.conn.execute("SELECT * FROM categories WHERE name=? AND type_id IS NULL",
+                                (UNCATEGORIZED_CAT,)).fetchone()
+        if cat is None:
+            return None
+        n, total = self.conn.execute("SELECT COUNT(DISTINCT id), SUM(amount) FROM tx_lines "
+                                     "WHERE category_id=? AND type_id=?", (cat["id"], type_id)).fetchone()
+        rules = self.conn.execute("SELECT COUNT(*) FROM import_mappings WHERE category_id=? AND type_id=?",
+                                  (cat["id"], type_id)).fetchone()[0]
+        return {"category": cat, "count": n or 0, "total": round2(total or 0), "rules": rules}
 
     def get_subcategory_count_for_category(self, category_id):
         return self.conn.execute(
