@@ -1617,9 +1617,12 @@ class TransactionDialog(QDialog):
         account_names = [a["name"] for a in self.db.get_accounts()]
         self.f_account = SingleSelectCombo()
         self.f_account.setEditable(True)
+        # an empty line too: a transfer from outside your accounts has no From side (an income or
+        # an expense still needs one: _save says so)
         self._fill_account_combo(self.f_account, account_names,
-                                 self.row["account"] if self.row else None,
-                                 blank=bool(self.row) and not self.row["account"])
+                                 self.row["account"] if self.row else None, blank=True)
+        if not self.row and account_names:
+            self.f_account.setCurrentIndex(1)  # a new one: the first account, as before
         self.f_account.setMaxVisibleItems(15)
 
         # Transfer › Loans: one account, and which way the money went
@@ -1880,6 +1883,8 @@ class TransactionDialog(QDialog):
                     to_acc = None
             elif not account and not to_acc:
                 raise ValueError("choose an account")
+            elif not account and "Transfer" not in type_name:
+                raise ValueError("choose the account (only a transfer from outside has none)")
             if self._parts and "Transfer" in type_name:
                 raise ValueError("a transfer is not split: Join Again in Change Split… first")
             if self._parts and not self._parts_changed and self.row and type_name != self.row["type"]:

@@ -6,6 +6,7 @@ from PySide6.QtWidgets import (
     QHeaderView, QAbstractItemView, QMessageBox, QInputDialog,
     QColorDialog, QCheckBox, QFormLayout, QLineEdit,
     QDialogButtonBox, QFrame, QSizePolicy, QAbstractScrollArea, QRadioButton, QButtonGroup, QSplitter, QMenu,
+    QScrollArea,
 )
 from PySide6.QtCore import QByteArray, QItemSelectionModel, QSize, Qt
 from PySide6.QtGui import QBrush, QColor, QFont, QFontMetrics, QPalette
@@ -761,7 +762,16 @@ class CatsRulesPanel(QWidget):
         m_w.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         lists_row.addWidget(m_w, 1)
         self._lists = lists
-        top = lists
+        # a narrow window: the row of lists scrolls sideways as one (each list only up and down)
+        across = QScrollArea()
+        across.setFrameShape(QFrame.NoFrame)
+        across.setWidgetResizable(True)
+        across.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        across.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        across.setWidget(lists)
+        top = QWidget()
+        top_col = QVBoxLayout(top)
+        top_col.addWidget(across)
         # the transactions under all the lists, across the whole width; the line between them drags
         self.lines = TransactionList(self.db, self.on_change)
         self.lines.btn_all.clicked.connect(self.merchant_table.clearSelection)
@@ -998,7 +1008,8 @@ class CatsRulesPanel(QWidget):
             table.setMinimumWidth(table.sizeHint().width())  # never narrower than its text: no side scrolling
         self._lists.layout().invalidate()
         self._lists.layout().activate()
-        self._lists.setMinimumWidth(self._lists.layout().minimumSize().width())  # the window keeps room for them
+        # never narrower than the lists together: in a narrower window the row scrolls sideways
+        self._lists.setMinimumWidth(self._lists.layout().minimumSize().width())
         self._update_lines()
 
     # ── the transactions under the merchants ─────────────────────────────────

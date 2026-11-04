@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.35.3 — 2026-11-04
+
+- The edit window's Account has an empty line, so an income (money that came from outside, such
+  as starting money) can be made a transfer from outside: Type Transfer, Account empty, To
+  Account the one it came into. An income or expense still needs its account.
+- Manage › Categories: in a window narrower than the four lists, their row scrolls sideways as
+  one (each list keeps the width of its text and scrolls only up and down), so Manage can be
+  made narrower on a laptop.
+
 ## 0.35.2 — 2026-11-03
 
 - Manage › Merchants: **Edit Merchant** — a merchant's name and logo in one window (double-click
