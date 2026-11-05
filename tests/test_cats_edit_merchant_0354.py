@@ -33,7 +33,7 @@ def test_edit_merchant_from_categories(qapp, db):
     p.merchant_table.selectRow(names.index("Second cup"))
     menu = p._merchant_menu()
     assert menu[0][0] == "✏️  Edit Merchant…"
-    dlg = mock.Mock(exec=mock.Mock(return_value=True), image=None, logo_changed=False, source="")
+    dlg = mock.Mock(exec=mock.Mock(return_value=True), image=None, logo_changed=False, source="", person=False)
     dlg.name = "Second Cup"
     with mock.patch("daftarche.tabs.manage.LogoDialog", return_value=dlg) as window:
         menu[0][1]()

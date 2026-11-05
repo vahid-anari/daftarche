@@ -4,7 +4,7 @@ wrapped note keeps its height, so the preview is never under the buttons."""
 
 import pytest
 
-from conftest import keep
+from conftest import keep, wait_logo
 
 
 @pytest.fixture(scope="module")
@@ -64,6 +64,7 @@ def test_edit_merchant_preview_not_under_the_buttons(qapp):
             qapp.processEvents()
         d.site.setText("ontario.ca")
         d._get()
+        wait_logo(d)
         for _ in range(5):
             qapp.processEvents()
         assert d.previews[0][0].geometry().bottom() < d.btn_none.geometry().top()

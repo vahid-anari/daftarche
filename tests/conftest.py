@@ -80,3 +80,16 @@ def _tidy_qt_at_the_end():
     QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
     import gc
     gc.collect()
+
+
+def wait_logo(dialog, seconds=5):
+    """Get Logo works in the background (0.35.6): wait until the logo window has it."""
+    import time
+
+    from PySide6.QtWidgets import QApplication
+    end = time.monotonic() + seconds
+    while dialog.busy() and time.monotonic() < end:
+        QApplication.processEvents()
+        time.sleep(0.01)
+    dialog._collect()
+    assert not dialog.busy()

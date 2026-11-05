@@ -25,6 +25,8 @@ SUB_UNMATCHED = "⚠️ Unmatched"
 
 LOGO_PREFIX = "logo:"
 """A category's icon that is a merchant's logo: "logo:" and the merchant's name."""
+PICTURE_PREFIX = "pic:"
+"""A category's icon that is a picture of its own (no merchant's): "pic:" and its id in category_pictures."""
 
 
 def clean_icon(text):
@@ -35,6 +37,11 @@ def clean_icon(text):
         if not name:
             raise ValueError("Which merchant's logo?")
         return LOGO_PREFIX + name
+    if (text or "").startswith(PICTURE_PREFIX):  # a picture added in the icon window
+        number = text[len(PICTURE_PREFIX):].strip()
+        if not number.isdigit():
+            raise ValueError("Which picture?")
+        return PICTURE_PREFIX + number
     text = "".join((text or "").split())
     if not text:
         return ""
@@ -108,8 +115,9 @@ def _date_str_to_parts(date_str):
         return None, None, None
 
 
-SCHEMA_VERSION = 8  # 2: note; 3: merchant; 4: split transactions; 5: loans; 6: category and sub-category icons;
-#                    7: a rule for several accounts (table rule_accounts); 8: merchants' logos (merchant_logos)
+SCHEMA_VERSION = 9  # 2: note; 3: merchant; 4: split transactions; 5: loans; 6: category and sub-category icons;
+#                    7: a rule for several accounts (table rule_accounts); 8: merchants' logos (merchant_logos);
+#                    9: merchants that are people (merchant_people), categories' own pictures (category_pictures)
 """Database layout version, stored in the file (PRAGMA user_version). Raise it whenever
 _migrate learns something new, so an older Daftarche refuses a database it cannot read."""
 
@@ -664,6 +672,12 @@ class Database:
                          merchant TEXT PRIMARY KEY COLLATE NOCASE,
                          image    BLOB NOT NULL,
                          source   TEXT)""")  # layout 8: a PNG of at most 128 px, and where it came from
+        c.execute("""CREATE TABLE IF NOT EXISTS merchant_people (
+                         merchant TEXT PRIMARY KEY COLLATE NOCASE)""")  # layout 9: 👤 instead of a logo
+        c.execute("""CREATE TABLE IF NOT EXISTS category_pictures (
+                         id    INTEGER PRIMARY KEY,
+                         name  TEXT,
+                         image BLOB NOT NULL)""")  # layout 9: a category's icon that is no merchant's logo
         self._dedupe_rules()
         c.commit()
         self._seed_uncategorized()
@@ -2164,7 +2178,24 @@ class Database:
         elif old_loan:
             self.conn.execute("UPDATE loans SET merchant=? WHERE merchant=?", (target, old))
         self._move_logo(old, target)
+        self._move_person(old, target)
         return target
+
+    def _person_rows(self, merchant):
+        """The rowids of a merchant's line in merchant_people, any letter case (NOCASE is ASCII only:
+        "Café" and "CAFÉ" are the same merchant here)."""
+        key = (merchant or "").strip().casefold()
+        return [r[0] for r in self.conn.execute("SELECT rowid, merchant FROM merchant_people")
+                if r[1].casefold() == key]
+
+    def _move_person(self, old, new):
+        """A renamed merchant stays a person; merged, the one it becomes is a person if either was."""
+        rows = self._person_rows(old)
+        if rows and old.casefold() != new.casefold():
+            self.conn.executemany("DELETE FROM merchant_people WHERE rowid = ?", [(r,) for r in rows])
+        if rows:
+            self.conn.execute("INSERT OR IGNORE INTO merchant_people (merchant) VALUES (?)", (new,))
+        self._cache.pop("people", None)
 
     def _move_logo(self, old, new):
         """A renamed merchant keeps its logo (merged into one that has a logo: that one stays), and
@@ -2193,7 +2224,75 @@ class Database:
             self.conn.execute(f"UPDATE {table} SET merchant=NULL WHERE merchant=?", (name,))
         self.conn.execute("DELETE FROM loans WHERE merchant=?", (name,))
         self.remove_logo(name)
+        self.set_person(name, False)
         return gone
+
+    # ── categories' own pictures (icons that are no merchant's logo) ──────────
+    def get_pictures(self):
+        """{id: (name, PNG bytes)}, the oldest first. Kept until the next change."""
+        cached = self._cache.get("pictures")
+        if cached and cached[0] == self._data_version:
+            return cached[1]
+        pictures = {r["id"]: (r["name"] or "", bytes(r["image"]))
+                    for r in self.conn.execute("SELECT id, name, image FROM category_pictures ORDER BY id")}
+        self._cache["pictures"] = (self._data_version, pictures)
+        return pictures
+
+    def picture(self, picture_id):
+        """The PNG of a picture, or None."""
+        row = self.conn.execute("SELECT image FROM category_pictures WHERE id = ?", (picture_id,)).fetchone()
+        return bytes(row["image"]) if row else None
+
+    @atomic
+    def add_picture(self, name, image):
+        """A picture to use as icons (PNG bytes, logos.normalise made them); returns its id."""
+        if not image:
+            raise ValueError("No picture.")
+        cur = self.conn.execute("INSERT INTO category_pictures (name, image) VALUES (?, ?)", (name or "", image))
+        self._cache.pop("pictures", None)
+        return cur.lastrowid
+
+    def picture_uses(self, picture_id):
+        """How many categories and sub-categories have the picture as their icon."""
+        icon = f"{PICTURE_PREFIX}{picture_id}"
+        return sum(self.conn.execute(f"SELECT COUNT(*) FROM {t} WHERE icon = ?", (icon,)).fetchone()[0]
+                   for t in ("categories", "subcategories"))
+
+    @atomic
+    def delete_picture(self, picture_id):
+        """The picture gone; the categories that had it as their icon have none."""
+        self.conn.execute("DELETE FROM category_pictures WHERE id = ?", (picture_id,))
+        for table in ("categories", "subcategories"):
+            self.conn.execute(f"UPDATE {table} SET icon = NULL WHERE icon = ?", (f"{PICTURE_PREFIX}{picture_id}",))
+        self._cache.pop("pictures", None)
+
+    # ── merchants that are people ─────────────────────────────────────────────
+    def get_people(self):
+        """The merchants that are people, as their names in lower case (casefold): 👤 beside them
+        where a logo would be. Kept until the next change."""
+        cached = self._cache.get("people")
+        if cached and cached[0] == self._data_version:
+            return cached[1]
+        people = {r["merchant"].casefold() for r in self.conn.execute("SELECT merchant FROM merchant_people")}
+        self._cache["people"] = (self._data_version, people)
+        return people
+
+    def is_person(self, merchant):
+        return (merchant or "").strip().casefold() in self.get_people()
+
+    @atomic
+    def set_person(self, merchant, person=True):
+        """Mark a merchant as a person (or a shop again)."""
+        merchant = (merchant or "").strip()
+        if not merchant:
+            raise ValueError("A merchant needs a name.")
+        if person:
+            if not self._person_rows(merchant):
+                self.conn.execute("INSERT OR IGNORE INTO merchant_people (merchant) VALUES (?)", (merchant,))
+        else:
+            self.conn.executemany("DELETE FROM merchant_people WHERE rowid = ?",
+                                  [(r,) for r in self._person_rows(merchant)])
+        self._cache.pop("people", None)  # also inside a transaction, before it is committed
 
     # ── merchants' logos ──────────────────────────────────────────────────────
     def get_logos(self):

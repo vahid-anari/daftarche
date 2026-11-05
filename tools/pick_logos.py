@@ -61,7 +61,7 @@ def read_sites(path):
 class PickLogos(QDialog):
     def __init__(self, db, rows, fetch=None, workers=8, google=None):
         super().__init__()
-        from daftarche.logos import fetch as fetch_logo, icon_size
+        from daftarche.logos import fetch_within as fetch_logo, icon_size
         self.setWindowTitle("Pick Logos")
         self.db = db
         self._fetch = fetch or fetch_logo

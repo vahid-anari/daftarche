@@ -5,7 +5,7 @@ from unittest import mock
 
 import pytest
 
-from conftest import keep
+from conftest import keep, wait_logo
 
 
 @pytest.fixture(scope="module")
@@ -93,9 +93,9 @@ def test_an_older_database_gets_the_table_and_a_copy(tmp_path):
     conn.commit()
     conn.close()
     db = Database(path)
-    assert SCHEMA_VERSION == 8 and db.conn.execute("PRAGMA user_version").fetchone()[0] == 8
+    assert db.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION >= 8
     assert db.get_logos() == {}
-    assert (tmp_path / "old-before-layout-8.db").exists()
+    assert (tmp_path / f"old-before-layout-{SCHEMA_VERSION}.db").exists()
 
 
 def test_the_phone_gets_no_logo(qapp, shops):
@@ -157,6 +157,7 @@ def test_the_logo_window(qapp, tmp_path):
     assert d.image is None and d.btn_none.isEnabled() is False
     d.site.setText("maple.example")
     d._get()
+    wait_logo(d)
     assert d.image == fetched and d.source.startswith("https://maple.example")
     assert not d.previews[0][0].pixmap().isNull()
     d.use_file(str(picture))

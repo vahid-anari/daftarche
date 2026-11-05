@@ -127,6 +127,8 @@ class CategoryDialog(QDialog):
 
         self.f_merchant = _typing_combo()
         self.f_merchant.addItems(self.db.get_merchants())
+        from daftarche.icons import set_merchant_icons
+        set_merchant_icons(self.f_merchant, self.db)
         self.f_merchant.setCurrentText(self._preset_merchant)
         self.f_merchant.lineEdit().setPlaceholderText(
             "Several merchants: leave empty to keep each one's" if self._merchant_mixed
@@ -539,6 +541,8 @@ class MerchantDialog(QDialog):
         row = QHBoxLayout()
         self.f_merchant = _typing_combo()
         self.f_merchant.addItems(db.get_merchants())
+        from daftarche.icons import set_merchant_icons
+        set_merchant_icons(self.f_merchant, db)
         self.f_merchant.setCurrentText(names[0] if len(shared) == 1 else "")
         self.f_merchant.lineEdit().setPlaceholderText(
             "Several now: write one for all" if len(shared) > 1 else "The shop or person (e.g. Amazon, Vahid)")

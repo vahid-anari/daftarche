@@ -116,18 +116,13 @@ def amount_color_key(type_name, amount):
 def add_subcategory_items(combo, db, category_id):
     """A category's sub-categories into ``combo``, with "Uncategorized" first: picking only the
     category is enough, and the sub-category can be set later."""
-    from daftarche.icons import blank_icon, emoji_icon
+    from daftarche.icons import blank_icon, emoji_icon, list_icons
     names = [s["name"] for s in db.get_subcategories(category_id)]
-    start = combo.count()
     combo.addItem(UNCATEGORIZED_SUB)
     combo.addItems([n for n in names if n != UNCATEGORIZED_SUB])
     icons = {n: icon for (cid, n), icon in db.get_icons()["sub_name"].items() if cid == category_id}
-    for i in range(start, combo.count()):
-        icon = icons.get(combo.itemText(i))
-        if icon:
-            combo.setItemIcon(i, emoji_icon(icon))
-        elif icons:
-            combo.setItemIcon(i, blank_icon())  # in line with those that have one
+    # its own icon; a space for one without (in line with those that have one)
+    list_icons(combo, lambda n: (emoji_icon(icons[n]) if n in icons else blank_icon()) if icons else None)
 
 
 def _same_name(names, typed):
@@ -365,13 +360,19 @@ class CheckComboBox(QToolButton):
         _repolish(self)
         _repolish(self._popup)
 
+    icon_for = None  # () → (text → QIcon or None): the icons beside the items (a category's, a logo)
+
     def populate(self, items, keep_selection=True):
         old = set(self._checked) if keep_selection else set()
         self._items = list(items)
         self._list.blockSignals(True)
         self._list.clear()
+        icon_for = self.icon_for() if self.icon_for else None
         for text in self._items:
             li = QListWidgetItem(text)
+            icon = icon_for(text) if icon_for else None
+            if icon is not None:
+                li.setIcon(icon)
             li.setFlags(li.flags() | Qt.ItemIsUserCheckable)
             li.setCheckState(Qt.Checked if text in old else Qt.Unchecked)
             self._list.addItem(li)

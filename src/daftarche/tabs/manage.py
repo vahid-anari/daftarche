@@ -13,8 +13,8 @@ from PySide6.QtGui import QBrush, QColor, QFont, QFontMetrics, QPalette
 
 from daftarche.style import get_settings
 from daftarche.widgets import AccountsCombo, SingleSelectCombo, accounts_label
-from daftarche.icons import IconPickerDialog, blank_icon, emoji_icon, suggest_icon
-from daftarche.logos import LogoDialog, icon_size, logo_icon
+from daftarche.icons import IconPickerDialog, blank_icon, emoji_icon, merchant_icon, suggest_icon
+from daftarche.logos import LogoDialog, icon_size
 from daftarche.tx_list import SHOW_KEY, TransactionList
 from daftarche.past_categories import category_label, entry_icon
 
@@ -1081,6 +1081,7 @@ class CatsRulesPanel(QWidget):
         sign = kind_sign(kind["name"] if kind else "")
         type_id = kind["id"] if kind and _placeholder(cat_data) else None  # Uncategorized has every type's
         logos = {name.casefold(): image for name, image in self.db.get_logos().items()}
+        people = self.db.get_people()
         table.setIconSize(icon_size(table))
         for m in self._sorted_merchants(
                 self.db.get_merchants_in(cat_data["id"], sub_data["id"] if sub_data else None, type_id)):
@@ -1092,9 +1093,9 @@ class CatsRulesPanel(QWidget):
                      _number_item(m["count"], align=right), _number_item(m["rules"], align=right),
                      _number_item(m["total"], money(m["total"]), align=right)]
             items[-1].setForeground(spent_brush(sign * m["total"]))  # spent red, money in green
-            if logos:
-                image = logos.get(m["merchant"].casefold()) if m["merchant"] else None
-                items[0].setIcon(logo_icon(image) if image else blank_icon())
+            if logos or people:
+                key = m["merchant"].casefold()
+                items[0].setIcon(merchant_icon(logos.get(key) if key else None, bool(key) and key in people))
             for col, item in enumerate(items):
                 item.setData(Qt.UserRole, m)
                 if none:
@@ -1276,7 +1277,7 @@ class CatsRulesPanel(QWidget):
             return
         dlg = IconPickerDialog("", f"New category under <b>{html.escape(type_data['name'])}</b>",
                                "Shown beside its name in the lists and the transactions.", self,
-                               name="", suggest=suggest_icon, title="Add Category", logos=self.db.get_logos())
+                               name="", suggest=suggest_icon, title="Add Category", db=self.db)
         if not dlg.exec():
             return
         if not self.db.add_category(dlg.name, type_data["name"]):
@@ -1310,7 +1311,7 @@ class CatsRulesPanel(QWidget):
         dlg = IconPickerDialog(data["icon"], "Category", "Shown beside its name in the lists and the transactions."
                                + (" The Loans window reads this name: it is kept." if locked else ""), self,
                                name=data["name"], suggest=suggest_icon, name_locked=locked, title="Edit Category",
-                               logos=self.db.get_logos())
+                               db=self.db)
         if not dlg.exec():
             return
         cat_id = data["id"]
@@ -1356,7 +1357,7 @@ class CatsRulesPanel(QWidget):
         dlg = IconPickerDialog("", f"New sub-category of <b>{html.escape(cat_data['name'])}</b>",
                                self._sub_icon_hint(cat_data), self, name="",
                                suggest=self._sub_suggestion(cat_data), title="Add Sub-Category",
-                               logos=self.db.get_logos())
+                               db=self.db)
         if not dlg.exec():
             return
         if not self.db.add_subcategory(dlg.name, cat_data["id"]):
@@ -1389,7 +1390,7 @@ class CatsRulesPanel(QWidget):
         cat = self._selected_data(self.cat_table)
         dlg = IconPickerDialog(data["icon"], "Sub-category", self._sub_icon_hint(cat), self, name=data["name"],
                                suggest=self._sub_suggestion(cat), title="Edit Sub-Category",
-                               logos=self.db.get_logos())
+                               db=self.db)
         if not dlg.exec():
             return
         sub_id = data["id"]
@@ -1493,6 +1494,8 @@ class RuleEditDialog(QDialog):
         self.f_merchant = SingleSelectCombo()
         self.f_merchant.allow_typing("Pick a merchant, or type a new one")
         self.f_merchant.addItems(db.get_merchants())
+        from daftarche.icons import set_merchant_icons
+        set_merchant_icons(self.f_merchant, db)
         self.f_merchant.setCurrentText((existing or {}).get("merchant") or merchant or "")
         self.f_merchant.lineEdit().setPlaceholderText("The shop or person it sets (e.g. Amazon)")
         form.addRow("Merchant:", self.f_merchant)
@@ -1986,9 +1989,12 @@ class MerchantsPanel(QWidget):
             ("🏷️", "Set Category… (its rules and transactions)", self.set_category),
             ("📋", "Its Transactions", self.open_transactions),
             ("🗑️", "Delete Merchant", self.delete),
-            ("🚩", "Only those ticked 🚩 (to look at again)", self._only_flagged_changed)])
-        self.btn_only_flagged = self._merchant_btns[-1]
+            ("🚩", "Only those ticked 🚩 (to look at again)", self._only_flagged_changed),
+            ("👤", "Only people (Edit Merchant: A person, not a shop)", lambda *_: self._filter())])
+        self.btn_only_flagged = self._merchant_btns[-2]
         self.btn_only_flagged.setCheckable(True)
+        self.btn_only_people = self._merchant_btns[-1]
+        self.btn_only_people.setCheckable(True)
         left.addLayout(find_row)
         self.table = QTableWidget(0, 5)
         self.table.setHorizontalHeaderLabels(["🚩", "Merchant", "Tx", "R", "Total"])
@@ -2231,6 +2237,7 @@ class MerchantsPanel(QWidget):
         dim = QBrush(QColor(get_settings().get("text_dim") or "#999"))
         flagged = self._flagged()
         logos = {name.casefold(): image for name, image in self.db.get_logos().items()}
+        people = self.db.get_people()
         self.table.setIconSize(icon_size(self.table))
         for m in rows:
             r = self.table.rowCount()
@@ -2247,9 +2254,10 @@ class MerchantsPanel(QWidget):
                      _SortItem(str(m["count"]), m["count"], none), _SortItem(str(m["rules"]), m["rules"], none),
                      _SortItem(_money(m["total"]), m["total"] or 0, none)]
             items[self.COL_NAME].setData(Qt.UserRole, m)
-            if logos:  # its logo, or a space: the names stay in line
-                image = logos.get(m["merchant"].casefold()) if m["merchant"] else None
-                items[self.COL_NAME].setIcon(logo_icon(image) if image else blank_icon())
+            if logos or people:  # its logo, 👤 for a person, or a space: the names stay in line
+                key = m["merchant"].casefold()
+                items[self.COL_NAME].setIcon(merchant_icon(logos.get(key) if key else None,
+                                                           bool(key) and key in people))
             flag.setData(Qt.UserRole, m)
             if not none:
                 items[self.COL_NAME].setToolTip(m["merchant"])  # whole, when the column cuts it
@@ -2279,10 +2287,12 @@ class MerchantsPanel(QWidget):
         text = (self.find.text() if text is None else text).strip().casefold()
         only = self.btn_only_flagged.isChecked()
         flagged = self._flagged()
+        people = self.db.get_people() if self.btn_only_people.isChecked() else None
         for r in range(self.table.rowCount()):
             m = self.table.item(r, self.COL_NAME).data(Qt.UserRole)
             self.table.setRowHidden(r, (bool(text) and text not in self.table.item(r, self.COL_NAME).text().casefold())
-                                    or (only and m["merchant"] not in flagged))
+                                    or (only and m["merchant"] not in flagged)
+                                    or (people is not None and m["merchant"].casefold() not in people))
         self._update_totals()
 
     # ── 🚩 to look at again ───────────────────────────────────────────────────
@@ -2454,7 +2464,9 @@ class MerchantsPanel(QWidget):
         """Edit Merchant for the merchant ``old`` (here, or from a right-click in Categories):
         its window over ``parent``; returns its name after OK (None: cancelled), the lists here
         and in the other tabs shown again."""
-        dlg = LogoDialog(old, self.db.logo_for(old), self.db.logo_source(old), parent, edit_name=True)
+        was_person = self.db.is_person(old)
+        dlg = LogoDialog(old, self.db.logo_for(old), self.db.logo_source(old), parent, edit_name=True,
+                         person=was_person)
         if not dlg.exec():
             return None
         new = dlg.name
@@ -2468,6 +2480,8 @@ class MerchantsPanel(QWidget):
                     self.db.set_logo(name, dlg.image, dlg.source)
                 else:
                     self.db.remove_logo(name)
+            if dlg.person is not was_person:  # only what was changed here: merged into a person, it stays one
+                self.db.set_person(name, dlg.person is True)
         if name != old:
             self._rename_flag(old, name)
         self.on_change()

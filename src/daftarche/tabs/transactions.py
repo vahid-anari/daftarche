@@ -24,8 +24,8 @@ from daftarche.widgets import (
 from daftarche.category_dialog import CategoryDialog, MerchantDialog
 from daftarche.style import get_settings
 from daftarche.tag_picker import TagsDialog
-from daftarche.icons import blank_icon, emoji_icon, set_category_icons, use_logos
-from daftarche.logos import icon_size, logo_icon
+from daftarche.icons import blank_icon, emoji_icon, merchant_icon, set_category_icons, set_merchant_icons, use_logos
+from daftarche.logos import icon_size
 from daftarche.past_categories import category_label, entry_icon, offer_merchant_only
 
 NO_MERCHANT = "(no merchant)"
@@ -291,10 +291,10 @@ class TxModel(QAbstractTableModel):
         no_sub = col == COL_SUBCAT and _category_only(row)
 
         if role == Qt.DecorationRole and col == COL_MERCHANT:
-            if not self.logos:
+            if not self.logos and not self.people:
                 return None
-            data = self.logos.get((row.get("merchant") or "").strip().casefold())
-            return logo_icon(data) if data else blank_icon()  # none: a space, the names stay in line
+            key = (row.get("merchant") or "").strip().casefold()
+            return merchant_icon((self.logos or {}).get(key), bool(key) and key in self.people)
         if role == Qt.DecorationRole:
             if not self.icons or col not in (COL_CAT, COL_SUBCAT) or no_sub:
                 return None
@@ -339,6 +339,7 @@ class TxModel(QAbstractTableModel):
     on_note_edited = None  # set by the tab: (row, text) → save
     icons = None  # set by the tab: db.get_icons(), the icons beside category names
     logos = None  # set by the tab: {merchant (any letter case): PNG}, the logos beside merchants
+    people = frozenset()  # set by the tab: the merchants that are people (casefold): 👤
 
     def setData(self, index, value, role=Qt.EditRole):
         if role != Qt.EditRole or index.column() != COL_NOTE or not self.on_note_edited:
@@ -488,6 +489,10 @@ class TransactionsTab(QWidget):
         self.f_category = self._make_check_combo("All", searchable=True)
         self.f_subcat = self._make_check_combo("All", searchable=True)
         self.f_merchant = self._make_check_combo("All", searchable=True)
+        from daftarche.icons import merchant_icon_for, name_icon_for
+        self.f_category.icon_for = lambda: name_icon_for(self.db, "cat")  # read again at each fill
+        self.f_subcat.icon_for = lambda: name_icon_for(self.db, "sub")
+        self.f_merchant.icon_for = lambda: merchant_icon_for(self.db)
         self.f_tags = self._make_check_combo("All", searchable=True)
 
         for lbl_txt, combo, stretch in [
@@ -768,6 +773,7 @@ class TransactionsTab(QWidget):
         self._current_rows = list(rows)
         self.model.icons = self.db.get_icons()
         self.model.logos = {name.casefold(): image for name, image in self.db.get_logos().items()}
+        self.model.people = self.db.get_people()
         self.table.setIconSize(icon_size(self.table))  # as the font: Settings may have changed it
         self.model.set_rows(self._current_rows)
         self._update_rows_info()
@@ -1651,6 +1657,7 @@ class TransactionDialog(QDialog):
         self.f_merchant = SingleSelectCombo()
         self.f_merchant.allow_typing()
         self.f_merchant.addItems(self.db.get_merchants())
+        set_merchant_icons(self.f_merchant, self.db)
         self.f_merchant.setCurrentText((self.row.get("merchant") or "") if self.row else "")
         self.f_merchant.lineEdit().setPlaceholderText("The shop or person (e.g. Amazon, Vahid)")
         self.f_merchant.setMaxVisibleItems(15)

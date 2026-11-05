@@ -4,7 +4,7 @@ from unittest import mock
 
 import pytest
 
-from conftest import keep
+from conftest import keep, wait_logo
 
 
 @pytest.fixture(scope="module")
@@ -37,7 +37,7 @@ def panel(db):
 
 
 def answer(name, image=None, changed=False, source="", ok=True):
-    dlg = mock.Mock(exec=mock.Mock(return_value=ok), image=image, logo_changed=changed, source=source)
+    dlg = mock.Mock(exec=mock.Mock(return_value=ok), image=image, logo_changed=changed, source=source, person=False)
     dlg.name = name  # Mock(name=…) names the mock itself
     return dlg
 
@@ -49,6 +49,7 @@ def test_the_window_has_the_name_and_the_logo(qapp):
     d.name_field.setText("  Stream   Box ")
     d.site.setText("s.example")
     d._get()
+    wait_logo(d)
     with mock.patch.object(d, "accept"):
         d._accept()
     assert d.name == "Stream Box" and d.logo_changed and d.image

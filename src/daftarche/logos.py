@@ -6,18 +6,21 @@ import html
 import json
 import re
 import ssl
+import threading
+import time
 import urllib.parse
 import urllib.request
 
-from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QRectF, QSize, Qt
+from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QRectF, QSize, Qt, QTimer
 from PySide6.QtGui import QColor, QIcon, QImage, QPainter, QPixmap
 from PySide6.QtWidgets import (
-    QApplication, QDialog, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton, QVBoxLayout,
+    QCheckBox, QDialog, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton, QVBoxLayout,
 )
 
 SIZE = 128
 """The largest side of a logo kept (it is drawn at most a little larger than a line of text)."""
-TIMEOUT = 8
+TIMEOUT = 8  # seconds for one address
+LIMIT = 20  # seconds for a whole site, all the addresses tried
 AGENT = "Daftarche (logo for a merchant)"
 _ICON_PATHS = ("/apple-touch-icon.png", "/apple-touch-icon-precomposed.png")
 
@@ -47,9 +50,9 @@ def _context():
         return ssl.create_default_context()
 
 
-def _get(url, limit=2_000_000):
+def _get(url, limit=2_000_000, timeout=TIMEOUT):
     request = urllib.request.Request(url, headers={"User-Agent": AGENT})
-    with urllib.request.urlopen(request, timeout=TIMEOUT, context=_context()) as reply:
+    with urllib.request.urlopen(request, timeout=timeout, context=_context()) as reply:
         return reply.read(limit), reply.geturl()
 
 
@@ -93,6 +96,18 @@ def _manifest_links(page, base):
 
 
 GOOD = 96  # a logo at least this wide is sharp enough; a smaller one: look further
+
+
+def fetch_within(site, seconds=LIMIT, get=_get):
+    """fetch, but in at most ``seconds`` all told (a site that does not answer: LogoError then)."""
+    deadline = time.monotonic() + seconds
+
+    def get_in_time(url):
+        left = deadline - time.monotonic()
+        if left <= 0.2:
+            raise TimeoutError("out of time")
+        return get(url, timeout=min(TIMEOUT, left))
+    return fetch(site, get=get_in_time)
 
 
 def fetch(site, get=_get):
@@ -210,13 +225,20 @@ class LogoDialog(QDialog):
     ``edit_name``: Edit Merchant, its name above the logo, both kept with OK. After OK: ``name``,
     ``image`` (PNG bytes, None for no logo), ``source``, and ``logo_changed``."""
 
-    def __init__(self, merchant, image=None, source="", parent=None, fetch_logo=fetch, edit_name=False):
+    def __init__(self, merchant, image=None, source="", parent=None, fetch_logo=fetch_within, edit_name=False,
+                 person=False):
         super().__init__(parent)
         self.setWindowTitle("Edit Merchant" if edit_name else "Logo")
         self.merchant = self.name = merchant
         self.image, self.source = image, source or ""
         self.logo_changed = False
+        self.person = person
         self._fetch = fetch_logo
+        self._job = None  # (its number, {"done", "result" or "error"}) while a logo is being got
+        self._jobs = 0
+        self._poll = QTimer(self)
+        self._poll.setInterval(100)
+        self._poll.timeout.connect(self._collect)
         layout = QVBoxLayout(self)
         layout.setSpacing(10)
         self.name_field = None
@@ -227,6 +249,11 @@ class LogoDialog(QDialog):
             self.name_field.setToolTip("A name another merchant has already: the two are merged (it asks first)")
             row.addWidget(self.name_field, 1)
             layout.addLayout(row)
+            self.chk_person = QCheckBox("👤  A person, not a shop")
+            self.chk_person.setToolTip("👤 beside its name where a logo would be (a logo, if it has one, "
+                                       "is shown instead); Merchants can show only people")
+            self.chk_person.setChecked(person)
+            layout.addWidget(self.chk_person)
             head = QLabel("Logo")
             head.setProperty("class", "dim-label")
         else:
@@ -305,6 +332,7 @@ class LogoDialog(QDialog):
                 QMessageBox.warning(self, "Edit Merchant", "Write the merchant's name.")
                 return
             self.name = name
+            self.person = self.chk_person.isChecked()
         self.accept()
 
     @staticmethod
@@ -321,17 +349,59 @@ class LogoDialog(QDialog):
         self.btn_none.setEnabled(bool(self.image))
 
     def _get(self):
-        QApplication.setOverrideCursor(Qt.WaitCursor)
-        try:
-            image, url = self._fetch(self.site.text())
-        except LogoError as exc:
-            QApplication.restoreOverrideCursor()
-            QMessageBox.warning(self, "Logo", str(exc))
+        """Get Logo: from the site, in the background (the window stays alive, at most LIMIT
+        seconds); pressed again while it works: Cancel."""
+        if self._job is not None:
+            self._stop()
             return
-        QApplication.restoreOverrideCursor()
-        self.image, self.source = image, url
+        site = self.site.text().strip()
+        if not site:
+            return
+        self._jobs += 1
+        state = {"done": False}
+
+        def work():
+            try:
+                state["result"] = self._fetch(site)
+            except Exception as exc:  # LogoError, no connection, a bad picture
+                state["error"] = exc
+            state["done"] = True
+        self._job = (self._jobs, state)
+        threading.Thread(target=work, daemon=True).start()
+        self.btn_get.setText("Cancel")
+        self.btn_get.setToolTip("Getting the logo… press to stop")
+        self._poll.start()
+
+    def _stop(self):
+        """Cancel: what is being got is let go (it ends by itself, and is not used)."""
+        self._job = None
+        self._poll.stop()
+        self.btn_get.setText("Get Logo")
+        self.btn_get.setToolTip("")
+
+    def _collect(self):
+        if self._job is None or not self._job[1]["done"]:
+            return
+        state = self._job[1]
+        self._stop()
+        if "error" in state:
+            error = state["error"]
+            text = str(error) if isinstance(error, LogoError) else (
+                f"No logo found at {self.site.text().strip()}: the site did not answer in time, or there is no "
+                "connection. Choose a picture file instead.")
+            QMessageBox.warning(self, "Logo", text)
+            return
+        self.image, self.source = state["result"]
         self.logo_changed = True
         self._show()
+
+    def busy(self):
+        """A logo is being got (for tests: wait while this is True)."""
+        return self._job is not None
+
+    def done(self, result):
+        self._stop()
+        super().done(result)
 
     def _choose_file(self):
         path, _ = QFileDialog.getOpenFileName(self, "A Picture for the Logo", "",

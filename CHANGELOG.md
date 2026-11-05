@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.35.6 — 2026-11-04
+
+- A merchant can be a person: tick **👤 A person, not a shop** in Edit Merchant, and 👤 shows
+  beside its name where a logo would be (in Transactions, Merchants and Categories); the 👤 button
+  in Merchants shows only people. It follows a rename or a merge. Database layout 9 (a copy of
+  the file as it was is kept first; an older Daftarche cannot open it).
+- Get Logo works in the background: the window stays alive (Daftarche no longer seems to hang on
+  a site that does not answer), the button turns into **Cancel** meanwhile, and a site gets 20
+  seconds at most, all told. tools/pick_logos.py has the same limit.
+- The icon window (a category's or sub-category's ✏️) has two columns: **Emoji** on the left, and
+  on the right **Logos & Pictures**, as tall, with a field to find a merchant's logo by name. A
+  picture of its own, no merchant's, can be added there — **Choose a Picture…** (a file) or
+  **From a Website…** — and deleted with a right-click (categories that had it then have none).
+  The phone shows only emoji. The paste field has the usual font size again (its right-click menu
+  too).
+- The lists to choose a merchant show its logo (or 👤), as those of categories and sub-categories
+  show their icons; the Transactions filters (Category, Sub-Category, Merchant) too.
+
 ## 0.35.5 — 2026-11-04
 
 - Manage › Categories: the merchants are listed A to Z (they were by how many transactions); a

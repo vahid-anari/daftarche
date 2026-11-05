@@ -54,8 +54,8 @@ def build_snapshot(db, app_version="", now=None):
                 "by_account": {str(a["id"]): [_num(snapshots[p].get(a["id"], 0)) for p in periods]
                                for a in accounts}}
 
-    def emoji(icon):  # a merchant's logo ("logo:…") does not go to the phone: none there
-        return None if (icon or "").startswith("logo:") else icon
+    def emoji(icon):  # a logo ("logo:…") or a picture ("pic:…") does not go to the phone: none there
+        return None if (icon or "").startswith(("logo:", "pic:")) else icon
     cat_icons = {r["id"]: emoji(r["icon"]) for r in conn.execute("SELECT id, icon FROM categories")}
     subs = {}
     for r in conn.execute("SELECT id, name, icon, category_id FROM subcategories ORDER BY name"):
