@@ -53,7 +53,7 @@ def test_an_older_database_gets_the_icon_columns(tmp_path):
     try:
         for table in ("categories", "subcategories"):
             assert "icon" in [r[1] for r in db.conn.execute(f"PRAGMA table_info({table})")]
-        assert db.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION == 9
+        assert db.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION == 10
     finally:
         db.conn.close()
 

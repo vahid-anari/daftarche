@@ -189,6 +189,7 @@ def row_value(row, col):
     return value or "" if col == COL_TAGS else value
 
 
+NOTE_JOIN = " · "  # a split transaction's note and its parts' notes, in the Note column
 OF = " of "  # "$40.00 of $100.00": a split transaction's share in the category shown
 
 
@@ -233,6 +234,10 @@ def cell_text(row, col):
         return f"Split ({len(parts)})" if shared else "—"
     if col == COL_AMOUNT and partial(row):
         return f"{money(row['shown_amount'])}{OF}{money(row['amount'])}"
+    if col == COL_NOTE and parts:  # its own note, then its parts' (only those shown here)
+        shown = row.get("shown_parts") if partial(row) else parts
+        notes = [row.get("note") or ""] + [p.get("note") or "" for p in shown or ()]
+        return NOTE_JOIN.join(dict.fromkeys(n.strip() for n in notes if n and n.strip()))
     if col == COL_DATE:
         return _date_text(row["date"])
     if col == COL_SUBCAT and _category_only(row):
@@ -1036,7 +1041,7 @@ class TransactionsTab(QWidget):
         if split and QMessageBox.question(
                 self, "Split Transactions",
                 f"{len(split)} of these {'are' if len(split) != 1 else 'is'} split. Giving one category "
-                "joins the parts again. Go on?", QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
+                "joins the parts again (their notes go; their tags are kept, on the whole). Go on?", QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
             return
         ids = [r["id"] for r in rows]
         with self.db.transaction():
@@ -1707,8 +1712,8 @@ class TransactionDialog(QDialog):
         form.addRow("Merchant:", self.f_merchant)
         form.addRow("Category:", self.f_category)
         form.addRow("Sub-Category:", self.f_subcat)
-        self._parts = [(p["category"], p["subcategory"], p["amount"], p.get("note")) for p in
-                       (self.row.get("parts") or [])] if self.row else []
+        self._parts = [(p["category"], p["subcategory"], p["amount"], p.get("note"), list(p.get("tags") or []))
+                       for p in (self.row.get("parts") or [])] if self.row else []
         self._parts_changed = False
         split_row = QHBoxLayout()
         self.lbl_split = QLabel()
@@ -1756,13 +1761,14 @@ class TransactionDialog(QDialog):
         if "Transfer" in type_name:
             QMessageBox.information(self, "Split", "Transfers are not split.")
             return
-        parts = [{"category": c, "subcategory": sname, "amount": a, "note": nt} for c, sname, a, nt in self._parts]
+        parts = [{"category": c, "subcategory": sname, "amount": a, "note": nt, "tags": tg}
+                 for c, sname, a, nt, tg in self._parts]
         dlg = SplitDialog(self.db, type_name, amount, parts=parts, category=self.f_category.currentText(),
                           subcategory=self.f_subcat.currentText(), parent=self)
         if dlg.exec() and dlg.result_parts is not None:
             self._parts = [(self.db.get_category_by_id(c)["name"],
-                            (self.db.get_subcategory_by_id(sid) or {"name": UNCATEGORIZED_SUB})["name"], a, nt)
-                           for c, sid, a, nt in dlg.result_parts]
+                            (self.db.get_subcategory_by_id(sid) or {"name": UNCATEGORIZED_SUB})["name"], a, nt, tg)
+                           for c, sid, a, nt, tg in dlg.result_parts]
             self._split_ids = dlg.result_parts
             self._parts_changed = True
             self._show_split()
@@ -1915,7 +1921,8 @@ class TransactionDialog(QDialog):
 
             with self.db.transaction():  # the transaction, its parts and tags: all or nothing
                 if self.row and self._parts_changed:
-                    self.db.set_splits(self.row["id"], [])  # the new parts are set after the new amount
+                    # the new parts are set after the new amount (joined again: their tags kept)
+                    self.db.set_splits(self.row["id"], [], keep_tags=not self._split_ids)
                 if self.row:
                     transfer_status = None
                     if "Transfer" in type_name:

@@ -70,12 +70,15 @@ def build_snapshot(db, app_version="", now=None):
     tags_of = {}
     for r in conn.execute("SELECT transaction_id, tag_id FROM transaction_tags ORDER BY tag_id"):
         tags_of.setdefault(r["transaction_id"], []).append(r["tag_id"])
+    part_tags = {}  # a part's own tags: with the part (the phone adds up a transaction's tags as a whole)
+    for r in conn.execute("SELECT split_id, tag_id FROM split_tags ORDER BY tag_id"):
+        part_tags.setdefault(r["split_id"], []).append(r["tag_id"])
     parts_of = {}
-    for r in conn.execute("SELECT transaction_id, category_id, subcategory_id, amount, note "
+    for r in conn.execute("SELECT id, transaction_id, category_id, subcategory_id, amount, note "
                           "FROM transaction_splits ORDER BY transaction_id, position, id"):
         parts_of.setdefault(r["transaction_id"], []).append(
             {"category": r["category_id"], "subcategory": r["subcategory_id"], "amount": _num(r["amount"]),
-             "note": r["note"]})
+             "note": r["note"], "tags": part_tags.get(r["id"], [])})
 
     transactions = []
     for r in conn.execute("""SELECT t.id, t.date, ty.name AS type_name, t.account_id, t.to_account_id, t.amount,

@@ -410,8 +410,7 @@ class CheckComboBox(QToolButton):
                 self._search.setFocus()
             _repolish(self)
             _repolish(self._popup)
-            n = max(self._list.count(), 1)
-            self._list.setFixedHeight(min(n * 28, 14 * 28))
+            self._list.setFixedHeight(self._list_height())
             fm = self.fontMetrics()
             max_w = max(
                 (fm.horizontalAdvance(self._list.item(i).text()) for i in range(self._list.count())),
@@ -419,6 +418,24 @@ class CheckComboBox(QToolButton):
             )
             self._popup.setFixedWidth(max(max_w + 80, self.width() + 60, 200))
             _show_popup(self, self._popup)
+
+    ROWS_SHOWN = 15
+
+    def _list_height(self):
+        """As tall as its rows (their real height: the font size and the icons decide it), up to
+        ROWS_SHOWN, and no taller than the room on the screen below or above the button."""
+        n = max(self._list.count(), 1)
+        row = max(self._list.sizeHintForRow(0) if self._list.count() else 0, self.fontMetrics().height() + 8)
+        frame = 2 * self._list.frameWidth() + 4
+        want = min(n, self.ROWS_SHOWN) * row + frame
+        screen = (self.screen() or QApplication.primaryScreen()).availableGeometry()
+        top = self.mapToGlobal(QPoint(0, 0)).y()
+        room = max(screen.bottom() - (top + self.height()), top - screen.top())  # where _show_popup puts it
+        lay = self._popup.layout()  # what is above the list: the search box, All, None, the margins
+        m = lay.contentsMargins()
+        others = (m.top() + m.bottom() + self._btn_all.height() + self._btn_none.height() + 3 * lay.spacing()
+                  + (self._search.sizeHint().height() + lay.spacing() if self._search else 0))
+        return max(row + frame, min(want, room - others - 8))
 
     def _filter_list(self, text):
         """Show only items matching the search text."""

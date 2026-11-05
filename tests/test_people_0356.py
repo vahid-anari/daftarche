@@ -52,7 +52,7 @@ def test_an_older_database_gets_the_table(tmp_path):
     conn.commit()
     conn.close()
     db = Database(path)
-    assert SCHEMA_VERSION == 9 and db.get_people() == set()
+    assert SCHEMA_VERSION >= 9 and db.get_people() == set()
     db.set_person("Zahra")
     assert db.is_person("zahra")
 

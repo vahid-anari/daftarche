@@ -115,9 +115,10 @@ def _date_str_to_parts(date_str):
         return None, None, None
 
 
-SCHEMA_VERSION = 9  # 2: note; 3: merchant; 4: split transactions; 5: loans; 6: category and sub-category icons;
+SCHEMA_VERSION = 10  # 2: note; 3: merchant; 4: split transactions; 5: loans; 6: category and sub-category icons;
 #                    7: a rule for several accounts (table rule_accounts); 8: merchants' logos (merchant_logos);
-#                    9: merchants that are people (merchant_people), categories' own pictures (category_pictures)
+#                    9: merchants that are people (merchant_people), categories' own pictures (category_pictures);
+#                    10: a split transaction's parts have tags of their own (split_tags)
 """Database layout version, stored in the file (PRAGMA user_version). Raise it whenever
 _migrate learns something new, so an older Daftarche refuses a database it cannot read."""
 
@@ -678,6 +679,11 @@ class Database:
                          id    INTEGER PRIMARY KEY,
                          name  TEXT,
                          image BLOB NOT NULL)""")  # layout 9: a category's icon that is no merchant's logo
+        c.execute("""CREATE TABLE IF NOT EXISTS split_tags (
+                         split_id INTEGER NOT NULL REFERENCES transaction_splits (id) ON DELETE CASCADE,
+                         tag_id   INTEGER NOT NULL REFERENCES tags (id) ON DELETE CASCADE,
+                         PRIMARY KEY (split_id, tag_id))""")  # layout 10: a part's own tags
+        c.execute("CREATE INDEX IF NOT EXISTS idx_split_tags_tag ON split_tags(tag_id)")
         self._dedupe_rules()
         c.commit()
         self._seed_uncategorized()
@@ -1281,14 +1287,20 @@ class Database:
                 return []
             q += " AND t.id IN (" + ",".join("?" * len(f["ids"])) + ")"
             params += list(f["ids"])
-        if f.get("tags"):
+        if f.get("tags"):  # the transaction has the tag, or one of its parts has
             ph = ",".join("?" * len(f["tags"]))
             tag_id_rows = self.conn.execute(f"""
-                SELECT DISTINCT tt.transaction_id
+                SELECT tt.transaction_id
                 FROM transaction_tags tt
                 JOIN tags tg ON tg.id = tt.tag_id
                 WHERE tg.name IN ({ph})
-            """, f["tags"]).fetchall()
+                UNION
+                SELECT sp.transaction_id
+                FROM split_tags st
+                JOIN tags tg ON tg.id = st.tag_id
+                JOIN transaction_splits sp ON sp.id = st.split_id
+                WHERE tg.name IN ({ph})
+            """, list(f["tags"]) * 2).fetchall()
             allowed_ids = [r[0] for r in tag_id_rows]
             if not allowed_ids:
                 return []
@@ -1332,8 +1344,13 @@ class Database:
                 field_clauses.append("""t.id IN (
                     SELECT tt2.transaction_id FROM transaction_tags tt2
                     JOIN tags tg2 ON tg2.id = tt2.tag_id
+                    WHERE tg2.name LIKE ?
+                    UNION
+                    SELECT sp2.transaction_id FROM split_tags st2
+                    JOIN tags tg2 ON tg2.id = st2.tag_id
+                    JOIN transaction_splits sp2 ON sp2.id = st2.split_id
                     WHERE tg2.name LIKE ?)""")
-                params.append(kw)
+                params += [kw, kw]
             if sf.get("fitid"):
                 field_clauses.append("t.fitid LIKE ?")
                 params.append(kw)
@@ -1377,25 +1394,44 @@ class Database:
                 WHERE sp.transaction_id IN ({ph}) ORDER BY sp.position, sp.id""", ids):
             part_map.setdefault(p["transaction_id"], []).append(dict(p))
 
-        shown, in_filter = {}, {}  # with a category filter: how much of a split one is in it, which parts
+        part_tags = {}  # a part's own tags
+        if part_map:
+            all_parts = [p["id"] for parts in part_map.values() for p in parts]
+            for pr in self.conn.execute(f"""
+                    SELECT st.split_id, tg.name FROM split_tags st JOIN tags tg ON tg.id = st.tag_id
+                    WHERE st.split_id IN ({",".join("?" * len(all_parts))}) ORDER BY tg.name""", all_parts):
+                part_tags.setdefault(pr["split_id"], []).append(pr["name"])
+        for parts in part_map.values():
+            for p in parts:
+                p["tags"] = part_tags.get(p["id"], [])
+
+        in_filter = {}  # with a category filter: the parts of a split one in it
         line_where, line_params = self._line_filter(f)
         if line_where and part_map:
             split_ids = list(part_map)
             for r in self.conn.execute(
-                    f"SELECT l.id, l.part, l.amount FROM tx_lines l {line_where} AND l.id IN "
+                    f"SELECT l.id, l.part FROM tx_lines l {line_where} AND l.id IN "
                     f"({','.join('?' * len(split_ids))})", line_params + split_ids):
-                shown[r[0]] = shown.get(r[0], 0) + r[2]
                 in_filter.setdefault(r[0], set()).add(r[1])
+        wanted_tags = set(f.get("tags") or ())
 
         result = []
         for r in rows:
             d = dict(r)
-            d["tags"] = ", ".join(tag_map.get(r["id"], []))
+            own = tag_map.get(r["id"], [])
             d["parts"] = part_map.get(r["id"], [])
-            d["shown_amount"] = round2(shown[r["id"]]) if r["id"] in shown else d["amount"]
-            # the parts in the category or sub-category filtered by (all of them without a filter)
-            d["shown_parts"] = [p for p in d["parts"] if p["id"] in in_filter[r["id"]]] if r["id"] in in_filter \
-                else d["parts"]
+            shown_parts = [p for p in d["parts"] if p["id"] in in_filter[r["id"]]] if r["id"] in in_filter \
+                else list(d["parts"])
+            if wanted_tags and d["parts"] and not wanted_tags & set(own):  # only the parts with the tag
+                shown_parts = [p for p in shown_parts if wanted_tags & set(p["tags"])]
+                if not shown_parts:  # its category's parts are not those with the tag
+                    continue
+            # the parts in the category, sub-category or tag filtered by (all of them without a filter)
+            d["shown_parts"] = shown_parts
+            d["shown_amount"] = round2(sum(p["amount"] for p in shown_parts)) \
+                if d["parts"] and len(shown_parts) < len(d["parts"]) else d["amount"]
+            names = list(own) + [t for p in shown_parts for t in p["tags"]]  # its own and its parts'
+            d["tags"] = ", ".join(sorted(dict.fromkeys(names), key=str.casefold))
             result.append(d)
         return result
 
@@ -1482,20 +1518,33 @@ class Database:
 
     # ── Split transactions ────────────────────────────────────────
     def get_splits(self, tx_id):
-        """The parts of a split transaction, in order (empty when it is not split)."""
-        return [dict(r) for r in self.conn.execute("""
+        """The parts of a split transaction, in order (empty when it is not split), each with its
+        own tags (names, A to Z)."""
+        parts = [dict(r) for r in self.conn.execute("""
             SELECT sp.id, sp.amount, sp.note, sp.category_id, sp.subcategory_id,
                    c.name AS category, s.name AS subcategory
             FROM transaction_splits sp
                  LEFT JOIN categories c ON c.id = sp.category_id
                  LEFT JOIN subcategories s ON s.id = sp.subcategory_id
             WHERE sp.transaction_id = ? ORDER BY sp.position, sp.id""", (tx_id,))]
+        for p in parts:
+            p["tags"] = [r[0] for r in self.conn.execute(
+                "SELECT tg.name FROM split_tags st JOIN tags tg ON tg.id = st.tag_id WHERE st.split_id = ? "
+                "ORDER BY tg.name COLLATE NOCASE", (p["id"],))]
+        return parts
 
     @atomic
-    def set_splits(self, tx_id, parts):
-        """Split a transaction into ``parts`` [(category_id, subcategory_id, amount, note)], or
-        join it again (no parts). Two parts or more, in categories of its type, adding up to its
-        amount. The transaction keeps the first part's category, for places that show one."""
+    def set_splits(self, tx_id, parts, keep_tags=True):
+        """Split a transaction into ``parts`` [(category_id, subcategory_id, amount, note[, tags])]
+        (tags: names, new ones made), or join it again (no parts). Two parts or more, in categories
+        of its type, adding up to its amount. The transaction keeps the first part's category, for
+        places that show one. Joined again (no parts), the parts' own tags become the
+        transaction's (``keep_tags``; False: the parts are only being set anew)."""
+        if not parts and keep_tags:
+            self.conn.execute("""INSERT OR IGNORE INTO transaction_tags(transaction_id, tag_id)
+                                 SELECT ?, st.tag_id FROM split_tags st
+                                 JOIN transaction_splits sp ON sp.id = st.split_id WHERE sp.transaction_id = ?""",
+                              (tx_id, tx_id))
         self.conn.execute("DELETE FROM transaction_splits WHERE transaction_id=?", (tx_id,))
         if not parts:
             return
@@ -1511,10 +1560,15 @@ class Database:
                 raise ValueError(f"A part's category is not a {tx['type']} category.")
         if round2(sum(p[2] for p in parts)) != round2(tx["amount"]):
             raise ValueError(f"The parts add up to {round2(sum(p[2] for p in parts))}, not {round2(tx['amount'])}.")
-        for pos, (cat_id, sub_id, amount, note) in enumerate(parts):
-            self.conn.execute("""INSERT INTO transaction_splits(transaction_id, category_id, subcategory_id,
-                                 amount, note, position) VALUES (?, ?, ?, ?, ?, ?)""",
-                              (tx_id, cat_id, sub_id, round2(amount), (note or "").strip() or None, pos))
+        for pos, (cat_id, sub_id, amount, note, *more) in enumerate(parts):
+            cur = self.conn.execute("""INSERT INTO transaction_splits(transaction_id, category_id, subcategory_id,
+                                       amount, note, position) VALUES (?, ?, ?, ?, ?, ?)""",
+                                    (tx_id, cat_id, sub_id, round2(amount), (note or "").strip() or None, pos))
+            for name in dict.fromkeys(" ".join((t or "").split()) for t in (more[0] if more else ()) or ()):
+                if not name:
+                    continue
+                self.conn.execute("INSERT OR IGNORE INTO split_tags(split_id, tag_id) VALUES (?, ?)",
+                                  (cur.lastrowid, self._tag_id(name)))
         self.conn.execute("UPDATE transactions SET category_id=?, subcategory_id=? WHERE id=?",
                           (parts[0][0], parts[0][1], tx_id))
 
@@ -2051,8 +2105,9 @@ class Database:
             where.append("(l.account_id = ? OR l.to_account_id = ?)")
             params += [account_id, account_id]
         if tag_id is not None:
-            where.append("EXISTS (SELECT 1 FROM transaction_tags tt WHERE tt.transaction_id = l.id AND tt.tag_id = ?)")
-            params.append(tag_id)
+            where.append("(EXISTS (SELECT 1 FROM transaction_tags tt WHERE tt.transaction_id = l.id AND tt.tag_id = ?)"
+                         " OR EXISTS (SELECT 1 FROM split_tags st WHERE st.split_id = l.part AND st.tag_id = ?))")
+            params += [tag_id, tag_id]
         if merchant is not None:
             if merchant:
                 where.append("TRIM(l.merchant) = ?")
@@ -2065,7 +2120,10 @@ class Database:
                    l.amount, l.name, l.memorandum, l.note, l.fitid,
                    (SELECT GROUP_CONCAT(tg.name, ', ') FROM (
                         SELECT g.name FROM transaction_tags tt JOIN tags g ON g.id = tt.tag_id
-                        WHERE tt.transaction_id = l.id ORDER BY g.name COLLATE NOCASE) tg) AS tags
+                        WHERE tt.transaction_id = l.id
+                        UNION
+                        SELECT g.name FROM split_tags st JOIN tags g ON g.id = st.tag_id
+                        WHERE st.split_id = l.part ORDER BY 1 COLLATE NOCASE) tg) AS tags
             FROM tx_lines l LEFT JOIN types ty ON ty.id = l.type_id
                  LEFT JOIN accounts a ON a.id = l.account_id
                  LEFT JOIN accounts ta ON ta.id = l.to_account_id
@@ -3031,10 +3089,26 @@ class Database:
             for n, part in enumerate(parts, start=1):  # a split transaction: one line per part
                 r = dict(whole)
                 if part:
+                    tags = self._tx_tags(whole["id"]) + list(part.get("tags") or [])  # its own and the part's
                     r.update(amount=part["amount"], category=part["category"], subcategory=part["subcategory"],
-                             note=part["note"] or whole["note"])
+                             note=part["note"] or whole["note"],
+                             tags=", ".join(sorted(dict.fromkeys(tags), key=str.casefold)))
                 data.append(self._export_line(r, f"{n} of {len(parts)}" if part else ""))
         pd.DataFrame(data).to_excel(path, index=False)
+
+    def _tag_id(self, name):
+        """The id of the tag ``name``, in any letter case (made when there is none)."""
+        key = name.casefold()
+        found = next((r["id"] for r in self.conn.execute("SELECT id, name FROM tags") if r["name"].casefold() == key),
+                     None)
+        if found is None:
+            found = self.conn.execute("INSERT INTO tags(name) VALUES(?)", (name,)).lastrowid
+        return found
+
+    def _tx_tags(self, tx_id):
+        return [r[0] for r in self.conn.execute(
+            "SELECT tg.name FROM transaction_tags tt JOIN tags tg ON tg.id = tt.tag_id WHERE tt.transaction_id = ?",
+            (tx_id,))]
 
     @staticmethod
     def _export_line(r, split):
@@ -3240,6 +3314,10 @@ class Database:
             )
 
     def get_transaction_count_for_tag(self, tag_id):
-        return self.conn.execute(
-            "SELECT COUNT(*) FROM transaction_tags WHERE tag_id=?", (tag_id,)
-        ).fetchone()[0]
+        """The transactions with the tag, or with a part that has it."""
+        return self.conn.execute("""
+            SELECT COUNT(*) FROM (SELECT transaction_id FROM transaction_tags WHERE tag_id = ?
+                                  UNION
+                                  SELECT sp.transaction_id FROM split_tags st
+                                  JOIN transaction_splits sp ON sp.id = st.split_id WHERE st.tag_id = ?)""",
+            (tag_id, tag_id)).fetchone()[0]

@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.36.0 — 2026-11-04
+
+- A split transaction's parts can have **tags of their own** (a Tags box beside each part's note
+  in the Split window): one refund for two trips, each part its trip's tag. The transaction's own
+  tags are for all its parts. Filtered by a tag (Transactions, Manage › Tags), such a transaction
+  shows the share of the parts that have it — "$40.00 of $1,690.10" — and Manage › Tags counts it;
+  the Tags column and the export show the parts' tags too (the phone gets them with each part). A
+  tag typed in another letter case is the same tag. Joined again (Join Again, one category for
+  several rows), a transaction keeps its parts' tags as its own. Database layout 10 (a copy of
+  the file as it was is kept first; an older Daftarche cannot open it).
+- The Note column of a split transaction shows its note and then its parts' notes ("·" between);
+  where only some parts are shown (a category, a tag), only theirs.
+- The lists with ticks (the Transactions filters, tags) are as tall as their rows really are — the
+  font size and the icons make them taller than they were counted — up to 15, and no taller than
+  the room on the screen: no more three shown and the rest to scroll to.
+
 ## 0.35.7 — 2026-11-04
 
 - The icon window: a website's icon is got right in it — **Website: … Get** under Logos &

@@ -7,12 +7,14 @@ then count each part in its own category. "Join Again" removes the split.
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QDialog, QDialogButtonBox, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton,
-    QScrollArea, QVBoxLayout, QWidget, QFrame,
+    QScrollArea, QSizePolicy, QVBoxLayout, QWidget, QFrame,
 )
 
 from daftarche.db import UNCATEGORIZED_CAT, UNCATEGORIZED_SUB, round2
 from daftarche.style import get_settings
-from daftarche.widgets import SingleSelectCombo, SymbolButton, add_subcategory_items, confirm_category, money
+from daftarche.widgets import (
+    CheckComboBox, SingleSelectCombo, SymbolButton, add_subcategory_items, confirm_category, money,
+)
 
 
 def _amount(text):
@@ -23,8 +25,10 @@ def _amount(text):
 
 
 class SplitDialog(QDialog):
-    """``parts``: the current ones [{category, subcategory, amount, note}] or none. After OK,
-    ``result_parts`` is [(category_id, subcategory_id, amount, note)] (empty: join again)."""
+    """``parts``: the current ones [{category, subcategory, amount, note, tags}] or none. After OK,
+    ``result_parts`` is [(category_id, subcategory_id, amount, note, tags)] (tags: names, new ones
+    too; empty: join again). The transaction's own tags are for all its parts; a part can have
+    more of its own (a refund for two trips: each part its trip's tag)."""
 
     def __init__(self, db, type_name, total, parts=(), category=None, subcategory=None, about="", parent=None):
         super().__init__(parent)
@@ -32,11 +36,13 @@ class SplitDialog(QDialog):
         self.type_name = type_name
         self.total = round2(total or 0)
         self.result_parts = None
-        self._rows = []  # (category, sub, amount, note, remove)
+        self._rows = []  # (category, sub, amount, note, tags, remove)
+        self._tag_names = [t["name"] for t in db.get_tags()]
         self._first_auto = True  # the first amount follows the others until typed in
         self.setAttribute(Qt.WA_DeleteOnClose)
         self.setWindowTitle("Split Transaction")
-        self.setMinimumSize(760, 380)
+        self.setMinimumSize(980, 380)
+        self.resize(1180, 420)  # room for the tags too
         type_id = db.get_type_id(type_name) if type_name else None
         names = [c["name"] for c in (db.get_categories(type_id) if type_id else db.get_categories())]
         self._categories = [UNCATEGORIZED_CAT] + [n for n in names if n != UNCATEGORIZED_CAT]
@@ -55,13 +61,12 @@ class SplitDialog(QDialog):
         outer.addStretch(1)  # the parts stay at the top
         self._grid.setContentsMargins(0, 0, 0, 0)
         self._grid.setHorizontalSpacing(8)
-        for col, title in enumerate(("Category", "Sub-Category", "Amount", "Note")):
+        for col, title in enumerate(("Category", "Sub-Category", "Amount", "Note", "Tags")):
             head = QLabel(title)
             head.setProperty("class", "dim-label")
             self._grid.addWidget(head, 0, col)
-        self._grid.setColumnStretch(0, 3)
-        self._grid.setColumnStretch(1, 3)
-        self._grid.setColumnStretch(3, 3)
+        for col, stretch in ((0, 2), (1, 2), (3, 3), (4, 3)):  # category, sub-category, note, tags
+            self._grid.setColumnStretch(col, stretch)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
@@ -92,14 +97,14 @@ class SplitDialog(QDialog):
         if parts:
             self._first_auto = False
             for p in parts:
-                self._add_row(p["category"], p["subcategory"], p["amount"], p.get("note") or "")
+                self._add_row(p["category"], p["subcategory"], p["amount"], p.get("note") or "", p.get("tags") or ())
         else:  # start from the whole amount in its category, and an empty second part
             self._add_row(category, subcategory, self.total)
             self._add_row()
         self._update_left()
 
     # ── rows ──────────────────────────────────────────────────────────────────
-    def _add_row(self, category=None, subcategory=None, amount=None, note=""):
+    def _add_row(self, category=None, subcategory=None, amount=None, note="", tags=()):
         cat = SingleSelectCombo()
         cat.allow_typing()
         cat.addItems(self._categories)
@@ -119,13 +124,21 @@ class SplitDialog(QDialog):
         amt.setAlignment(Qt.AlignRight)
         amt.setPlaceholderText("0.00")
         amt.setMaximumWidth(130)
+        amt.setMinimumWidth(100)
         amt.textEdited.connect(lambda _t, a=amt: self._amount_edited(a))
         note_edit = QLineEdit(note)
         note_edit.setPlaceholderText("What it was")
+        note_edit.setMinimumWidth(140)
+        tag_box = CheckComboBox("No tags", allow_new=True)  # this part's own (the transaction's: for all)
+        tag_box.setToolTip("This part's own tags (a trip, an event); the transaction's tags are for all its parts")
+        tag_box.populate(sorted(set(self._tag_names) | set(tags), key=str.casefold))
+        tag_box.set_selected(list(tags))
+        tag_box.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)  # its column's width, not its text's
+        tag_box.setMinimumWidth(150)
         remove = SymbolButton("close", size=28)
         remove.setToolTip("Remove this part")
         r = self._grid.rowCount()
-        entry = (cat, sub, amt, note_edit, remove)
+        entry = (cat, sub, amt, note_edit, tag_box, remove)
         remove.clicked.connect(lambda _=False, e=entry: self._remove_row(e))
         for col, w in enumerate(entry):
             self._grid.addWidget(w, r, col)
@@ -187,7 +200,7 @@ class SplitDialog(QDialog):
 
     def _accept(self):
         parts = []
-        for cat, sub, amt, note, _ in self._rows:
+        for cat, sub, amt, note, tag_box, _ in self._rows:
             amount = _amount(amt.text())
             if not amount:
                 QMessageBox.warning(self, "Split", "Every part needs an amount (remove empty parts with ×).")
@@ -197,6 +210,7 @@ class SplitDialog(QDialog):
                 return
             c = self.db.get_category_by_name(names[0], type_name=self.type_name)
             s = self.db.get_subcategory_by_name(names[1], c["id"])
-            parts.append((c["id"], s["id"] if s else None, amount, note.text().strip() or None))
+            parts.append((c["id"], s["id"] if s else None, amount, note.text().strip() or None,
+                          list(tag_box.get_selected())))
         self.result_parts = parts
         self.accept()
