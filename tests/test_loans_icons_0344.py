@@ -48,10 +48,10 @@ def test_the_icon_window_stays_short(qapp, db):
     from daftarche.icons import EMOJI_ROWS, PICKER, IconPickerDialog
     d = keep(IconPickerDialog(PICKER[-1], "Category", name="Food"))
     rows = (len(PICKER) + 7) // 8
-    assert rows > EMOJI_ROWS and d.emoji_area.height() < rows * 42  # the rest scrolls
     d.show()
     for _ in range(3):
         qapp.processEvents()
+    assert rows > EMOJI_ROWS and d.emoji_area.height() < rows * 42  # the rest scrolls
     btn = d._buttons[PICKER[-1]]  # the current one, in the last row: scrolled into sight
     assert d.emoji_area.verticalScrollBar().value() > 0
     assert btn.visibleRegion().boundingRect().height() > 0

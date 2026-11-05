@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.35.7 — 2026-11-04
+
+- The icon window: a website's icon is got right in it — **Website: … Get** under Logos &
+  Pictures (in the background; Get turns into Cancel) — instead of in a second window that had its
+  own file button too; Choose a Picture… is the one place for a file.
+- A larger icon window shows more icons in a line and more lines in sight (emoji, logos and
+  pictures alike), instead of wider gaps between them.
+
 ## 0.35.6 — 2026-11-04
 
 - A merchant can be a person: tick **👤 A person, not a shop** in Edit Merchant, and 👤 shows

@@ -7,9 +7,9 @@ import re
 from PySide6.QtCore import QRect, QSize, Qt, QTimer
 from PySide6.QtGui import QFont, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
-    QApplication, QDialog, QDialogButtonBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QListView,
-    QListWidget, QListWidgetItem, QMessageBox, QPushButton, QScrollArea, QStyledItemDelegate, QStyleOptionViewItem,
-    QVBoxLayout, QWidget,
+    QApplication, QDialog, QDialogButtonBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QListView,
+    QListWidget, QListWidgetItem, QMessageBox, QPushButton, QScrollArea, QSizePolicy, QStyledItemDelegate,
+    QStyleOptionViewItem, QVBoxLayout, QWidget,
 )
 
 EMOJI_ROWS = 6  # rows of emoji in sight in the icon window; more scroll (the window stays short)
@@ -17,20 +17,44 @@ LOGO_COLUMNS = 6  # logos and pictures across, in the icon window's right-hand c
 _CELL_H, _GAP = 42, 4
 
 
-def _scroll_grid(grid, rows_shown):
-    """A grid of buttons in a frameless area that scrolls up and down, ``rows_shown`` high."""
-    host = QWidget()
-    grid.setContentsMargins(0, 0, 0, 0)
-    host.setLayout(grid)
-    area = QScrollArea()
-    area.setFrameShape(QFrame.NoFrame)
-    area.setWidgetResizable(True)
-    area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-    area.setWidget(host)
-    rows = max(1, grid.rowCount())
-    area.setFixedHeight(min(rows, rows_shown) * (_CELL_H + _GAP) - _GAP)
-    area.setMinimumWidth(host.sizeHint().width() + (area.verticalScrollBar().sizeHint().width() if rows > rows_shown else 0))
-    return area
+_CELL_W = 46
+
+
+class _FlowArea(QScrollArea):
+    """Buttons in lines that go on to the next line when there is no room, in a frameless area
+    that scrolls up and down: as wide as ``columns`` and ``rows`` high at first, and growing with
+    the window (more in a line, and more lines in sight) instead of spreading them apart."""
+
+    def __init__(self, columns, rows, grow=True):
+        super().__init__()
+        from daftarche.widgets import FlowLayout
+
+        class Flow(FlowLayout):  # its height is that for the width it has (not for one button a line)
+            def minimumSize(self):
+                return QSize(_CELL_W, 0)
+        self.setFrameShape(QFrame.NoFrame)
+        self.setWidgetResizable(True)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        host = QWidget()
+        self.flow = Flow(host, spacing=_GAP, line_spacing=_GAP)
+        self.setWidget(host)
+        bar = self.verticalScrollBar().sizeHint().width()
+        self._hint = QSize(columns * (_CELL_W + _GAP) - _GAP + bar, rows * (_CELL_H + _GAP) - _GAP)
+        self.setMinimumSize(self._hint)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding if grow else QSizePolicy.Fixed)
+
+    def sizeHint(self):
+        return self._hint
+
+    def add(self, widget):
+        self.flow.addWidget(widget)
+
+    def clear(self):
+        while self.flow.count():
+            item = self.flow.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        self.widget().updateGeometry()
 
 
 # the picker's grid: money-related first, then the rest of everyday life
@@ -364,6 +388,8 @@ class IconPickerDialog(QDialog):
         left.setSpacing(8)
         body.addLayout(left, 1)
         self._db = db
+        if db is not None:  # its pictures and logos are drawn from this database
+            use_logos(db)
         self._logos = dict(logos if logos is not None else (db.get_logos() if db is not None else {}))
         self._added = []  # pictures added here: taken away again on Cancel
         self._logo_buttons = {}
@@ -379,54 +405,59 @@ class IconPickerDialog(QDialog):
             self.find_logo.setClearButtonEnabled(True)
             self.find_logo.textChanged.connect(lambda _text: self._fill_logos())
             right.addWidget(self.find_logo)
-            self._logo_grid = QGridLayout()
-            self._logo_grid.setSpacing(_GAP)
-            self._logo_grid.setAlignment(Qt.AlignTop | Qt.AlignLeft)
-            host = QWidget()
-            self._logo_grid.setContentsMargins(0, 0, 0, 0)
-            host.setLayout(self._logo_grid)
-            self.logo_area = QScrollArea()
-            self.logo_area.setFrameShape(QFrame.NoFrame)
-            self.logo_area.setWidgetResizable(True)
-            self.logo_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-            self.logo_area.setWidget(host)
-            self.logo_area.setFixedHeight(EMOJI_ROWS * (_CELL_H + _GAP) - _GAP)  # as tall as the emoji
-            self.logo_area.setMinimumWidth(LOGO_COLUMNS * (46 + _GAP)
-                                           + self.logo_area.verticalScrollBar().sizeHint().width())
-            right.addWidget(self.logo_area)
+            self.yours_head = QLabel("Yours")
+            self.yours_head.setProperty("class", "dim-label")
+            right.addWidget(self.yours_head)
+            self.yours_area = _FlowArea(LOGO_COLUMNS, 1, grow=False)  # pictures of your own, the first
+            right.addWidget(self.yours_area)
+            self.merchants_head = QLabel("Merchants")
+            self.merchants_head.setProperty("class", "dim-label")
+            right.addWidget(self.merchants_head)
+            self.logo_area = _FlowArea(LOGO_COLUMNS, EMOJI_ROWS - 2)
+            right.addWidget(self.logo_area, 1)
+            self.none_logos = QLabel()
+            self.none_logos.setProperty("class", "dim-label")
+            self.none_logos.setWordWrap(True)
+            right.addWidget(self.none_logos)
             if db is not None:  # a picture of its own: not a merchant's logo
-                add_row = QHBoxLayout()
+                web = QHBoxLayout()
+                web.addWidget(QLabel("Website:"))
+                self.site = QLineEdit()
+                self.site.setPlaceholderText("its icon as a picture, e.g. example.com")
+                self.site.returnPressed.connect(self._picture_from_web)
+                web.addWidget(self.site, 1)
+                self.btn_site = QPushButton("Get")
+                self.btn_site.setProperty("class", "secondary")
+                self.btn_site.setToolTip("The website's icon, as a picture of your own (as Get Logo in Edit Merchant)")
+                self.btn_site.clicked.connect(self._picture_from_web)
+                web.addWidget(self.btn_site)
+                right.addLayout(web)
                 pick = QPushButton("Choose a Picture…")
                 pick.setProperty("class", "secondary")
                 pick.setToolTip("A picture file as the icon (kept in your data; the phone shows only emoji)")
                 pick.clicked.connect(self._choose_picture)
-                web = QPushButton("From a Website…")
-                web.setProperty("class", "secondary")
-                web.setToolTip("A website's icon as the icon, as Get Logo in Edit Merchant")
-                web.clicked.connect(self._picture_from_web)
-                add_row.addWidget(pick)
-                add_row.addWidget(web)
-                right.addLayout(add_row)
-            right.addStretch()
-            body.addLayout(right)
+                right.addWidget(pick)
+                self._web_job = None
+                self._web_poll = QTimer(self)
+                self._web_poll.setInterval(100)
+                self._web_poll.timeout.connect(self._web_collect)
+            body.addLayout(right, 1)
             self._fill_logos()
         head_emoji = QLabel("Emoji")
         head_emoji.setProperty("class", "dim-label")
         left.addWidget(head_emoji)
-        grid = QGridLayout()
-        grid.setSpacing(4)
-        for i, emoji in enumerate(PICKER):
+        self.emoji_area = _FlowArea(8, EMOJI_ROWS)
+        for emoji in PICKER:
             btn = QPushButton()  # drawn as a picture: as text, the emoji were cut off
             btn.setIcon(emoji_icon(emoji))
             btn.setIconSize(QSize(26, 26))
-            btn.setFixedSize(46, 42)
+            btn.setFixedSize(_CELL_W, _CELL_H)
             btn.setProperty("class", "secondary")
             btn.setToolTip(emoji)
             btn.clicked.connect(lambda _=None, e=emoji: self._pick(e))
-            grid.addWidget(btn, i // 8, i % 8)
+            self.emoji_area.add(btn)
             self._buttons[emoji] = btn
-        self.emoji_area = _scroll_grid(grid, EMOJI_ROWS)
-        left.addWidget(self.emoji_area)
+        left.addWidget(self.emoji_area, 1)
 
         self.tip = QLabel()
         self.tip.setProperty("class", "dim-label")
@@ -462,8 +493,7 @@ class IconPickerDialog(QDialog):
         self.typed.setPlaceholderText("Or paste an emoji")
         self.typed.textChanged.connect(lambda text: self._pick(text.strip(), from_field=True))
         left.addWidget(self.typed)
-        left.addStretch()
-        layout.addLayout(body)
+        layout.addLayout(body, 1)
 
         btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         none = btns.addButton("No Icon", QDialogButtonBox.ResetRole)
@@ -530,49 +560,39 @@ class IconPickerDialog(QDialog):
 
     # ── logos and pictures ────────────────────────────────────────────────────
     def _fill_logos(self):
-        """The pictures added (first) and the merchants' logos whose name has what is in the find
-        field, in rows of LOGO_COLUMNS; the one chosen framed."""
+        """The pictures added (Yours) and the merchants' logos whose name has what is in the find
+        field; the one chosen framed."""
         from daftarche.logos import logo_icon
-        while self._logo_grid.count():
-            item = self._logo_grid.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
+        self.yours_area.clear()
+        self.logo_area.clear()
         self._logo_buttons = {}
         text = self.find_logo.text().strip().casefold()
         pictures = self._db.get_pictures() if self._db is not None else {}
-        entries = [(f"pic:{pid}", name or "A picture", image, True) for pid, (name, image) in pictures.items()
-                   if not text or text in (name or "").casefold()]
-        entries += [(f"logo:{m}", m, image, False) for m, image in sorted(self._logos.items(), key=lambda x: x[0].casefold())
-                    if not text or text in m.casefold()]
-        row = 0
-        for title, group in (("Yours", [e for e in entries if e[3]]), ("Merchants", [e for e in entries if not e[3]])):
-            if not group:
-                continue
-            if pictures:  # two groups: a line saying which
-                label = QLabel(title)
-                label.setProperty("class", "dim-label")
-                self._logo_grid.addWidget(label, row, 0, 1, LOGO_COLUMNS)
-                row += 1
-            for i, (key, name, image, own) in enumerate(group):
+        yours = [(f"pic:{pid}", name or "A picture", image) for pid, (name, image) in pictures.items()
+                 if not text or text in (name or "").casefold()]
+        theirs = [(f"logo:{m}", m, image) for m, image in sorted(self._logos.items(), key=lambda x: x[0].casefold())
+                  if not text or text in m.casefold()]
+        for area, group, own in ((self.yours_area, yours, True), (self.logo_area, theirs, False)):
+            for key, name, image in group:
                 btn = QPushButton()
                 btn.setIcon(logo_icon(image))
                 btn.setIconSize(QSize(28, 28))
-                btn.setFixedSize(46, 42)
+                btn.setFixedSize(_CELL_W, _CELL_H)
                 btn.setProperty("class", "secondary")
                 btn.setToolTip(name + ("  (right-click: Delete Picture)" if own else ""))
                 btn.clicked.connect(lambda _=None, k=key: self._pick(k))
                 if own:
                     btn.setContextMenuPolicy(Qt.CustomContextMenu)
                     btn.customContextMenuRequested.connect(lambda _pos, k=key, b=btn: self._picture_menu(k, b))
-                self._logo_grid.addWidget(btn, row + i // LOGO_COLUMNS, i % LOGO_COLUMNS)
+                area.add(btn)
                 self._logo_buttons[key] = btn
-            row += (len(group) + LOGO_COLUMNS - 1) // LOGO_COLUMNS
-        if not entries:
-            none = QLabel("No logo with that name." if text else
-                          "No logos yet: give a merchant one (Edit Merchant), or add a picture below.")
-            none.setProperty("class", "dim-label")
-            none.setWordWrap(True)
-            self._logo_grid.addWidget(none, 0, 0, 1, LOGO_COLUMNS)
+        for widget in (self.yours_head, self.yours_area):
+            widget.setVisible(bool(yours))
+        self.merchants_head.setVisible(bool(theirs) and bool(yours))
+        self.none_logos.setText("" if theirs or yours else (
+            "No logo with that name." if text else
+            "No logos yet: give a merchant one (Edit Merchant), or add a picture below."))
+        self.none_logos.setVisible(not theirs and not yours)
         if hasattr(self, "typed"):  # built: the one chosen framed again
             self._pick(self.icon)
 
@@ -601,13 +621,58 @@ class IconPickerDialog(QDialog):
         self._add_picture(Path(path).stem, image)
 
     def _picture_from_web(self):
-        from daftarche.logos import LogoDialog
-        name = self.name_field.text().strip() if self.name_field is not None else ""
-        dlg = LogoDialog(name or "the icon", parent=self)
-        dlg.setWindowTitle("A Picture from a Website")
-        if dlg.exec() and dlg.image:
-            site = LogoDialog._site_of(dlg.source) or name
-            self._add_picture(site, dlg.image)
+        """Website: Get — its icon, got in the background (pressed again: Cancel), as a picture of
+        your own."""
+        import threading
+
+        from daftarche.logos import fetch_within
+        if self._web_job is not None:  # Cancel
+            self._web_stop()
+            return
+        site = self.site.text().strip()
+        if not site:
+            return
+        state = {"done": False}
+
+        def work():
+            try:
+                state["result"] = fetch_within(site)
+            except Exception as exc:  # LogoError, no connection
+                state["error"] = exc
+            state["done"] = True
+        self._web_job = (site, state)
+        threading.Thread(target=work, daemon=True).start()
+        self.btn_site.setText("Cancel")
+        self._web_poll.start()
+
+    def _web_stop(self):
+        self._web_job = None
+        self._web_poll.stop()
+        self.btn_site.setText("Get")
+
+    def _web_collect(self):
+        from daftarche.logos import LogoError, LogoDialog
+        if self._web_job is None or not self._web_job[1]["done"]:
+            return
+        site, state = self._web_job
+        self._web_stop()
+        if "error" in state:
+            error = state["error"]
+            QMessageBox.warning(self, "Picture", str(error) if isinstance(error, LogoError) else
+                                f"No icon found at {site}: the site did not answer in time, or there is no connection.")
+            return
+        image, source = state["result"]
+        self._add_picture(LogoDialog._site_of(source) or site, image)
+        self.site.clear()
+
+    def web_busy(self):
+        """A website's icon is being got (for tests)."""
+        return getattr(self, "_web_job", None) is not None
+
+    def done(self, result):
+        if getattr(self, "_web_poll", None) is not None:
+            self._web_stop()
+        super().done(result)
 
     def _picture_menu(self, key, button):
         from PySide6.QtWidgets import QMenu
