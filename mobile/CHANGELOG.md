@@ -2,6 +2,16 @@
 
 Released with tags `phone-vX.Y.Z`; each release carries the signed APK.
 
+## 0.6.1 — 2026-11-06
+
+- A period at the end of its row (6 Months, This Year, All) is in view when the app opens: the
+  row scrolls to its end, so the chosen one is seen (the Accounts tab opens on All).
+- Charts, many months: a month tapped in the bars stays where it was; the bars no longer jump
+  back to the newest months, hiding it.
+- **A split part's own tags** (Daftarche 0.36.0 on the Mac) count: filtering by such a tag shows
+  the split, the totals count only the parts with it, the lists' counts and the search find it,
+  and an opened split shows each part's tags under it.
+
 ## 0.6.0 — 2026-11-06
 
 - **Heads that stay**: on Dashboard, Transactions, Charts and Accounts the period (and on

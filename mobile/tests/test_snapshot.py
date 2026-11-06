@@ -176,3 +176,24 @@ def test_custom_periods():
     assert (days["start"], days["end"], custom_label(days)) == ("2026-10-12", "2026-11-03", "12 Oct – 3 Nov 2026")
     assert custom_label(custom_period("range", ("2025-12-30", "2026-01-02"))) == "30 Dec 2025 – 2 Jan 2026"
     assert step_period(days, 1) == days  # a range does not step
+
+
+def test_a_parts_own_tag_finds_its_split(desktop):
+    """0.6.2: a part's own tags (Daftarche 0.36.0) count, in the filter, the counts and the search."""
+    db, snap, tx_id, shop = desktop
+    split = next(t for t in snap.transactions if t["id"] == tx_id)
+    tag = {"id": 999, "name": "Gift"}
+    snap.tags.append(tag)
+    snap.tag[999] = tag
+    split["parts"][1]["tags"] = [999]
+    try:
+        assert snap.filter(tag={999}) == [split]
+        assert snap.counts("tag")[999] == 1
+        assert snap.counts("category", tag={999}) == {shop: 1}  # only the part with the tag
+        assert split in snap.filter(text="gift")
+        part_ok = snap.line_test(tags={999})
+        assert [line.amount for line in snap.lines([split]) if part_ok(line)] == [20]
+    finally:
+        split["parts"][1]["tags"] = []
+        snap.tags.remove(tag)
+        del snap.tag[999]

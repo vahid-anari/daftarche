@@ -145,6 +145,7 @@ class Line:
     category: int | None
     subcategory: int | None
     note: str | None
+    tags: frozenset = frozenset()  # the transaction's own tags, and a part's (0.36.0 on the Mac)
 
 
 class Snapshot:
@@ -274,8 +275,8 @@ class Snapshot:
         filter. Sub-categories narrow their own category only: with Groceries and Health chosen and
         the sub-category Bakery, Groceries shows Bakery alone and Health all of it."""
         text = (text or "").strip().casefold()
-        kinds, accounts, tags, merchants = (_as_set(v) for v in (kind, account, tag, merchant))
-        line_ok = self.line_test(category, subcategory)
+        kinds, accounts, merchants = (_as_set(v) for v in (kind, account, merchant))
+        line_ok = self.line_test(category, subcategory, tag)
         out = []
         for tx in self.transactions:
             d = tx["date"]
@@ -287,8 +288,6 @@ class Snapshot:
                 continue
             if line_ok and not any(line_ok(line) for line in self.lines([tx])):
                 continue
-            if tags and not (set(tx.get("tags", [])) & tags):
-                continue
             if merchants and (tx.get("merchant") or NO_MERCHANT) not in merchants:
                 continue
             if text and text not in self._search_text(tx):
@@ -296,10 +295,18 @@ class Snapshot:
             out.append(tx)
         return out
 
-    def line_test(self, categories=None, subcategories=None):
-        """Whether a line (a transaction, or one part of it) has a chosen category / sub-category;
-        None when none is chosen."""
-        categories, subcategories = _as_set(categories), _as_set(subcategories)
+    def line_test(self, categories=None, subcategories=None, tags=None):
+        """Whether a line (a transaction, or one part of it) has a chosen category / sub-category
+        and a chosen tag (its own, or the transaction's); None when none is chosen."""
+        categories, subcategories, tags = _as_set(categories), _as_set(subcategories), _as_set(tags)
+        in_categories = self._category_test(categories, subcategories)
+        if tags is None:
+            return in_categories
+        if in_categories is None:
+            return lambda line: bool(line.tags & tags)
+        return lambda line: bool(line.tags & tags) and in_categories(line)
+
+    def _category_test(self, categories, subcategories):
         if not categories and not subcategories:
             return None
         subs = subcategories or set()
@@ -316,21 +323,26 @@ class Snapshot:
             others["category"] = _as_set(chosen["category"]) | {self.sub_category.get(v)
                                                                 for v in _as_set(chosen.get("subcategory")) or ()}
         in_categories = self.line_test(others.get("category")) if key == "subcategory" else None
+        # a split's parts count for what they have: a category's parts with the chosen tag, a tag's
+        # parts in the chosen categories
+        parts_ok = self.line_test(tags=others.get("tag")) if key in ("category", "subcategory") else \
+            self.line_test(others.get("category"), others.get("subcategory")) if key == "tag" else None
         out = {}
         for tx in self.filter(start, end, **others):
+            lines = [line for line in self.lines([tx]) if parts_ok is None or parts_ok(line)]
             if key == "kind":
                 values = {tx["type"]}
             elif key == "account":
                 values = {tx["account"], tx["to_account"]} - {None}
             elif key == "category":
-                values = {line.category for line in self.lines([tx])} - {None}
+                values = {line.category for line in lines} - {None}
             elif key == "subcategory":
-                values = {line.subcategory for line in self.lines([tx]) if line.subcategory is not None
+                values = {line.subcategory for line in lines if line.subcategory is not None
                           and (in_categories is None or in_categories(line))}
             elif key == "merchant":
                 values = {tx.get("merchant") or NO_MERCHANT}
             elif key == "tag":
-                values = set(tx.get("tags", []))
+                values = set().union(*(line.tags for line in lines))
             else:
                 raise ValueError(f"Unknown filter {key!r}")
             for v in values:
@@ -353,20 +365,24 @@ class Snapshot:
     def _search_text(self, tx):
         words = [tx.get("merchant"), tx.get("name"), tx.get("note"), f"{tx['amount']:.2f}",
                  self.account_name(tx["account"]), self.account_name(tx["to_account"])]
+        tags = set()
         for line in self.lines([tx]):
             words += [self.category_name(line.category), self.subcategory_name(line.subcategory), line.note]
-        words += [self.tag[t]["name"] for t in tx.get("tags", []) if t in self.tag]
+            tags |= line.tags
+        words += [self.tag[t]["name"] for t in sorted(tags) if t in self.tag]
         return " ".join(w for w in words if w).casefold()
 
     @staticmethod
     def lines(transactions):
         """Every transaction as lines: its parts when split, else itself."""
         for tx in transactions:
+            own = frozenset(tx.get("tags") or ())
             if tx.get("parts"):
                 for p in tx["parts"]:
-                    yield Line(tx, p["amount"], p["category"], p["subcategory"], p.get("note") or tx.get("note"))
+                    yield Line(tx, p["amount"], p["category"], p["subcategory"], p.get("note") or tx.get("note"),
+                               own | frozenset(p.get("tags") or ()))
             else:
-                yield Line(tx, tx["amount"], tx["category"], tx["subcategory"], tx.get("note"))
+                yield Line(tx, tx["amount"], tx["category"], tx["subcategory"], tx.get("note"), own)
 
     # ── totals ──
     def summary(self, start=None, end=None):

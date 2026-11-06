@@ -108,6 +108,7 @@ class PhoneApp:
         self.filter_search = ""  # what is typed above that list
         self.open_category = None
         self.p = palette_for("system", page.platform_brightness)
+        self._chart_bars = {}  # Charts' scrolling bars, kept while a month is tapped
         self.update_info = None
         self.nav = BackSteps()
         self._pager = None
@@ -290,6 +291,21 @@ class PhoneApp:
         page.controls.clear()
         page.controls.append(ft.SafeArea(self._body(), expand=True))
         page.update()
+        if self.snap is not None:
+            page.run_task(self._show_chosen_periods)
+
+    async def _show_chosen_periods(self):
+        """A period at the end of its row (6 Months, This Year, All): scrolled into view, the
+        row opening at the left would hide it."""
+        rows = dict(self._period_rows)
+        await asyncio.sleep(0.3)  # drawn first; and drawn anew meanwhile: those rows are gone
+        for tab, row in rows.items():
+            name = self.period.get(tab)
+            if self._period_rows.get(tab) is row and not self.custom.get(tab) and name in PERIODS[3:]:
+                try:
+                    await row.scroll_to(offset=-1)  # to its end (by a key, the tabs moved too)
+                except Exception:  # noqa: BLE001 — not on the screen yet: it stays at the left
+                    pass
 
     def _tab_changed(self, e):
         """A tab tapped in the bar."""
@@ -353,6 +369,7 @@ class PhoneApp:
             return self._settings() if self.tab == SETTINGS_TAB else self._welcome()
         # all five tabs, side by side: a swipe slides to the next one (the bar follows)
         self._period_rows = {}  # built afresh with the tabs
+        self._chart_bars = {}
         self._pager = ft.PageView(self._tabs(), selected_index=self.tab, on_change=self._swiped, expand=True)
         return self._pager
 
@@ -503,6 +520,7 @@ class PhoneApp:
         if tab == "Charts":
             self.chart_month = None
             self.open_category = None
+            self._chart_bars = {}  # other months: a new row, at the newest
         self._redraw()
 
     def _range(self, tab):
@@ -843,8 +861,8 @@ class PhoneApp:
                                    badge=str(n_filters) if n_filters else None, on_click=self._open_filters)
         chips = self._filter_chips()
 
-        # with a category chosen, only its parts of a split count (as Charts adds them up)
-        line_ok = s.line_test(f["category"], f["subcategory"])
+        # with a category or tag chosen, only those parts of a split count (as Charts adds them up)
+        line_ok = s.line_test(f["category"], f["subcategory"], f["tag"])
         lines = [(t["type"], t["amount"]) for t in txs] if line_ok is None else \
             [(line.tx["type"], line.amount) for line in s.lines(txs) if line_ok(line)]
         income = sum(a for k, a in lines if k == "Income")
@@ -982,6 +1000,10 @@ class PhoneApp:
                     self._amount_text(tx, part["amount"], size=14)], spacing=10))
                 if part.get("note"):  # under the part's name, past its mark
                     items.append(ft.Container(ft.Text(part["note"], size=12, color=p.dim, italic=True),
+                                              padding=ft.Padding.only(left=36)))
+                own = [s.tag[t]["name"] for t in part.get("tags") or () if t in s.tag]
+                if own:  # the part's own tags
+                    items.append(ft.Container(ft.Text("🏷 " + ", ".join(own), size=12, color=p.dim),
                                               padding=ft.Padding.only(left=36)))
         else:
             cat, sub = s.category_name(tx["category"]), s.subcategory_name(tx["subcategory"])
@@ -1264,7 +1286,8 @@ class PhoneApp:
             chart = self._card(ft.Column([
                 self._heading(f"Monthly {kind}", ft.Text(f"average {money(average)}", size=12, color=p.dim)),
                 bar_chart(p, [month_label(m) for m in months], groups, height=190, bar_width=11, stacked=True,
-                          selected=picked, on_tap=lambda i: self._pick_month(months[i]))],
+                          selected=picked, on_tap=lambda i: self._pick_month(months[i]),
+                          holder=self._chart_bars)],
                 spacing=12))
 
         title, heading = "By Category  (tap for details)", None
@@ -1292,11 +1315,23 @@ class PhoneApp:
         self.chart_month = None if self.chart_month == month else month
         self.open_category = None
         self._redraw()
+        if self._chart_bars.get("offset"):  # drawn anew at the newest: back to where you tapped
+            self.page.run_task(self._bars_back, self._chart_bars["offset"])
+
+    async def _bars_back(self, offset):
+        await asyncio.sleep(0.05)
+        bars = self._chart_bars.get("bars")
+        if bars is not None:
+            try:
+                await bars.scroll_to(offset=offset)
+            except Exception:  # noqa: BLE001 — drawn anew meanwhile
+                pass
 
     def _set_chart_kind(self, e):
         self.chart_kind = list(e.control.selected)[0]
         self.open_category = None
         self.chart_month = None
+        self._chart_bars = {}
         self._redraw()
 
     def _chart_accounts(self, e=None):
@@ -1328,6 +1363,7 @@ class PhoneApp:
     def _set_chart_accounts(self, accounts):
         self.chart_account = set(accounts)
         self.open_category = None
+        self._chart_bars = {}
         if getattr(self, "_account_rows", None) is not None:
             self._account_rows.controls = self._chart_account_rows()
         self._redraw()

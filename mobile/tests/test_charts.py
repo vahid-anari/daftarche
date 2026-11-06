@@ -412,3 +412,44 @@ def test_the_picker_closes_only_itself(app):
     assert sheet.open is False and phone.custom["Transactions"]["start"] == "2026-09-01"
     phone._period_picker("Transactions")  # opens again, on the month chosen
     assert phone._picker_open
+
+
+# ── 0.6.1: a tapped month stays in view; a period at the end of its row shows ─
+def test_the_bars_are_kept_while_a_month_is_tapped(app):
+    phone, page, view = app
+    holder = {}
+    labels = [f"M{i}" for i in range(12)]  # more than SPREAD: a row that scrolls
+    first = bar_chart(DARK, labels, [("#f00", [1] * 12)], holder=holder)
+    bars = holder["bars"]
+    bar_chart(DARK, labels, [("#f00", [2] * 12)], selected=3, holder=holder)
+    assert holder["bars"] is bars and len(bars.controls) == 12 and first is not None
+    bars.on_scroll(SimpleNamespace(pixels=140.0))
+    assert holder["offset"] == 140.0
+    phone._chart_bars = holder
+    tasks = []
+    page.run_task = lambda f, *a: tasks.append((f.__name__, a))
+    months, _ = phone.snap.monthly_by_category("Expense", *phone._range("Charts"))
+    phone._pick_month(months[0])
+    assert ("_bars_back", (140.0,)) in tasks
+    phone._set_period("Charts", "6 Months")
+    assert phone._chart_bars == {}  # other months: a new row, at the newest
+
+
+def test_a_period_at_the_end_of_its_row_is_scrolled_to(app):
+    phone, page, view = app
+    tasks = []
+    page.run_task = lambda f, *a: tasks.append(f.__name__)
+    phone.period["Accounts"] = "All"
+    phone.render()
+    assert "_show_chosen_periods" in tasks
+    scrolled = []
+
+    async def scroll_to(**kw):
+        scrolled.append(kw)
+    row = phone._period_rows["Accounts"]
+    row.scroll_to = scroll_to
+    for other in phone._period_rows.values():
+        if other is not row:
+            other.scroll_to = lambda **kw: asyncio.sleep(0)
+    asyncio.run(phone._show_chosen_periods())
+    assert {"offset": -1} in scrolled

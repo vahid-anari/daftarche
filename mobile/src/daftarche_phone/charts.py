@@ -40,7 +40,8 @@ SPREAD = 8
 """Up to this many months, the bars share the card's width out; more scroll sideways."""
 
 
-def bar_chart(p, labels, groups, height=170, bar_width=10, gap=3, stacked=False, selected=None, on_tap=None):
+def bar_chart(p, labels, groups, height=170, bar_width=10, gap=3, stacked=False, selected=None, on_tap=None,
+              holder=None):
     """Bars over months.
 
     ``groups``: ``[(colour, [value per label])]``, side by side, or one on top of the other
@@ -49,7 +50,9 @@ def bar_chart(p, labels, groups, height=170, bar_width=10, gap=3, stacked=False,
     Up to ``SPREAD`` months each get an equal share of the width, their bar in the middle of
     it (wider when there are few); more months keep narrow bars in a row that scrolls
     sideways and opens at the newest. ``on_tap(index)``: a month was tapped; ``selected``: the
-    index of the month to show at full colour (the others are dimmed).
+    index of the month to show at full colour (the others are dimmed). ``holder``: a dict that
+    keeps the scrolling row from one drawing to the next, so a tapped month stays where it was
+    (an empty dict: a new row, at the newest).
     """
     n = len(labels)
     if n == 0:
@@ -88,8 +91,14 @@ def bar_chart(p, labels, groups, height=170, bar_width=10, gap=3, stacked=False,
     if spread:
         bars = ft.Row(columns, spacing=0, vertical_alignment=ft.CrossAxisAlignment.END)
     else:  # newest on the right, and shown first: the list runs from the right
-        bars = ft.ListView(list(reversed(columns)), horizontal=True, reverse=True, spacing=0,
-                           height=height + 20)
+        bars = (holder or {}).get("bars")
+        if bars is None or bars.height != height + 20:
+            bars = ft.ListView(horizontal=True, reverse=True, spacing=0, height=height + 20)
+            if holder is not None:
+                holder["bars"] = bars
+                bars.scroll_interval = 50  # where it is scrolled to, to put it back after a tap
+                bars.on_scroll = lambda e: holder.__setitem__("offset", e.pixels)
+        bars.controls = list(reversed(columns))
     return ft.Row([ft.Column([axis, ft.Container(height=16)], spacing=0), ft.Container(bars, expand=True)],
                   vertical_alignment=ft.CrossAxisAlignment.START, spacing=8)
 
