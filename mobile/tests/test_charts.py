@@ -440,6 +440,7 @@ def test_a_period_at_the_end_of_its_row_is_scrolled_to(app):
     tasks = []
     page.run_task = lambda f, *a: tasks.append(f.__name__)
     phone.period["Accounts"] = "All"
+    phone.tab = 3
     phone.render()
     assert "_show_chosen_periods" in tasks
     scrolled = []
@@ -453,3 +454,20 @@ def test_a_period_at_the_end_of_its_row_is_scrolled_to(app):
             other.scroll_to = lambda **kw: asyncio.sleep(0)
     asyncio.run(phone._show_chosen_periods())
     assert {"offset": -1} in scrolled
+
+
+def test_a_swiped_to_tab_scrolls_its_row(app):
+    """0.6.2: only the tab on the screen: a row off it is not drawn, and would wait 10 s."""
+    from types import SimpleNamespace as NS
+    phone, page, view = app
+    page.navigation_bar.update = lambda: None
+    tasks = []
+    page.run_task = lambda f, *a: tasks.append((f.__name__, a))
+    phone._swiped(NS(data="3", control=phone._pager))
+    assert ("_show_chosen_periods", ("Accounts",)) in tasks
+
+
+def test_a_split_says_so_beside_its_logo(app):
+    phone, page, view = app
+    tx = dict(phone.snap.transactions[0], parts=[{"amount": 1.0, "category": None, "subcategory": None}])
+    assert "✂️ Split" in _texts(phone._tx_row(tx))

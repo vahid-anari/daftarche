@@ -2,6 +2,12 @@
 
 Released with tags `phone-vX.Y.Z`; each release carries the signed APK.
 
+## 0.6.2 — 2026-11-06
+
+- The chosen period stays in view when you change tabs too (6 Months, This Year, All at the end
+  of the row): the tab on the screen scrolls its row, whether tapped in the bar or swiped to.
+- A split says "✂️ Split" under its name, so it is seen beside a merchant's logo too.
+
 ## 0.6.1 — 2026-11-06
 
 - A period at the end of its row (6 Months, This Year, All) is in view when the app opens: the
