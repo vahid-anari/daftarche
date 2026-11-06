@@ -294,10 +294,12 @@ class PhoneApp:
         if self.snap is not None:
             page.run_task(self._show_chosen_periods)
 
-    async def _show_chosen_periods(self):
+    async def _show_chosen_periods(self, only=None):
         """A period at the end of its row (6 Months, This Year, All): scrolled into view, the
-        row opening at the left would hide it."""
-        rows = dict(self._period_rows)
+        row opening at the left would hide it. Only the tab on the screen (``only``: the one just
+        swiped to): a row off the screen is not drawn yet, and asking it waits ten seconds."""
+        only = only or TABS[self.tab][0]
+        rows = {k: v for k, v in self._period_rows.items() if k == only}
         await asyncio.sleep(0.3)  # drawn first; and drawn anew meanwhile: those rows are gone
         for tab, row in rows.items():
             name = self.period.get(tab)
@@ -322,6 +324,7 @@ class PhoneApp:
         self.tab = index
         self.page.navigation_bar.selected_index = index
         self.page.navigation_bar.update()
+        self.page.run_task(self._show_chosen_periods, TABS[index][0])  # its row was off the screen
 
     # ── Back (Android's button or gesture) ───────────────────────────────────
     def _state(self):
@@ -949,7 +952,7 @@ class PhoneApp:
             if tx.get("transfer") == "loan":
                 sub = f"Loan  ·  {sub}"
         else:
-            cat = "Split" if tx.get("parts") else s.category_name(tx["category"])
+            cat = "✂️ Split" if tx.get("parts") else s.category_name(tx["category"])
             sub_name = "" if tx.get("parts") else s.subcategory_name(tx["subcategory"])
             sub = f"{cat} › {sub_name}" if sub_name else cat
         # the account on a line of its own: sharing the category's line, it was cut off
