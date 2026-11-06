@@ -2,6 +2,13 @@
 
 Released with tags `phone-vX.Y.Z`; each release carries the signed APK.
 
+## 0.5.0 — 2026-11-06
+
+- **Logos and pictures**: a transaction's round mark shows its merchant's logo (on white), else
+  its category's logo or picture, else the emoji; the category lists show a category's logo or
+  picture beside its name. They come from Daftarche 0.37.0 on the Mac; from an older one the app
+  shows the emoji as before.
+
 ## 0.4.0 — 2026-10-27
 
 The same shape as Vahid's other phone apps (Dot Matrix, Spoolbook):

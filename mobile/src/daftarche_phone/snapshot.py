@@ -7,6 +7,8 @@ desktop tabs do: totals by kind from the transactions, totals by category from t
 
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -112,6 +114,8 @@ class Snapshot:
         self.categories = data.get("categories", [])
         self.category = {c["id"]: c for c in self.categories}
         self.subcategory = {s["id"]: s for c in self.categories for s in c.get("subcategories", [])}
+        self._images = data.get("images") or {}  # key → base64 PNG (0.5.0; older files have none)
+        self._decoded = {}
         self.tags = data.get("tags", [])
         self.tag = {t["id"]: t for t in self.tags}
         self.transactions = data.get("transactions", [])  # newest first
@@ -162,10 +166,34 @@ class Snapshot:
 
     def icon(self, category_id, subcategory_id=None):
         s = self.subcategory.get(subcategory_id)
-        if s and s.get("icon"):
-            return s["icon"]
+        if s and (s.get("icon") or s.get("image")):  # its own (an image: category_image has it)
+            return s.get("icon") or ""
         c = self.category.get(category_id)
         return (c or {}).get("icon") or ""
+
+    def image(self, key):
+        """The PNG bytes of an image in the file, or None."""
+        if not key or key not in self._images:
+            return None
+        if key not in self._decoded:
+            try:
+                self._decoded[key] = base64.b64decode(self._images[key], validate=True)
+            except (binascii.Error, ValueError, TypeError):
+                self._decoded[key] = None
+        return self._decoded[key]
+
+    def merchant_image(self, merchant):
+        """The merchant's logo (PNG bytes), or None."""
+        return self.image("logo:" + merchant.strip().casefold()) if merchant else None
+
+    def category_image(self, category_id, subcategory_id=None):
+        """The logo or picture used as the icon of a sub-category, else of its category (PNG bytes),
+        or None when that icon is an emoji or there is none."""
+        s = self.subcategory.get(subcategory_id)
+        if s and (s.get("image") or s.get("icon")):
+            return self.image(s.get("image"))
+        c = self.category.get(category_id)
+        return self.image((c or {}).get("image"))
 
     def title(self, tx):
         """What a row is called: the merchant, else the bank's text."""

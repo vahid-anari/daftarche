@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.37.0 — 2026-11-06
+
+- **Logos and pictures go to the phone** (Daftarche on the phone 0.5.0): a transaction shows its
+  merchant's logo, on white, in its round mark, else its category's logo or picture, else the
+  emoji as before; the category lists show a category's logo or picture beside its name. They go
+  as kept (128 px at most), once each: about a megabyte for a hundred and fifty logos. An older
+  phone app ignores them.
+- The window after an import is as wide as its table: an account's name ("Vahid-CIBC-Checking")
+  no longer breaks over three lines.
+- The Manage window can be made smaller (800 × 500, was 1200 × 620): its tabs and the row of
+  lists scroll sideways.
+
 ## 0.36.0 — 2026-11-04
 
 - A split transaction's parts can have **tags of their own** (a Tags box beside each part's note

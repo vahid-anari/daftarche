@@ -81,7 +81,9 @@ file together.
     {"person": "Sahar", "opening": 0, "paid_out": 500, "received": 200,
      "written_off": 0, "balance": 300, "count": 3, "last": "2026-09-14",
      "note": null}
-  ]
+  ],
+
+  "images": {"logo:maple grocer": "iVBORw0KGgo…", "pic:3": "iVBORw0KGgo…"}
 }
 ```
 
@@ -92,7 +94,13 @@ Notes on the fields:
   first transaction to the last (what the balance chart draws).
 - **categories.type** and **transactions.type**: `Income`, `Expense` or `Transfer`
   (the shared `Uncategorized` category has none: `""`).
-- **subcategories.icon**: its own icon, else its category's.
+- **subcategories.icon** and **image**: its own icon, else its category's.
+- **categories.image** and **subcategories.image** (0.37.0): the key in `images` of the logo
+  (`logo:` and a merchant's name) or picture (`pic:` and its number) that is the icon, else
+  `null`; `icon` is then `null` (it holds only an emoji).
+- **images** (0.37.0): PNG images of at most 128 px, base64. `logo:` and a merchant's name in
+  lower case (casefolded) for every merchant's logo: the phone shows it for that merchant's
+  transactions; `pic:` and a number for each picture used as an icon. Missing before 0.37.0.
 - **transactions.transfer**: for transfers only: `matched`, `unmatched` or `loan`.
 - **transactions.parts**: the parts of a split transaction, in order, each
   `{"category", "subcategory", "amount", "note"}`; empty when it is not split.

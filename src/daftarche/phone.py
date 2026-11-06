@@ -10,9 +10,10 @@ No Qt here: phone_sync.py seals it (seal.py) and sends it to the phones' files o
 
 from __future__ import annotations
 
+import base64
 from datetime import datetime
 
-from daftarche.db import MONTH_NUM, round2
+from daftarche.db import MONTH_NUM, PICTURE_PREFIX, round2
 
 FORMAT = "daftarche-phone"
 VERSION = 1
@@ -54,17 +55,39 @@ def build_snapshot(db, app_version="", now=None):
                 "by_account": {str(a["id"]): [_num(snapshots[p].get(a["id"], 0)) for p in periods]
                                for a in accounts}}
 
-    def emoji(icon):  # a logo ("logo:…") or a picture ("pic:…") does not go to the phone: none there
-        return None if (icon or "").startswith(("logo:", "pic:")) else icon
-    cat_icons = {r["id"]: emoji(r["icon"]) for r in conn.execute("SELECT id, icon FROM categories")}
+    # logos and pictures go as PNG (at most 128 px, as kept): "images" holds each once, by a key
+    images = {}
+    for r in conn.execute("SELECT merchant, image FROM merchant_logos ORDER BY merchant COLLATE NOCASE"):
+        if r["image"]:  # "Café" and "CAFÉ" share a key: the first, as logo_for on the desktop
+            images.setdefault(merchant_image_key(r["merchant"]), base64.b64encode(r["image"]).decode())
+    pictures = {r["id"]: r["image"] for r in conn.execute("SELECT id, image FROM category_pictures")}
+
+    def look(icon):
+        """(emoji, image key) of an icon: an emoji, a logo ("logo:…") or a picture ("pic:…")."""
+        icon = icon or ""
+        if icon.startswith("logo:"):
+            key = merchant_image_key(icon[5:])
+            return None, key if key in images else None
+        if icon.startswith(PICTURE_PREFIX):
+            pid = int(icon[len(PICTURE_PREFIX):]) if icon[len(PICTURE_PREFIX):].isdigit() else None
+            if pictures.get(pid):
+                images.setdefault(icon, base64.b64encode(pictures[pid]).decode())
+                return None, icon
+            return None, None
+        return icon or None, None
+
+    cat_look = {r["id"]: look(r["icon"]) for r in conn.execute("SELECT id, icon FROM categories")}
     subs = {}
     for r in conn.execute("SELECT id, name, icon, category_id FROM subcategories ORDER BY name"):
-        subs.setdefault(r["category_id"], []).append(
-            {"id": r["id"], "name": r["name"], "icon": emoji(r["icon"]) or cat_icons.get(r["category_id"])})
-    categories = [{"id": r["id"], "name": r["name"], "type": _kind(r["type_name"]), "icon": emoji(r["icon"]),
-                   "subcategories": subs.get(r["id"], [])}
-                  for r in conn.execute("SELECT c.id, c.name, c.icon, t.name AS type_name FROM categories c "
-                                        "LEFT JOIN types t ON t.id = c.type_id ORDER BY t.name, c.name")]
+        own = look(r["icon"])
+        emoji, image = own if own != (None, None) else cat_look.get(r["category_id"], (None, None))
+        subs.setdefault(r["category_id"], []).append({"id": r["id"], "name": r["name"], "icon": emoji, "image": image})
+    categories = []
+    for r in conn.execute("SELECT c.id, c.name, t.name AS type_name FROM categories c "
+                          "LEFT JOIN types t ON t.id = c.type_id ORDER BY t.name, c.name"):
+        emoji, image = cat_look.get(r["id"], (None, None))
+        categories.append({"id": r["id"], "name": r["name"], "type": _kind(r["type_name"]), "icon": emoji,
+                           "image": image, "subcategories": subs.get(r["id"], [])})
 
     tags = [{"id": r["id"], "name": r["name"]} for r in conn.execute("SELECT id, name FROM tags ORDER BY name")]
     tags_of = {}
@@ -102,4 +125,10 @@ def build_snapshot(db, app_version="", now=None):
 
     return {"format": FORMAT, "version": VERSION, "created": now.isoformat(timespec="seconds"),
             "app_version": app_version, "accounts": accounts, "balances": balances,
-            "categories": categories, "tags": tags, "transactions": transactions, "loans": loans}
+            "categories": categories, "tags": tags, "transactions": transactions, "loans": loans,
+            "images": images}
+
+
+def merchant_image_key(merchant):
+    """The key of a merchant's logo in the snapshot's "images" (names match whatever the case)."""
+    return "logo:" + (merchant or "").strip().casefold()

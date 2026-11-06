@@ -242,7 +242,7 @@ class ManageDialog(QDialog):
         self._show_merchant = show_merchant  # (merchant) → its transactions in the main window
         self._show_transactions = show_transactions  # (text, panel, **filters) → the main window
         self.setWindowTitle("Manage")
-        self.setMinimumSize(1200, 620)
+        self.setMinimumSize(800, 500)  # smaller than the lists: the row of lists scrolls sideways
         from daftarche.icons import use_logos
         use_logos(db)
         self._build()

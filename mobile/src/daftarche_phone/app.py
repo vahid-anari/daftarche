@@ -452,8 +452,14 @@ class PhoneApp:
             text, colour = money(amount), p.transfer
         return ft.Text(text, size=size, weight=ft.FontWeight.BOLD, color=colour, no_wrap=True)
 
-    def _badge(self, emoji, colour):
+    def _badge(self, emoji, colour, image=None):
+        """The round mark at the start of a row: a logo or picture (on white, as on the desktop),
+        else the emoji, else a dot in the row's colour."""
         p = self.p
+        if image:
+            return ft.Container(ft.Image(src=image, fit=ft.BoxFit.CONTAIN, width=28, height=28),
+                                width=38, height=38, border_radius=19, bgcolor="#ffffff",
+                                alignment=ft.Alignment.CENTER, clip_behavior=ft.ClipBehavior.ANTI_ALIAS)
         return ft.Container(ft.Text(emoji, size=17) if emoji else ft.Container(width=10, height=10, bgcolor=colour,
                                                                                border_radius=5),
                             width=38, height=38, border_radius=19, bgcolor=p.raised,
@@ -551,9 +557,13 @@ class PhoneApp:
         items = []
         for c, v in rows:
             name = s.category_name(c)
-            icon = s.icon(c)
-            head = ft.Row([ft.Container(width=10, height=10, bgcolor=colours[c], border_radius=5),
-                           ft.Text(f"{icon} {name}".strip(), size=14, color=p.text, expand=True, no_wrap=True),
+            icon, image = s.icon(c), s.category_image(c)
+            label = ft.Text(f"{'' if image else icon} {name}".strip(), size=14, color=p.text, expand=True,
+                            no_wrap=True)
+            if image:  # a logo or picture as the category's icon: small, before its name
+                label = ft.Row([ft.Image(src=image, fit=ft.BoxFit.CONTAIN, width=18, height=18), label],
+                               spacing=6, expand=True)
+            head = ft.Row([ft.Container(width=10, height=10, bgcolor=colours[c], border_radius=5), label,
                            ft.Text(money(v), size=14, color=p.text, weight=ft.FontWeight.BOLD),
                            ft.Text(f"{v / total:.0%}", size=12, color=p.dim, width=36,
                                    text_align=ft.TextAlign.RIGHT)], spacing=8)
@@ -673,10 +683,13 @@ class PhoneApp:
             sub_name = "" if tx.get("parts") else s.subcategory_name(tx["subcategory"])
             sub = f"{cat} › {sub_name}" if sub_name else cat
         emoji = "✂️" if tx.get("parts") else s.icon(tx["category"], tx["subcategory"])
+        # the merchant's logo first; else the category's logo or picture; else the emoji
+        image = s.merchant_image(tx.get("merchant")) or (
+            None if tx.get("parts") else s.category_image(tx["category"], tx["subcategory"]))
         # the account on a line of its own: sharing the category's line, it was cut off
         account = "" if tx["type"] == "Transfer" else s.account_name(tx["account"]) or ""
         return ft.Container(ft.Row([
-            self._badge(emoji, p.kind(tx["type"])),
+            self._badge(emoji, p.kind(tx["type"]), image),
             ft.Column([ft.Text(s.title(tx), size=14, color=p.text, no_wrap=True,
                                overflow=ft.TextOverflow.ELLIPSIS),
                        ft.Text(sub, size=12, color=p.dim, no_wrap=True, overflow=ft.TextOverflow.ELLIPSIS),

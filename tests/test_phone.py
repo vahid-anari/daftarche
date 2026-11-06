@@ -75,10 +75,43 @@ def test_the_snapshot_holds_what_the_phone_shows(db, book):
     assert tx[book["lent"]]["transfer"] == "loan" and tx[book["pay"]]["transfer"] is None
 
     groceries = next(c for c in snap["categories"] if c["name"] == "Groceries")
-    assert groceries["type"] == "Expense" and groceries["icon"] == "🛒"
-    assert groceries["subcategories"] == [{"id": shop["parts"][0]["subcategory"], "name": "Food", "icon": "🛒"}]
+    assert groceries["type"] == "Expense" and groceries["icon"] == "🛒" and groceries["image"] is None
+    assert groceries["subcategories"] == [{"id": shop["parts"][0]["subcategory"], "name": "Food", "icon": "🛒",
+                                           "image": None}]
+    assert snap["images"] == {}
 
     assert [(e["person"], e["balance"]) for e in snap["loans"]] == [("Sahar", 200)]
+
+
+PNG = (b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f"
+       b"\x15\xc4\x89\x00\x00\x00\rIDATx\x9cc\xf8\x0f\x00\x00\x01\x01\x00\x05\x18\xd8N\x00\x00\x00\x00IEND"
+       b"\xaeB`\x82")
+
+
+def test_logos_and_pictures_go_to_the_phone(db, book):
+    """0.37: merchants' logos and the logos and pictures used as icons go too, once each, as
+    base64 PNG; a sub-category's own icon comes before its category's."""
+    import base64
+    db.set_logo("Maple Grocer", PNG, "maple.example")
+    pic = db.add_picture("Leaf", PNG + b"2")
+    home = db.get_category_by_name("Home", type_name="Expense")["id"]
+    clean = db.get_subcategory_by_name("Cleaning", home)["id"]
+    db.set_category_icon(home, "logo:MAPLE GROCER")  # a logo as a category's icon
+    db.set_subcategory_icon(clean, f"pic:{pic}")
+    db.add_picture("Unused", PNG + b"3")  # used by nothing: not sent
+    snap = build_snapshot(db)
+    images = snap["images"]
+    assert set(images) == {"logo:maple grocer", f"pic:{pic}"}
+    assert base64.b64decode(images["logo:maple grocer"]) == PNG
+    cats = {c["name"]: c for c in snap["categories"]}
+    assert (cats["Home"]["icon"], cats["Home"]["image"]) == (None, "logo:maple grocer")
+    assert cats["Home"]["subcategories"][0]["image"] == f"pic:{pic}"
+    assert (cats["Groceries"]["icon"], cats["Groceries"]["image"]) == ("🛒", None)
+    assert cats["Groceries"]["subcategories"][0]["icon"] == "🛒"  # no icon of its own: its category's
+    db.set_category_icon(home, "logo:Nobody")  # a logo or picture that is not there: no image, no error
+    db.set_subcategory_icon(clean, "pic:999")
+    home_now = next(c for c in build_snapshot(db)["categories"] if c["name"] == "Home")
+    assert (home_now["icon"], home_now["image"], home_now["subcategories"][0]["image"]) == (None, None, None)
 
 
 def test_nothing_private_that_the_phone_does_not_need(db, book):
@@ -325,3 +358,23 @@ def test_settings_in_tabs_opens_on_the_last_one(sender, qapp):
     size = d.size()
     d.tabs.setCurrentIndex(1)
     assert d.size() == size  # the same size on every tab
+
+
+def test_the_import_window_is_as_wide_as_its_table(qapp):
+    """0.37: an account's name stays on one line; the window never grows past what QMessageBox allows."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QLabel, QMessageBox
+    from daftarche.tabs.import_tab import _fit_text
+    row = "<tr><td nowrap>Vahid-CIBC-Checking</td><td>$5,155.93</td><td>$5,155.93</td><td>✅</td></tr>"
+    for rows in (row, row.replace("Vahid-CIBC-Checking", "A" * 400)):
+        msg = f"Imported.<br><table>{rows}</table>"
+        box = keep(QMessageBox(QMessageBox.Information, "Import complete", msg))
+        box.setTextFormat(Qt.RichText)
+        _fit_text(box, msg)
+        label = box.findChild(QLabel, "qt_msgbox_label")
+        width = box.screen().availableGeometry().width()
+        assert label.minimumWidth() <= max(300, min(int(width * 0.8), width - 480, 1000) - 120)
+    short = keep(QMessageBox(QMessageBox.Information, "x", f"<table>{row}</table>"))
+    short.setTextFormat(Qt.RichText)
+    _fit_text(short, f"<table>{row}</table>")
+    assert short.findChild(QLabel, "qt_msgbox_label").minimumWidth() > 150  # wider than Qt's own narrow box

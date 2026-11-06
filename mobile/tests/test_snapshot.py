@@ -96,3 +96,27 @@ def test_refuses_what_it_cannot_read():
         Snapshot({"format": "something else"})
     with pytest.raises(SnapshotError, match="newer Daftarche"):
         Snapshot({"format": "daftarche-phone", "version": 99})
+
+
+def test_logos_and_pictures():
+    """0.5.0: the merchant's logo, else the logo or picture of the sub-category or category;
+    a file from before 0.37 (no "images") still opens, with emoji only."""
+    import base64
+    png = b"\x89PNG fake"
+    data = {"format": "daftarche-phone", "version": 1, "images": {"logo:maple grocer": base64.b64encode(png).decode(),
+                                                                  "pic:3": base64.b64encode(png + b"3").decode(),
+                                                                  "logo:broken": "not base64!"},
+            "categories": [{"id": 1, "name": "Home", "type": "Expense", "icon": None, "image": "pic:3",
+                            "subcategories": [{"id": 2, "name": "Cleaning", "icon": "🧽", "image": None},
+                                              {"id": 4, "name": "Garden", "icon": None, "image": "pic:3"}]},
+                           {"id": 5, "name": "Food", "type": "Expense", "icon": "🛒", "image": None,
+                            "subcategories": []}]}
+    s = Snapshot(data)
+    assert s.merchant_image("Maple Grocer") == png and s.merchant_image("MAPLE GROCER") == png
+    assert s.merchant_image("Other") is None and s.merchant_image(None) is None
+    assert s.merchant_image("Broken") is None  # a damaged image: no logo, no crash
+    assert s.category_image(1) == png + b"3" and s.category_image(1, 4) == png + b"3"
+    assert s.category_image(1, 2) is None and s.icon(1, 2) == "🧽"  # its own emoji comes first
+    assert s.category_image(5) is None and s.icon(5) == "🛒"
+    old = Snapshot({"format": "daftarche-phone", "version": 1, "categories": data["categories"][1:]})
+    assert old.merchant_image("Maple Grocer") is None and old.icon(5) == "🛒"

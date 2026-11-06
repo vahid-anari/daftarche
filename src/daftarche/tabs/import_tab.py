@@ -1256,12 +1256,14 @@ class ImportTab(QWidget):
                    "<th>Calculated</th><th></th></tr>"
             for account, bank, calc, diff, _st in checks:
                 ok = abs(diff) < 0.02
-                msg += (f"<tr><td>{html.escape(account)}</td><td align='right'>{money(bank)}</td>"
+                # nowrap: an account's name stays on one line (it broke at each "-"), the window widens
+                msg += (f"<tr><td nowrap>{html.escape(account)}</td><td align='right'>{money(bank)}</td>"
                         f"<td align='right'>{money(calc)}</td>"
                         f"<td>{'✅' if ok else '⚠️ off by ' + money(abs(diff))}</td></tr>")
             msg += "</table>"
         box = QMessageBox(QMessageBox.Information, "Import complete", msg, parent=self)
         box.setTextFormat(Qt.RichText)
+        _fit_text(box, msg)
         box.exec()
 
         for account, bank, calc, diff, st in checks:  # a new account starts with money already in it
@@ -1364,3 +1366,23 @@ class ImportTab(QWidget):
                 self.db.set_tags_for_transaction(tx_id, [t["id"] for t in tags])
             added += 1
         return added, dups, ids
+
+
+def _fit_text(box, html_text):
+    """Widen a message box to its text's own width (QMessageBox keeps it narrow, so a table's
+    cells wrapped: "Vahid-CIBC-Checking" took three lines), at most 80% of the screen."""
+    from PySide6.QtGui import QTextDocument
+    from PySide6.QtWidgets import QLabel, QMessageBox as RealBox  # the real one, even where it is mocked
+    label = box.findChild(QLabel, "qt_msgbox_label") if isinstance(box, RealBox) else None
+    if not isinstance(label, QLabel):  # a stand-in box (tests): nothing to widen
+        return
+    label.ensurePolished()  # the style sheet's font, not the default one
+    doc = QTextDocument()
+    doc.setDefaultFont(label.font())
+    doc.setHtml(html_text)
+    screen = box.screen() or QApplication.primaryScreen()
+    width = screen.availableGeometry().width() if screen else 1400
+    # QMessageBox itself is never wider than min(screen - 480, 1000); the label must fit inside it
+    # (beside the icon), else the table's right side, the "off by" warning, would be cut off
+    room = max(300, min(int(width * 0.8), width - 480, 1000) - 120)
+    label.setMinimumWidth(min(int(doc.idealWidth()) + 8, room))

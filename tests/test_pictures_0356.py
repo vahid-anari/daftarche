@@ -39,13 +39,16 @@ def test_pictures_in_the_database(db):
     assert db.get_pictures() == {} and db.get_category_by_name("Hobbies", type_name="Expense")["icon"] is None
 
 
-def test_the_phone_gets_no_picture(db):
+def test_the_phone_gets_the_picture(db):
+    """0.37: it goes to the phone too (before, the phone showed no icon for it)."""
     from daftarche.phone import build_snapshot
     pid = db.add_picture("pcb", png("#004d40"))
     db.add_category("Hobbies", "Expense")
     cat = db.get_category_by_name("Hobbies", type_name="Expense")
     db.set_category_icon(cat["id"], f"pic:{pid}")
-    assert "pic:" not in str(build_snapshot(db))
+    snap = build_snapshot(db)
+    hobbies = next(c for c in snap["categories"] if c["name"] == "Hobbies")
+    assert (hobbies["icon"], hobbies["image"]) == (None, f"pic:{pid}") and f"pic:{pid}" in snap["images"]
 
 
 def test_the_window_two_columns_add_find_cancel(qapp, db, tmp_path):

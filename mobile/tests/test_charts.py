@@ -217,3 +217,32 @@ def test_the_accounts_list_is_in_the_chart_card(app):
     page.navigation_bar.update = lambda: None
     rows[-1].on_click(None)  # the last row: an account → its transactions
     assert phone.tab == 1 and phone.tx_filters["account"] is not None
+
+
+def test_a_merchants_logo_is_the_rows_mark(app):
+    """0.5.0: a transaction row shows the merchant's logo, on white, in place of the emoji."""
+    import base64
+    import flet as ft
+    phone, page, view = app
+    tx = next(t for t in phone.snap.transactions if t.get("merchant") and not t.get("parts"))
+    plain = phone._tx_row(tx).content.controls[0]
+    assert not isinstance(plain.content, ft.Image)
+    phone.snap._images["logo:" + tx["merchant"].casefold()] = base64.b64encode(b"\x89PNG logo").decode()
+    mark = phone._tx_row(tx).content.controls[0]
+    assert isinstance(mark.content, ft.Image) and mark.content.src == b"\x89PNG logo" and mark.bgcolor == "#ffffff"
+
+
+def test_a_split_row_and_the_category_list_with_pictures(app):
+    """A split row: the merchant's logo, else ✂️ (not a category's picture); a category with a
+    picture shows it before its name in the list."""
+    import base64
+    import flet as ft
+    phone, page, view = app
+    split = next((t for t in phone.snap.transactions if t.get("parts")), None)
+    if split is not None:
+        mark = phone._tx_row(split).content.controls[0]
+        assert not isinstance(mark.content, ft.Image)
+    cat = next(c for c in phone.snap.categories if c.get("type") == "Expense")
+    cat["image"] = "pic:7"
+    phone.snap._images["pic:7"] = base64.b64encode(b"\x89PNG pic").decode()
+    assert phone.snap.category_image(cat["id"]) == b"\x89PNG pic"
