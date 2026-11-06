@@ -54,7 +54,8 @@ forgets the connection there.
 
 Coming back to the app fetches the newest copy; the ⟳ button does it at any time.
 
-Swipe left or right to change tabs. Android's Back goes back one step: it closes an open
+Tap a tab in the bar at the bottom: each stays as you left it (where its lists and rows are
+scrolled to, the month tapped in Charts). Android's Back goes back one step: it closes an open
 sheet, returns from "Show transactions" (or an account's transactions) to where you were,
 goes to the Dashboard from another tab, and on the Dashboard asks once before leaving.
 
@@ -126,7 +127,7 @@ release, so the desktop app's stays that.
 - `src/assets/`: the icon, the splash and the font (IBM Plex Sans, with its licence `IBMPlexSans-OFL.txt`).
 
 The app follows the shape shared by Vahid's phone apps (Dot Matrix, Daftarche, Spoolbook): the
-name in a bar at the top, Settings as the last tab, Phone / Light / Dark, swiping between tabs,
+name in a bar at the top, Settings as the last tab, Phone / Light / Dark, tabs kept as you left them,
 Back to the first tab, room at the bottom of every list, floating messages, IBM Plex Sans.
 - `src/daftarche_phone/update.py`: is there a newer release (no Flet).
 - `../.github/workflows/phone-release.yml`: builds and publishes the APK.

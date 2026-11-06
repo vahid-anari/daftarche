@@ -32,7 +32,7 @@ def test_settings_is_the_last_tab_and_not_a_button(app):
     assert labels == ["Dashboard", "Transactions", "Charts", "Accounts", "Settings"]
     assert [a.icon for a in page.appbar.actions] == [ft.Icons.REFRESH]  # no ⚙
     assert page.appbar.title.controls[0].value == "Daftarche"
-    settings = phone._pager.controls[-1]
+    settings = phone._tab_page(4)
     assert [t for t in texts(settings) if t in ("Connection", "Appearance", "Updates", "About")] == [
         "Connection", "Appearance", "Updates", "About"]
     assert "By Vahid Anari · MIT License" in texts(settings)
@@ -41,14 +41,14 @@ def test_settings_is_the_last_tab_and_not_a_button(app):
 def test_back_from_settings_goes_to_the_dashboard(app):
     phone, page, view = app
     page.navigation_bar.update = lambda: None
-    phone._swiped(SimpleNamespace(data="4", control=phone._pager))
+    phone._tab_changed(SimpleNamespace(control=SimpleNamespace(selected_index=4)))
     asyncio.run(phone._back(SimpleNamespace(control=view)))
     assert phone.tab == 0 and view.answers == [False]
 
 
 def test_the_theme_choice_phone_light_dark_with_icons(app):
     phone, page, view = app
-    seg = next(c for c in phone._pager.controls[-1].controls[1].controls if isinstance(c, ft.SegmentedButton))
+    seg = next(c for c in phone._tab_page(4).controls[1].controls if isinstance(c, ft.SegmentedButton))
     assert [(s.value, s.icon) for s in seg.segments] == [
         ("system", ft.Icons.SMARTPHONE), ("light", ft.Icons.LIGHT_MODE), ("dark", ft.Icons.DARK_MODE)]
     assert seg.show_selected_icon is False and seg.selected == ["system"]
@@ -56,7 +56,7 @@ def test_the_theme_choice_phone_light_dark_with_icons(app):
 
 def test_room_at_the_bottom_of_every_tab(app):
     phone, page, view = app
-    lists = [tab.controls[1] if tab.data == "frame" else tab for tab in phone._pager.controls]
+    lists = [tab.controls[1] if tab.data == "frame" else tab for tab in (phone._tab_page(i) for i in range(5))]
     assert all(lst.padding.bottom == 96 for lst in lists)
 
 

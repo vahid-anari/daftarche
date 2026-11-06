@@ -294,12 +294,11 @@ class PhoneApp:
         if self.snap is not None:
             page.run_task(self._show_chosen_periods)
 
-    async def _show_chosen_periods(self, only=None):
-        """A period at the end of its row (6 Months, This Year, All): scrolled into view, the
-        row opening at the left would hide it. Only the tab on the screen (``only``: the one just
-        swiped to): a row off the screen is not drawn yet, and asking it waits ten seconds."""
-        only = only or TABS[self.tab][0]
-        rows = {k: v for k, v in self._period_rows.items() if k == only}
+    async def _show_chosen_periods(self):
+        """A period at the end of its row (6 Months, This Year, All): scrolled into view once,
+        when the tabs are drawn (they stay drawn, so it stays), the row opening at the left would
+        hide it."""
+        rows = dict(self._period_rows)
         await asyncio.sleep(0.3)  # drawn first; and drawn anew meanwhile: those rows are gone
         for tab, row in rows.items():
             name = self.period.get(tab)
@@ -310,21 +309,29 @@ class PhoneApp:
                     pass
 
     def _tab_changed(self, e):
-        """A tab tapped in the bar."""
+        """A tab tapped in the bar: shown as you left it (the tabs stay drawn: drawn anew, each
+        list and row would open at its start)."""
         self.nav.tab_chosen()
         self.tab = e.control.selected_index
-        self.render()
+        self._show_tab()
 
-    def _swiped(self, e):
-        """A tab reached by swiping: only the bar follows (the pages are built already)."""
-        index = int(e.data) if e.data is not None else e.control.selected_index
-        if index == self.tab:
+    def _show_tab(self):
+        """The tab ``self.tab`` on the screen, the others kept as they are (no swiping between
+        tabs, as in apps with a bar at the bottom)."""
+        if getattr(self, "_pager", None) is None or self.snap is None:
+            self.render()
             return
-        self.nav.tab_chosen()
-        self.tab = index
-        self.page.navigation_bar.selected_index = index
-        self.page.navigation_bar.update()
-        self.page.run_task(self._show_chosen_periods, TABS[index][0])  # its row was off the screen
+        self._place_pages()
+        self.page.navigation_bar.selected_index = self.tab
+        self.page.update()
+
+    def _place_pages(self):
+        for i, wrap in enumerate(self._pages):
+            wrap.offset = ft.Offset(0, 0) if i == self.tab else ft.Offset(2, 0)  # off the screen, still drawn
+
+    def _tab_page(self, index):
+        """What a tab shows now (its frame, its list, or the filter page)."""
+        return self._pages[index].content
 
     # ── Back (Android's button or gesture) ───────────────────────────────────
     def _state(self):
@@ -351,10 +358,11 @@ class PhoneApp:
         if action == RESTORE:
             for key, value in state.items():
                 setattr(self, key, value)
-            self.render()
+            self._redraw()
+            self._show_tab()
         elif action == DASHBOARD:
             self.tab = 0
-            self.render()
+            self._show_tab()
         elif action == ASK_EXIT:
             self._toast("Press Back again to exit")
 
@@ -370,10 +378,13 @@ class PhoneApp:
         if self.snap is None:  # not connected yet: the welcome, and Settings
             self._pager = None
             return self._settings() if self.tab == SETTINGS_TAB else self._welcome()
-        # all five tabs, side by side: a swipe slides to the next one (the bar follows)
+        # all five tabs, one on top of the other: the one shown is in place, the others off the
+        # screen but still drawn, so each stays as you left it (where its lists are scrolled to)
         self._period_rows = {}  # built afresh with the tabs
         self._chart_bars = {}
-        self._pager = ft.PageView(self._tabs(), selected_index=self.tab, on_change=self._swiped, expand=True)
+        self._pages = [ft.Container(tab, left=0, top=0, right=0, bottom=0) for tab in self._tabs()]
+        self._place_pages()
+        self._pager = ft.Stack(self._pages, expand=True, clip_behavior=ft.ClipBehavior.HARD_EDGE)
         return self._pager
 
     def _tabs(self):
@@ -381,21 +392,25 @@ class PhoneApp:
             self._filter_list(self.filter_view) if self.filter_view else self._transactions()
         return [self._dashboard(), transactions, self._charts(), self._accounts(), self._settings()]
 
-    def _redraw(self):
+    def _redraw(self, fresh=()):
         """Draw the tabs again in place, after a choice inside a tab (a period, a filter, a tapped
         category): each list keeps where it was scrolled to. render() builds new lists, which
         open at the top."""
         if self.snap is None or getattr(self, "_pager", None) is None:
             self.render()
             return
-        for i, (old, new) in enumerate(zip(self._pager.controls, self._tabs())):
+        for i, (wrap, new) in enumerate(zip(self._pages, self._tabs())):
+            old = wrap.content
+            if i in fresh:  # ``fresh``: tabs to open at their top (Transactions after a jump)
+                wrap.content = new
+                continue
             if old.data == new.data == "frame":  # the head's and the list's rows only: both keep their place
                 old.controls[0].content.controls = new.controls[0].content.controls
                 old.controls[1].controls = new.controls[1].controls
             elif type(old) is type(new) and old.data == new.data and isinstance(old, ft.ListView):
                 old.controls = new.controls
             else:  # another kind of page (Transactions ↔ its filter page)
-                self._pager.controls[i] = new
+                wrap.content = new
         self.page.update()
 
     def _sheet(self, content, **kwargs):
@@ -843,7 +858,8 @@ class PhoneApp:
 
     def _jump_to_transactions(self):
         self.tab = 1
-        self.render()
+        self._redraw(fresh=(1,))
+        self._show_tab()
 
     # ── Transactions ─────────────────────────────────────────────────────────
     def _chosen(self):

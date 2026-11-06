@@ -72,7 +72,7 @@ def test_the_donut_draws_each_slice_above_zero():
 def _charts(phone):
     phone.tab = 2
     phone.render()
-    return list(_walk(phone._pager.controls[2]))
+    return list(_walk(phone._tab_page(2)))
 
 
 def test_one_month_shows_a_donut(app):
@@ -126,11 +126,11 @@ def test_the_dashboard_shows_a_donut_for_one_month(app):
     phone, page, view = app
     phone.render()
     phone._set_period("Dashboard", "Last Month")
-    controls = list(_walk(phone._pager.controls[0]))
+    controls = list(_walk(phone._tab_page(0)))
     assert any(type(c).__name__ == "Arc" for c in controls)
     assert any(isinstance(c, ft.Text) and c.value.startswith("Expense in ") for c in controls)
     phone._set_period("Dashboard", "6 Months")
-    controls = list(_walk(phone._pager.controls[0]))
+    controls = list(_walk(phone._tab_page(0)))
     assert not any(type(c).__name__ == "Arc" for c in controls)
     assert any(isinstance(c, ft.Text) and c.value == "Income vs Expense" for c in controls)
 
@@ -138,11 +138,11 @@ def test_the_dashboard_shows_a_donut_for_one_month(app):
 def test_a_choice_inside_a_tab_keeps_its_list_where_it_was(app):
     phone, page, view = app
     phone.render()
-    lists = list(phone._pager.controls)
+    lists = [phone._tab_page(i) for i in range(5)]
     phone._set_period("Dashboard", "This Month")
     phone._set_period("Charts", "3 Months")
     phone._more(None)
-    assert all(a is b for a, b in zip(lists, phone._pager.controls))  # the same lists: not back at the top
+    assert all(a is phone._tab_page(i) for i, a in enumerate(lists))  # the same lists: not back at the top
 
 
 def test_the_period_chips_stay_scrolled_where_they_were(app):
@@ -166,9 +166,9 @@ def test_the_merchant_filter(app):
     assert all(t["merchant"] == merchant for t in s.filter(merchant=merchant)) and s.filter(merchant=merchant)
     assert all(not t.get("merchant") for t in s.filter(merchant=NO_MERCHANT))
     phone._open_filters()
-    assert "Merchant" in _texts(phone._pager.controls[1])  # a row of the "Show only" page
+    assert "Merchant" in _texts(phone._tab_page(1))  # a row of the "Show only" page
     phone._open_list("merchant")
-    assert merchant in _texts(phone._pager.controls[1])
+    assert merchant in _texts(phone._tab_page(1))
     phone._toggle_choice("merchant", merchant)
     assert phone.tx_filters["merchant"] == {merchant}
     phone._clear_filter("merchant")
@@ -192,22 +192,22 @@ def test_the_dashboards_accounts_start_folded_and_open_on_a_tap(app):
     phone, page, view = app
     phone.render()
     name = phone.snap.accounts[0]["name"]
-    assert "Total Balance" in _texts(phone._pager.controls[0]) and name not in _texts(phone._pager.controls[0])
+    assert "Total Balance" in _texts(phone._tab_page(0)) and name not in _texts(phone._tab_page(0))
     phone._toggle_accounts()
-    assert phone.accounts_open and name in _texts(phone._pager.controls[0])
+    assert phone.accounts_open and name in _texts(phone._tab_page(0))
     phone._toggle_accounts()
-    assert name not in _texts(phone._pager.controls[0])
+    assert name not in _texts(phone._tab_page(0))
 
 
 def test_the_dashboard_switches_to_income(app):
     phone, page, view = app
     phone._set_period("Dashboard", "Last Month")
-    assert any(t.startswith("Expense in ") for t in _texts(phone._pager.controls[0]))
+    assert any(t.startswith("Expense in ") for t in _texts(phone._tab_page(0)))
     phone._set_dash_kind("Income")
-    texts = _texts(phone._pager.controls[0])
+    texts = _texts(phone._tab_page(0))
     assert any(t.startswith("Income in ") for t in texts) and "Income by Category" in texts
     phone._set_period("Dashboard", "6 Months")  # the bars: the switch moves to the list's title
-    texts = _texts(phone._pager.controls[0])
+    texts = _texts(phone._tab_page(0))
     assert "Income vs Expense" in texts and "Income by Category" in texts
 
 
@@ -216,7 +216,7 @@ def test_the_accounts_list_is_in_the_chart_card(app):
     phone.period["Accounts"] = "6 Months"
     phone.tab = 3
     phone.render()
-    page_ = phone._pager.controls[3]
+    page_ = phone._tab_page(3)
     shown = phone.snap.shown_accounts()
     cards = [c for c in page_.controls if isinstance(c, ft.Container) and c.on_click is not None]
     assert cards == []  # no separate account cards any more
@@ -262,11 +262,11 @@ def test_a_split_row_and_the_category_list_with_pictures(app):
 def test_the_heads_stay_and_the_lists_keep_their_place(app):
     phone, page, view = app
     phone.render()
-    frames = [phone._pager.controls[i] for i in range(4)]
+    frames = [phone._tab_page(i) for i in range(4)]
     assert all(f.data == "frame" for f in frames)
     lists = [f.controls[1] for f in frames]
     phone._set_period("Transactions", "Last Month")
-    assert [phone._pager.controls[i].controls[1] for i in range(4)] == lists  # the same lists
+    assert [phone._tab_page(i).controls[1] for i in range(4)] == lists  # the same lists
 
 
 def test_the_totals_and_their_refunds(app):
@@ -284,7 +284,7 @@ def test_the_show_only_page_and_back(app):
     phone.tab = 1
     phone.render()
     phone._open_filters()
-    assert phone._pager.controls[1].data == "filters"
+    assert phone._tab_page(1).data == "filters"
     phone._open_list("category")
     groceries = next(c["id"] for c in phone.snap.categories if c["name"] == "Groceries")
     sub = next(c for c in phone.snap.categories if c["id"] == groceries)["subcategories"][0]["id"]
@@ -294,8 +294,8 @@ def test_the_show_only_page_and_back(app):
     assert phone.filter_view == "main" and view.answers == [False]
     asyncio.run(phone._back(SimpleNamespace(control=view)))  # the page → Transactions, choices kept
     assert phone.filter_view is None and phone.tab == 1 and phone.tx_filters["category"] == {groceries}
-    assert phone._pager.controls[1].data == "frame"
-    assert "Groceries" in _texts(phone._pager.controls[1])  # its chip
+    assert phone._tab_page(1).data == "frame"
+    assert "Groceries" in _texts(phone._tab_page(1))  # its chip
     phone._clear_filter("category", groceries)  # ✕: its sub-categories go with it
     assert phone.tx_filters["category"] == set() and phone.tx_filters["subcategory"] == set()
 
@@ -456,15 +456,18 @@ def test_a_period_at_the_end_of_its_row_is_scrolled_to(app):
     assert {"offset": -1} in scrolled
 
 
-def test_a_swiped_to_tab_scrolls_its_row(app):
-    """0.6.2: only the tab on the screen: a row off it is not drawn, and would wait 10 s."""
+def test_the_tabs_stay_as_you_left_them(app):
+    """0.7.0: a tab tapped in the bar is shown, not drawn anew (its lists and rows keep their
+    place); the others stay drawn, off the screen. No swiping between tabs."""
     from types import SimpleNamespace as NS
     phone, page, view = app
-    page.navigation_bar.update = lambda: None
-    tasks = []
-    page.run_task = lambda f, *a: tasks.append((f.__name__, a))
-    phone._swiped(NS(data="3", control=phone._pager))
-    assert ("_show_chosen_periods", ("Accounts",)) in tasks
+    pages = [phone._tab_page(i) for i in range(5)]
+    phone._tab_changed(NS(control=NS(selected_index=2)))
+    assert phone.tab == 2 and page.navigation_bar.selected_index == 2
+    assert [phone._tab_page(i) for i in range(5)] == pages  # the same pages
+    offsets = [(w.offset.x, w.offset.y) for w in phone._pages]
+    assert offsets[2] == (0, 0) and all(o != (0, 0) for i, o in enumerate(offsets) if i != 2)
+    assert not isinstance(phone._pager, ft.PageView)
 
 
 def test_a_split_says_so_beside_its_logo(app):
