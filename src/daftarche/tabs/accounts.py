@@ -142,6 +142,7 @@ class AccountsTab(QWidget):
 
         # ── Row 1: Period selector ────────────────────────────────────────────
         self._period = PeriodSelectorWidget(mode="month", config_key="period_accounts")
+        self._period.data_months = lambda: self.db.months_with_data()  # Custom's months
         self._period.rangeChanged.connect(lambda *_: self.refresh())
         layout.addWidget(self._period)
 

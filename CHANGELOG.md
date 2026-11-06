@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.38.0 — 2026-11-06
+
+- **Custom opens a window** in front, in every tab: a **month** (the year's twelve, ◀ ▶ for the
+  year; months without transactions are grey and cannot be chosen), a **year**, or **From – to**
+  as before (days in Transactions, months in the other tabs), with Show. A month or a year is
+  chosen with one click; Cancel or Esc leaves everything as it was.
+- A chosen month or year is the Custom button itself ("Sep 2026 ▾", which opens the window
+  again), with **◀ ▶** beside it for the month (or year) before and after; they stop at the
+  first month with transactions and at this one. On Charts one month is a Donut, as before.
+  Daftarche remembers the choice for next time, as it does the others.
+- Transactions' periods (Today, Yesterday, Last 7 Days…) get Custom's month and year too.
+- Transactions: a period you choose while looking at a jump's rows (from Charts, the Dashboard…)
+  stays; before, the period from before the jump came back over it, though your choice was the
+  one remembered for next time.
+
 ## 0.37.0 — 2026-11-06
 
 - **Logos and pictures go to the phone** (Daftarche on the phone 0.5.0): a transaction shows its

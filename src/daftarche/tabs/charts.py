@@ -114,6 +114,7 @@ class ChartsTab(QWidget):
 
         # ── Row 1: Period | Account ───────────────────────────────────────────
         self._period = PeriodSelectorWidget(mode="month", config_key="period_charts")
+        self._period.data_months = lambda: self.db.months_with_data()  # Custom's months
         self.f_account = CheckComboBox("All Accounts")
 
         self.f_account.selectionChanged.connect(lambda *_: self._on_range_or_account_changed())

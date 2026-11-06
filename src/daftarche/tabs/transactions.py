@@ -479,6 +479,8 @@ class TransactionsTab(QWidget):
         row1 = QHBoxLayout()
         row1.setSpacing(8)
         self._period = PeriodSelectorWidget(mode="day", config_key="period_transactions")
+        self._period.data_months = lambda: self.db.months_with_data()  # Custom's months
+        self._period.chosen.connect(self._on_period_chosen)
         self._period.rangeChanged.connect(lambda *_: self._on_any_filter_changed())
         row1.addWidget(self._period)
         row1.addStretch()
@@ -656,6 +658,10 @@ class TransactionsTab(QWidget):
         cb = CheckComboBox(placeholder, searchable=searchable)
         cb.selectionChanged.connect(lambda vals: self._on_any_filter_changed())
         return cb
+
+    def _on_period_chosen(self):
+        """A period you chose yourself: it stays (a jump's dates are not put back over it)."""
+        self._period_before = None
 
     def _on_any_filter_changed(self):
         if self._updating:

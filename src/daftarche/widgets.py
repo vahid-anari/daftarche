@@ -6,6 +6,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QPushButton, QFrame,
     QApplication, QSizePolicy, QLabel, QGridLayout,
     QLineEdit, QComboBox, QStyledItemDelegate, QTableView, QMessageBox, QCompleter, QLayout,
+    QDialog, QStackedWidget, QButtonGroup,
 )
 from PySide6.QtCore import Qt, Signal, QPoint, QDate, QObject, QEvent, QTimer, QRect, QSize
 from PySide6.QtGui import QColor, QPainter, QPolygon, QPen
@@ -1171,6 +1172,7 @@ class PeriodSelectorWidget(QWidget):
     """
 
     rangeChanged = Signal(object, object)  # from_date, to_date
+    chosen = Signal()  # just before rangeChanged when the person chose (a button, ◀ ▶, Custom's window)
 
     # ── Preset definitions ────────────────────────────────────────────────────
     _MONTH_PRESETS = ["All", "This Month", "Last Month", "3 Months", "6 Months", "This Year", "Custom"]
@@ -1204,29 +1206,158 @@ class PeriodSelectorWidget(QWidget):
         btn_row.setContentsMargins(0, 0, 0, 0)
 
         presets = self._MONTH_PRESETS if self._mode == "month" else self._DAY_PRESETS
+        custom_idx = len(presets) - 1
         for i, label in enumerate(presets):
+            if i == custom_idx:  # ◀ Custom ▶: the arrows step a chosen month or year
+                self._step_back = self._arrow("◀", -1)
+                btn_row.addWidget(self._step_back)
             btn = QPushButton(label)
             btn.setCheckable(True)
             btn.setProperty("class", "period-preset-btn")
             btn.setFocusPolicy(Qt.NoFocus)
-            btn.clicked.connect(lambda _, idx=i: self._select_preset(idx))
+            if i == custom_idx:
+                btn.clicked.connect(self._open_custom)
+            else:
+                btn.clicked.connect(lambda _, idx=i: self._choose(idx))
             btn_row.addWidget(btn)
             self._preset_btns.append(btn)
+        self._step_on = self._arrow("▶", 1)
+        btn_row.addWidget(self._step_on)
 
-        self._range_widget = DateRangeWidget(mode=self._mode, config_key=self._config_key)
-        self._range_widget.rangeChanged.connect(self._on_range_changed)
-
+        # From – to lives in the Custom window now; this one keeps the days chosen there
+        self._range_widget = DateRangeWidget(mode=self._mode, config_key=self._config_key, parent=self)
         self._range_widget.setVisible(False)
+        self._custom = self._load_custom()  # {"mode": "month" | "year" | "range", "start": date}
 
-        if self._inline:
-            btn_row.addSpacing(8)
-            btn_row.addWidget(self._range_widget)
-            btn_row.addStretch(1)
-            root.addLayout(btn_row)
+        btn_row.addStretch(1)
+        root.addLayout(btn_row)
+
+    def _choose(self, idx):
+        self.chosen.emit()
+        self._select_preset(idx)
+
+    def _arrow(self, text, step):
+        btn = QPushButton(text)
+        btn.setProperty("class", "nav-btn")
+        btn.setFocusPolicy(Qt.NoFocus)
+        btn.setFixedWidth(30)
+        btn.setToolTip("The month before" if step < 0 else "The month after")
+        btn.clicked.connect(lambda: self._step(step))
+        btn.setVisible(False)
+        return btn
+
+    # ── Custom: a month, a year, or From – to ────────────────────────────────
+    data_months = None
+    """A function giving {"2026-09", …}, the months with transactions (set by the tab); without it
+    every month can be chosen."""
+
+    def _custom_idx(self):
+        return len(self._MONTH_PRESETS if self._mode == "month" else self._DAY_PRESETS) - 1
+
+    def _load_custom(self):
+        saved = get_settings().get(f"{self._config_key}_custom")
+        if isinstance(saved, dict) and saved.get("mode") in ("month", "year"):
+            try:
+                return {"mode": saved["mode"], "start": _date.fromisoformat(saved["start"])}
+            except (KeyError, TypeError, ValueError):
+                pass
+        return {"mode": "range"}
+
+    def _save_custom(self):
+        c = self._custom
+        get_settings().set(f"{self._config_key}_custom",
+                           {"mode": c["mode"], "start": c["start"].isoformat()} if c["mode"] != "range" else
+                           {"mode": "range"})
+
+    def _custom_bounds(self, custom):
+        """(first day, last day) of a chosen month or year (the last no later than today)."""
+        start = custom["start"]
+        if custom["mode"] == "month":
+            end = start.replace(day=calendar.monthrange(start.year, start.month)[1])
         else:
-            btn_row.addStretch(1)
-            root.addLayout(btn_row)
-            root.addWidget(self._range_widget)
+            end = start.replace(month=12, day=31)
+        return start, min(end, _date.today())
+
+    def _months(self):
+        try:
+            return set(self.data_months()) or None if self.data_months else None
+        except Exception:  # noqa: BLE001 — a closed database: every month can be chosen
+            return None  # (and no transactions yet: no limit either)
+
+    def _stepped(self, n):
+        c = self._custom
+        if c["mode"] == "month":
+            i = c["start"].year * 12 + c["start"].month - 1 + n
+            start = _date(i // 12, i % 12 + 1, 1)
+        else:
+            start = _date(c["start"].year + n, 1, 1)
+        return {"mode": c["mode"], "start": start}
+
+    def _has_room(self, custom):
+        """A month or year to step to: not after today, not before the first transaction."""
+        if custom["start"] > _date.today():
+            return False
+        months = self._months()
+        if not months:
+            return custom["start"].year >= PICKER_MIN_YEAR
+        first = min(months)
+        key = custom["start"].strftime("%Y-%m")
+        return key >= first if custom["mode"] == "month" else custom["start"].year >= int(first[:4])
+
+    def _step(self, n):
+        stepped = self._stepped(n)
+        if self._has_room(stepped):
+            self._custom = stepped
+            self._save_custom()
+            self._choose(self._custom_idx())
+
+    def _open_custom(self):
+        """Custom: the window to choose in (the button stays as it was until a choice)."""
+        btn = self._preset_btns[-1]
+        btn.setChecked(self._active_idx == self._custom_idx())
+        dialog = PeriodDialog(self._mode, self._custom if self._active_idx == self._custom_idx() else None,
+                              self._range_widget.get_range(), self._months(), parent=self.window())
+        try:
+            accepted = dialog.exec() == QDialog.Accepted and dialog.choice
+            choice = dialog.choice
+        finally:
+            dialog.deleteLater()  # not kept, with its pickers, after each Custom
+        if not accepted:
+            return
+        mode, value = choice
+        if mode == "range":
+            self._set_pickers(*value)
+            self._range_widget._save()
+            self._custom = {"mode": "range"}
+        else:
+            self._custom = {"mode": mode, "start": value}
+        self._save_custom()
+        self._choose(self._custom_idx())
+
+    def _custom_label(self):
+        c = self._custom
+        if c["mode"] == "month":
+            return f"{c['start'].strftime('%b %Y')}  ▾"
+        if c["mode"] == "year":
+            return f"{c['start'].year}  ▾"
+        fy, fm, fd, ty, tm, td = self._range_widget.get_range()
+        if self._mode == "month":
+            return f"{fm[:3]} {fy} – {tm[:3]} {ty}  ▾"
+        return f"{fm[:3]} {fd}, {fy} – {tm[:3]} {td}, {ty}  ▾"
+
+    def update_arrows(self):
+        """◀ ▶ anew (new transactions, or a new month since): the tabs call it when they refresh."""
+        self._show_custom(self._active_idx == self._custom_idx())
+
+    def _show_custom(self, on):
+        btn = self._preset_btns[-1]
+        btn.setText(self._custom_label() if on else "Custom")
+        steps = on and self._custom["mode"] in ("month", "year")
+        for arrow, n in ((self._step_back, -1), (self._step_on, 1)):
+            arrow.setVisible(steps)
+            if steps:
+                arrow.setEnabled(self._has_room(self._stepped(n)))
+                arrow.setToolTip(f"The {self._custom['mode']} {'before' if n < 0 else 'after'}")
 
     # ── Preset selection ──────────────────────────────────────────────────────
     def _select_preset(self, idx, emit=True, persist=True):
@@ -1237,8 +1368,7 @@ class PeriodSelectorWidget(QWidget):
         for i, btn in enumerate(self._preset_btns):
             btn.setChecked(i == idx)
             _repolish(btn)
-
-        self._range_widget.setVisible(is_custom)
+        self._show_custom(is_custom)
 
         if persist:
             get_settings().set(f"{self._config_key}_preset_idx", idx)
@@ -1311,6 +1441,8 @@ class PeriodSelectorWidget(QWidget):
         presets = self._MONTH_PRESETS if self._mode == "month" else self._DAY_PRESETS
         is_custom = (self._active_idx == len(presets) - 1)
 
+        if is_custom and self._custom["mode"] != "range":
+            return self._custom_bounds(self._custom)
         if is_custom:
             fy, fm, fd, ty, tm, td = self._range_widget.get_range()
             from_d = _date(fy, MONTH_NUM.get(fm, 1), fd)
@@ -1328,6 +1460,7 @@ class PeriodSelectorWidget(QWidget):
         the moment only: your saved choice stays (see state/restore)."""
         self._set_pickers(from_date.year, MONTHS_ORDER[from_date.month - 1], from_date.day,
                           to_date.year, MONTHS_ORDER[to_date.month - 1], to_date.day)
+        self._custom = {"mode": "range"}
         presets = self._MONTH_PRESETS if self._mode == "month" else self._DAY_PRESETS
         self._select_preset(len(presets) - 1, emit=emit, persist=False)
 
@@ -1339,18 +1472,169 @@ class PeriodSelectorWidget(QWidget):
         rw.to_p.set_min_date(fy, fm, fd)
 
     def state(self):
-        """What is chosen now (preset and custom dates), to put back with restore()."""
-        return self._active_idx, self._range_widget.get_range()
+        """What is chosen now (preset, custom dates, a chosen month or year), to put back with restore()."""
+        return self._active_idx, self._range_widget.get_range(), dict(self._custom)
 
     def restore(self, state):
-        idx, rng = state
+        idx, rng, *custom = state
         self._set_pickers(*rng)
+        if custom:
+            self._custom = dict(custom[0])
         self._select_preset(idx, emit=False, persist=False)
 
     def refresh_style(self):
-        for btn in self._preset_btns:
+        for btn in (*self._preset_btns, self._step_back, self._step_on):
             _repolish(btn)
         self._range_widget.refresh_style()
+        self.update_arrows()
+
+
+class PeriodDialog(QDialog):
+    """Custom: a month (a year's months, ◀ ▶ for the year), a year, or From – to. A month or year
+    is chosen with one click; From – to with Show. ``choice``: ("month", first day),
+    ("year", 1 January) or ("range", (fy, fm, fd, ty, tm, td)); None when cancelled."""
+
+    def __init__(self, mode, custom, rng, months=None, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Choose a Period")
+        self.setStyleSheet(build_stylesheet())
+        self.choice = None
+        self._months = months  # None: any month
+        today = _date.today()
+        self._first_year = int(min(months)[:4]) if months else PICKER_MIN_YEAR
+        chosen = custom if custom and custom.get("mode") in ("month", "year") else None
+        self._chosen = chosen
+        self._year = min(max((chosen["start"].year if chosen else today.year), self._first_year), today.year)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(18, 14, 18, 16)
+        root.setSpacing(12)
+        title = QLabel("Choose a period")
+        title.setStyleSheet("font-weight: bold; font-size: 15px;")
+        root.addWidget(title)
+
+        seg = QHBoxLayout()
+        seg.setSpacing(4)
+        self._segments = QButtonGroup(self)
+        self._pages = QStackedWidget()
+        for i, (name, key) in enumerate((("Month", "month"), ("Year", "year"), ("From – to", "range"))):
+            b = QPushButton(name)
+            b.setCheckable(True)
+            b.setProperty("class", "period-preset-btn")
+            b.setFocusPolicy(Qt.NoFocus)
+            b.setAutoDefault(False)
+            self._segments.addButton(b, i)
+            seg.addWidget(b)
+        self._segments.idClicked.connect(self._pages.setCurrentIndex)
+        root.addLayout(seg)
+
+        # Month
+        month_page = QWidget()
+        mv = QVBoxLayout(month_page)
+        mv.setContentsMargins(0, 0, 0, 0)
+        nav = QHBoxLayout()
+        self._prev = QPushButton("◀")
+        self._next = QPushButton("▶")
+        self._year_label = QLabel()
+        self._year_label.setAlignment(Qt.AlignCenter)
+        self._year_label.setStyleSheet("font-weight: bold; font-size: 15px;")
+        for b in (self._prev, self._next):
+            b.setAutoDefault(False)
+            b.setProperty("class", "nav-btn")
+            b.setFocusPolicy(Qt.NoFocus)
+        self._prev.clicked.connect(lambda: self._show_year(self._year - 1))
+        self._next.clicked.connect(lambda: self._show_year(self._year + 1))
+        nav.addWidget(self._prev)
+        nav.addWidget(self._year_label, 1)
+        nav.addWidget(self._next)
+        mv.addLayout(nav)
+        grid = QGridLayout()
+        grid.setSpacing(6)
+        self._month_btns = []
+        for m in range(1, 13):
+            b = QPushButton(MONTHS_ORDER[m - 1][:3])
+            b.setAutoDefault(False)  # Return does not pick a month by itself
+            b.setProperty("class", "picker-btn")
+            b.setMinimumSize(64, 34)
+            b.clicked.connect(lambda _, m=m: self._pick("month", _date(self._year, m, 1)))
+            grid.addWidget(b, (m - 1) // 4, (m - 1) % 4)
+            self._month_btns.append(b)
+        mv.addLayout(grid)
+        self._pages.addWidget(month_page)
+
+        # Year
+        year_page = QWidget()
+        yg = QGridLayout(year_page)
+        yg.setContentsMargins(0, 0, 0, 0)
+        yg.setSpacing(6)
+        years = {int(k[:4]) for k in months} if months else None
+        for i, y in enumerate(range(today.year, self._first_year - 1, -1)):
+            b = QPushButton(str(y))
+            b.setAutoDefault(False)
+            b.setProperty("class", "picker-btn")
+            b.setMinimumSize(64, 34)
+            on = bool(chosen) and chosen["mode"] == "year" and chosen["start"].year == y
+            b.setProperty("state", "selected" if on else "normal")
+            b.setEnabled(years is None or y in years)
+            b.clicked.connect(lambda _, y=y: self._pick("year", _date(y, 1, 1)))
+            yg.addWidget(b, i // 4, i % 4)
+        yg.setRowStretch(yg.rowCount(), 1)
+        self._pages.addWidget(year_page)
+
+        # From – to
+        range_page = QWidget()
+        rv = QVBoxLayout(range_page)
+        rv.setContentsMargins(0, 0, 0, 0)
+        self._range = DateRangeWidget(mode=mode, config_key="period_dialog_range")
+        fy, fm, fd, ty, tm, td = rng
+        self._range.to_p.set_min_date(PICKER_MIN_YEAR, PICKER_MIN_MONTH, PICKER_MIN_DAY)
+        self._range.from_p.set_date(fy, fm, fd)
+        self._range.to_p.set_date(ty, tm, td)
+        self._range.to_p.set_min_date(fy, fm, fd)
+        rv.addWidget(self._range)
+        show = QPushButton("Show")
+        show.setDefault(True)
+        show.clicked.connect(lambda: self._pick("range", self._range.get_range()))
+        row = QHBoxLayout()
+        row.addStretch(1)
+        row.addWidget(show)
+        rv.addLayout(row)
+        rv.addStretch(1)
+        self._pages.addWidget(range_page)
+        root.addWidget(self._pages)
+
+        cancel_row = QHBoxLayout()
+        cancel_row.addStretch(1)
+        cancel = QPushButton("Cancel")
+        cancel.setAutoDefault(False)
+        cancel.clicked.connect(self.reject)
+        cancel_row.addWidget(cancel)
+        root.addLayout(cancel_row)
+
+        start = {"month": 0, "year": 1}.get(custom.get("mode") if custom else "month", 2)
+        self._segments.button(start).setChecked(True)
+        self._pages.setCurrentIndex(start)
+        self._show_year(self._year)
+        for b in self.findChildren(QPushButton):
+            _repolish(b)
+
+    def _show_year(self, year):
+        today = _date.today()
+        self._year = year
+        self._year_label.setText(str(year))
+        self._prev.setEnabled(year > self._first_year)
+        self._next.setEnabled(year < today.year)
+        for m, b in enumerate(self._month_btns, 1):
+            key = f"{year}-{m:02d}"
+            on = bool(self._chosen) and self._chosen["mode"] == "month" and \
+                (self._chosen["start"].year, self._chosen["start"].month) == (year, m)
+            b.setProperty("state", "selected" if on else "normal")
+            b.setEnabled((self._months is None or key in self._months) and (year, m) <= (today.year, today.month))
+            _repolish(b)
+
+    def _pick(self, mode, value):
+        self.choice = (mode, value)
+        self.accept()
 
 
 def _month_back(today, months):

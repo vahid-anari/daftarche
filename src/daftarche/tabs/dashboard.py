@@ -144,6 +144,7 @@ class DashboardTab(QWidget):
             config_key="period_dashboard",
             inline=False,
         )
+        self._period.data_months = lambda: self.db.months_with_data()  # Custom's months
         self._period.rangeChanged.connect(self._on_period_changed)
         return self._period
 

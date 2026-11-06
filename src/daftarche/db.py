@@ -3068,6 +3068,10 @@ class Database:
         rows = self.conn.execute(q, params).fetchall()
         return [r["name"] for r in rows]
 
+    def months_with_data(self):
+        """{"2026-09", …}: the months that have transactions (Custom's months and years)."""
+        return {r[0] for r in self.conn.execute("SELECT DISTINCT substr(date, 1, 7) FROM transactions")}
+
     def get_data_date_range(self):
         row = self.conn.execute("""
                                 SELECT MIN(date) as min_date, MAX(date) as max_date
