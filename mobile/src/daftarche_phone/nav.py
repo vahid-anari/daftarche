@@ -8,7 +8,7 @@ Back goes back one step, in this order (an open sheet is closed by Android befor
 3. on the Dashboard the first Back asks "Press Back again to exit", a second one within
    ``EXIT_WINDOW`` seconds leaves the app.
 
-Changing tabs yourself (tapping the bar or swiping) starts afresh: the jumps before it are forgotten,
+Changing tabs yourself (tapping the bar) starts afresh: the jumps before it are forgotten,
 so Back from there goes to the Dashboard, as Android's own apps do.
 """
 

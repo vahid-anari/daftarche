@@ -2,6 +2,15 @@
 
 Released with tags `phone-vX.Y.Z`; each release carries the signed APK.
 
+## 0.7.0 — 2026-11-06
+
+- **Each tab stays as you left it.** Going to another tab and back no longer draws it anew:
+  its lists, the row of periods and Charts' bars (with the month you tapped) are where they were,
+  with no jump to the start and back.
+- **No swiping between tabs**, as in other apps with a bar at the bottom: tap the tab. The
+  periods' row and Charts' bars scroll sideways without changing the tab by mistake.
+- After Show transactions (from Charts, the Dashboard or an account) Transactions opens at the top.
+
 ## 0.6.2 — 2026-11-06
 
 - The chosen period stays in view when you change tabs too (6 Months, This Year, All at the end

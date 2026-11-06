@@ -74,13 +74,13 @@ def test_back_from_show_transactions_returns_to_the_open_category(app):
     assert view.answers[-1] is True  # leaves
 
 
-def test_swiping_changes_the_tab_and_the_bar_follows(app):
+def test_a_tapped_tab_forgets_the_jumps_and_is_not_drawn_anew(app):
     phone, page, view = app
-    page.navigation_bar.update = lambda: None
     phone._jump()
-    phone._swiped(SimpleNamespace(data="3", control=phone._pager))
+    first = phone._tab_page(3)
+    phone._tab_changed(SimpleNamespace(control=SimpleNamespace(selected_index=3)))
     assert phone.tab == 3 and page.navigation_bar.selected_index == 3 and phone.nav.depth == 0
-    assert len(phone._pager.controls) == 5 and phone._pager.selected_index == 0  # built once, not again
+    assert phone._tab_page(3) is first and len(phone._pages) == 5  # built once, not again
 
 
 def test_sheets_keep_clear_of_androids_buttons(app):
