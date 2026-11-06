@@ -31,6 +31,15 @@ PALETTE = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#e
 """Category colours, in order of size: the desktop charts use the same."""
 
 
+def _as_set(value):
+    """A filter's choice as a set (None or an empty one: no filter); one value is a set of one."""
+    if value is None:
+        return None
+    if isinstance(value, (set, frozenset, list, tuple)):
+        return set(value) or None
+    return {value}
+
+
 class SnapshotError(ValueError):
     """The file is not a phone snapshot, or one this app is too old to read."""
 
@@ -71,6 +80,44 @@ def period_range(name, today=None):
     else:
         raise ValueError(f"Unknown period {name!r}")
     return date(*start, 1).isoformat(), _month_end(*end).isoformat()
+
+
+def custom_period(mode, value):
+    """A period chosen in Custom…: ``mode`` "month" (value "2026-09"), "year" (value 2026) or
+    "range" (value ``(first day, last day)``, dates or ISO strings). → ``{mode, start, end}``."""
+    if mode == "month":
+        y, m = (int(x) for x in str(value).split("-"))
+        return {"mode": mode, "start": date(y, m, 1).isoformat(), "end": _month_end(y, m).isoformat()}
+    if mode == "year":
+        y = int(value)
+        return {"mode": mode, "start": f"{y}-01-01", "end": f"{y}-12-31"}
+    if mode == "range":
+        first, last = (v if isinstance(v, str) else v.isoformat() for v in value)
+        first, last = min(first, last), max(first, last)
+        return {"mode": mode, "start": first[:10], "end": last[:10]}
+    raise ValueError(f"Unknown kind of period {mode!r}")
+
+
+def custom_label(period):
+    """"Sep 2026", "2026", or "12 Oct – 3 Nov 2026"."""
+    start, end = date.fromisoformat(period["start"]), date.fromisoformat(period["end"])
+    if period["mode"] == "month":
+        return f"{MONTHS[start.month - 1][:3]} {start.year}"
+    if period["mode"] == "year":
+        return str(start.year)
+    first = f"{start.day} {MONTHS[start.month - 1][:3]}" + ("" if start.year == end.year else f" {start.year}")
+    return f"{first} – {end.day} {MONTHS[end.month - 1][:3]} {end.year}"
+
+
+def step_period(period, n):
+    """The month (or year) ``n`` before (< 0) or after a chosen one; a range does not step."""
+    start = date.fromisoformat(period["start"])
+    if period["mode"] == "month":
+        y, m = _add_months(start.year, start.month, n)
+        return custom_period("month", f"{y}-{m:02d}")
+    if period["mode"] == "year":
+        return custom_period("year", start.year + n)
+    return period
 
 
 def month_label(key):
@@ -114,6 +161,7 @@ class Snapshot:
         self.categories = data.get("categories", [])
         self.category = {c["id"]: c for c in self.categories}
         self.subcategory = {s["id"]: s for c in self.categories for s in c.get("subcategories", [])}
+        self.sub_category = {s["id"]: c["id"] for c in self.categories for s in c.get("subcategories", [])}
         self._images = data.get("images") or {}  # key → base64 PNG (0.5.0; older files have none)
         self._decoded = {}
         self.tags = data.get("tags", [])
@@ -217,39 +265,90 @@ class Snapshot:
 
     # ── transactions ──
     def filter(self, start=None, end=None, kind=None, account=None, category=None, tag=None, text="",
-               merchant=None):
+               merchant=None, subcategory=None):
         """Transactions (newest first) in a period, of a kind, touching an account, with a
-        category (in any part), a tag, a merchant (NO_MERCHANT: none), or text in their names,
-        note, category or amount."""
+        category or sub-category (in any part), a tag, a merchant (NO_MERCHANT: none), or text in
+        their names, note, category or amount.
+
+        Each choice may be one value or several (a set: any of them); None or an empty set is no
+        filter. Sub-categories narrow their own category only: with Groceries and Health chosen and
+        the sub-category Bakery, Groceries shows Bakery alone and Health all of it."""
         text = (text or "").strip().casefold()
+        kinds, accounts, tags, merchants = (_as_set(v) for v in (kind, account, tag, merchant))
+        line_ok = self.line_test(category, subcategory)
         out = []
         for tx in self.transactions:
             d = tx["date"]
             if (start and d < start) or (end and d > end):
                 continue
-            if kind and tx["type"] != kind:
+            if kinds and tx["type"] not in kinds:
                 continue
-            if account is not None and account not in (tx["account"], tx["to_account"]):
+            if accounts and not ({tx["account"], tx["to_account"]} & accounts):
                 continue
-            if category is not None and category not in self._categories_of(tx):
+            if line_ok and not any(line_ok(line) for line in self.lines([tx])):
                 continue
-            if tag is not None and tag not in tx.get("tags", []):
+            if tags and not (set(tx.get("tags", [])) & tags):
                 continue
-            if merchant is not None and (tx.get("merchant") or NO_MERCHANT) != merchant:
+            if merchants and (tx.get("merchant") or NO_MERCHANT) not in merchants:
                 continue
             if text and text not in self._search_text(tx):
                 continue
             out.append(tx)
         return out
 
+    def line_test(self, categories=None, subcategories=None):
+        """Whether a line (a transaction, or one part of it) has a chosen category / sub-category;
+        None when none is chosen."""
+        categories, subcategories = _as_set(categories), _as_set(subcategories)
+        if not categories and not subcategories:
+            return None
+        subs = subcategories or set()
+        narrowed = {self.sub_category.get(sub) for sub in subs}  # categories with sub-categories chosen
+        allowed = (categories or set()) | narrowed
+        return lambda line: line.category in allowed and (line.category not in narrowed or line.subcategory in subs)
+
+    def counts(self, key, start=None, end=None, **chosen):
+        """``{value: transactions}`` for one filter (``key``: kind, account, category, subcategory,
+        merchant or tag), with every other choice applied: what each value would show. A category's
+        count leaves the sub-categories out too; a sub-category's keeps the categories chosen."""
+        others = {k: v for k, v in chosen.items() if k != key and not (key == "category" and k == "subcategory")}
+        if key == "subcategory" and _as_set(chosen.get("category")):  # the chosen ones' categories count too
+            others["category"] = _as_set(chosen["category"]) | {self.sub_category.get(v)
+                                                                for v in _as_set(chosen.get("subcategory")) or ()}
+        in_categories = self.line_test(others.get("category")) if key == "subcategory" else None
+        out = {}
+        for tx in self.filter(start, end, **others):
+            if key == "kind":
+                values = {tx["type"]}
+            elif key == "account":
+                values = {tx["account"], tx["to_account"]} - {None}
+            elif key == "category":
+                values = {line.category for line in self.lines([tx])} - {None}
+            elif key == "subcategory":
+                values = {line.subcategory for line in self.lines([tx]) if line.subcategory is not None
+                          and (in_categories is None or in_categories(line))}
+            elif key == "merchant":
+                values = {tx.get("merchant") or NO_MERCHANT}
+            elif key == "tag":
+                values = set(tx.get("tags", []))
+            else:
+                raise ValueError(f"Unknown filter {key!r}")
+            for v in values:
+                out[v] = out.get(v, 0) + 1
+        return out
+
+    def months_with_data(self):
+        """``{"2026-09", …}``: the months that have transactions."""
+        return {tx["date"][:7] for tx in self.transactions}
+
+    def first_date(self):
+        """The oldest transaction's day (ISO), or None."""
+        return min((tx["date"] for tx in self.transactions), default=None)
+
     def merchants(self):
         """Every merchant of the transactions, A to Z."""
         return sorted({tx["merchant"] for tx in self.transactions if tx.get("merchant")},
                       key=lambda m: (m.casefold(), m))
-
-    @staticmethod
-    def _categories_of(tx):
-        return {p["category"] for p in tx["parts"]} if tx.get("parts") else {tx["category"]}
 
     def _search_text(self, tx):
         words = [tx.get("merchant"), tx.get("name"), tx.get("note"), f"{tx['amount']:.2f}",

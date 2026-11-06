@@ -8,6 +8,14 @@ import pytest
 ft = pytest.importorskip("flet")
 
 from daftarche_phone.charts import SPREAD, bar_chart, donut  # noqa: E402
+from daftarche_phone.app import month_range, no_filters  # noqa: E402
+from daftarche_phone.snapshot import MONTHS, custom_period  # noqa: E402
+
+MONTHS_SHORT = [m[:3] for m in MONTHS]
+
+
+def month_range_of(key):
+    return month_range(key)
 from daftarche_phone.theme import DARK  # noqa: E402
 
 
@@ -107,9 +115,10 @@ def test_a_new_period_forgets_the_tapped_month(app):
 
 def test_the_month_chip_in_transactions_goes_back_to_the_period(app):
     phone, page, view = app
-    phone.tx_range = ("2026-09-01", "2026-09-30", "Sep 26")
+    phone.custom["Transactions"] = custom_period("month", "2026-09")
+    assert phone._range("Transactions") == ("2026-09-01", "2026-09-30")
     phone._set_period("Transactions", phone.period["Transactions"])
-    assert phone.tx_range is None and phone._range("Transactions") != ("2026-09-01", "2026-09-30")
+    assert "Transactions" not in phone.custom and phone._range("Transactions") != ("2026-09-01", "2026-09-30")
 
 
 # ── 0.2.2: the Dashboard's month, and staying where you were ─────────────────
@@ -141,7 +150,7 @@ def test_the_period_chips_stay_scrolled_where_they_were(app):
     phone.render()
     row = phone._periods("Dashboard")
     phone._set_period("Dashboard", "1 Year" if "1 Year" in [c.content.value for c in row.controls] else
-                      row.controls[-1].content.value)
+                      row.controls[-2].content.value)  # the last period (Custom… is after it)
     again = phone._periods("Dashboard")
     assert again is row  # the same row, so it does not jump back to the left
     chosen = [c.content.value for c in again.controls if c.content.weight == ft.FontWeight.BOLD]
@@ -156,13 +165,14 @@ def test_the_merchant_filter(app):
     merchant = s.merchants()[0]
     assert all(t["merchant"] == merchant for t in s.filter(merchant=merchant)) and s.filter(merchant=merchant)
     assert all(not t.get("merchant") for t in s.filter(merchant=NO_MERCHANT))
-    phone._set_filter("merchant", merchant)
-    assert phone.tx_filters["merchant"] == merchant
-    phone._filter_sheet(None)
-    labels = [c.label for c in _walk(page.dialogs[-1].content) if isinstance(c, ft.Dropdown)]
-    assert "Merchant" in labels
+    phone._open_filters()
+    assert "Merchant" in _texts(phone._pager.controls[1])  # a row of the "Show only" page
+    phone._open_list("merchant")
+    assert merchant in _texts(phone._pager.controls[1])
+    phone._toggle_choice("merchant", merchant)
+    assert phone.tx_filters["merchant"] == {merchant}
     phone._clear_filter("merchant")
-    assert phone.tx_filters["merchant"] is None
+    assert phone.tx_filters["merchant"] == set()
 
 
 def test_the_account_has_a_line_of_its_own(app):
@@ -216,7 +226,7 @@ def test_the_accounts_list_is_in_the_chart_card(app):
     assert all(a["name"] in texts for a in shown) and any(t.endswith("in this period") for t in texts)
     page.navigation_bar.update = lambda: None
     rows[-1].on_click(None)  # the last row: an account → its transactions
-    assert phone.tab == 1 and phone.tx_filters["account"] is not None
+    assert phone.tab == 1 and phone.tx_filters["account"]
 
 
 def test_a_merchants_logo_is_the_rows_mark(app):
@@ -246,3 +256,159 @@ def test_a_split_row_and_the_category_list_with_pictures(app):
     cat["image"] = "pic:7"
     phone.snap._images["pic:7"] = base64.b64encode(b"\x89PNG pic").decode()
     assert phone.snap.category_image(cat["id"]) == b"\x89PNG pic"
+
+
+# ── 0.6.0: heads that stay, totals, the "Show only" page, Custom… ────────────
+def test_the_heads_stay_and_the_lists_keep_their_place(app):
+    phone, page, view = app
+    phone.render()
+    frames = [phone._pager.controls[i] for i in range(4)]
+    assert all(f.data == "frame" for f in frames)
+    lists = [f.controls[1] for f in frames]
+    phone._set_period("Transactions", "Last Month")
+    assert [phone._pager.controls[i].controls[1] for i in range(4)] == lists  # the same lists
+
+
+def test_the_totals_and_their_refunds(app):
+    phone, page, view = app
+    phone.custom["Transactions"] = None
+    txs = phone.snap.filter(*phone._range("Transactions"))
+    texts = _texts(phone._transactions().controls[0])
+    assert {"Income", "Expense", "Net"} <= set(texts)
+    refunds = -sum(t["amount"] for t in txs if t["type"] == "Expense" and t["amount"] < 0)
+    assert any(t.startswith("incl. ") for t in texts) == bool(refunds)
+
+
+def test_the_show_only_page_and_back(app):
+    phone, page, view = app
+    phone.tab = 1
+    phone.render()
+    phone._open_filters()
+    assert phone._pager.controls[1].data == "filters"
+    phone._open_list("category")
+    groceries = next(c["id"] for c in phone.snap.categories if c["name"] == "Groceries")
+    sub = next(c for c in phone.snap.categories if c["id"] == groceries)["subcategories"][0]["id"]
+    phone._toggle_choice("category", groceries)
+    phone.tx_filters["subcategory"].add(sub)
+    asyncio.run(phone._back(SimpleNamespace(control=view)))  # the list → the page
+    assert phone.filter_view == "main" and view.answers == [False]
+    asyncio.run(phone._back(SimpleNamespace(control=view)))  # the page → Transactions, choices kept
+    assert phone.filter_view is None and phone.tab == 1 and phone.tx_filters["category"] == {groceries}
+    assert phone._pager.controls[1].data == "frame"
+    assert "Groceries" in _texts(phone._pager.controls[1])  # its chip
+    phone._clear_filter("category", groceries)  # ✕: its sub-categories go with it
+    assert phone.tx_filters["category"] == set() and phone.tx_filters["subcategory"] == set()
+
+
+def test_a_tick_does_not_move_a_row(app):
+    phone, page, view = app
+    phone.period["Transactions"] = "6 Months"
+    phone._open_filters()
+    phone._open_list("merchant")
+
+    def names():
+        return [t for t in _texts(phone._flist) if t in phone.snap.merchants()]
+    before = names()
+    phone._toggle_choice("merchant", before[-1])
+    assert names() == before and phone.tx_filters["merchant"] == {before[-1]}
+    phone._filter_typed("merchant", before[0][:4])
+    assert before[0] in names() and len(names()) < len(before)
+
+
+def test_custom_months_step_and_stop(app):
+    from datetime import date
+    phone, page, view = app
+    this = custom_period("month", date.today().strftime("%Y-%m"))
+    phone._set_custom("Dashboard", this)
+    chip = phone._periods("Dashboard").controls[0]
+    left, label, right = chip.content.controls[:3]
+    assert label.content.value == f"{MONTHS_SHORT[date.today().month - 1]} {date.today().year}"
+    assert right.on_click is None and left.on_click is not None  # no month after this one
+    left.on_click(None)
+    assert phone.custom["Dashboard"]["start"] < this["start"]
+    chip.content.controls[-1].on_click(None)  # ✕
+    assert "Dashboard" not in phone.custom
+
+
+def test_a_month_from_charts_is_a_custom_month_in_transactions(app):
+    phone, page, view = app
+    phone.tab = 2
+    phone.period["Charts"] = "6 Months"
+    months, _ = phone.snap.monthly_by_category("Expense", *phone._range("Charts"))
+    phone._pick_month(months[0])
+    category = phone.snap.by_category("Expense", *month_range_of(months[0]))[0][0]
+    phone._show_category(category, "Expense")
+    assert phone.custom["Transactions"]["mode"] == "month"
+    assert phone._range("Transactions") == month_range_of(months[0])
+
+
+def test_the_charts_take_several_accounts(app):
+    phone, page, view = app
+    a, b = (x["id"] for x in phone.snap.accounts[:2])
+    phone._chart_accounts()
+    phone._set_chart_accounts({a, b})
+    assert "2 accounts" in _texts(phone._charts().controls[0])
+    start, end = phone._range("Charts")
+    both = dict(phone.snap.by_category("Expense", start, end, {a, b}))
+    one = dict(phone.snap.by_category("Expense", start, end, a))
+    assert sum(both.values()) >= sum(one.values())
+
+
+def test_the_sheet_shows_the_mark_big_and_each_parts(app):
+    phone, page, view = app
+    tx = phone.snap.transactions[0]
+    phone._tx_sheet(tx)
+    marks = [c for c in _walk(page.dialogs[-1]) if isinstance(c, ft.Container) and c.width == 56]
+    assert len(marks) == 1
+
+
+def test_a_ticked_subcategory_stays_in_its_list(app):
+    phone, page, view = app
+    s = phone.snap
+    phone.period["Transactions"] = "6 Months"
+    groceries = next(c for c in s.categories if c["name"] == "Groceries")
+    health = next(c for c in s.categories if c["name"] == "Health")
+    sub = groceries["subcategories"][0]
+    phone.tx_filters["subcategory"] = {sub["id"]}
+    phone.tx_filters["category"] = {health["id"]}
+    phone._open_filters()
+    phone._open_list("subcategory")
+    texts = _texts(phone._flist)
+    assert "Groceries" in texts and sub["name"] in texts
+
+
+def test_a_tapped_month_keeps_within_a_from_to(app):
+    phone, page, view = app
+    phone.tab = 2
+    phone._set_custom("Charts", custom_period("range", ("2026-09-12", "2026-10-03")))
+    phone._pick_month("2026-09")
+    assert phone._chart_month_range() == ("2026-09-12", "2026-09-30")
+    phone._show_category(phone.snap.categories[0]["id"], "Expense")
+    assert phone.custom["Transactions"]["mode"] == "range"
+    assert phone._range("Transactions") == ("2026-09-12", "2026-09-30")
+
+
+def test_the_totals_of_a_category_count_its_parts_only(app):
+    phone, page, view = app
+    s = phone.snap
+    split = {"id": -1, "date": "2026-09-15", "type": "Expense", "amount": 150.0, "account": s.accounts[0]["id"],
+             "to_account": None, "category": None, "subcategory": None, "merchant": "Test", "name": None,
+             "note": None, "tags": [],
+             "parts": [{"amount": 100.0, "category": s.categories[0]["id"], "subcategory": None},
+                       {"amount": 50.0, "category": s.categories[1]["id"], "subcategory": None}]}
+    s.transactions.insert(0, split)
+    phone._set_custom("Transactions", custom_period("range", ("2026-09-15", "2026-09-15")))
+    phone.tx_filters = no_filters(category=s.categories[1]["id"], merchant="Test")
+    texts = _texts(phone._transactions().controls[0])
+    assert "-$50.00" in texts and "-$150.00" not in texts
+
+
+def test_the_picker_closes_only_itself(app):
+    phone, page, view = app
+    phone._period_picker("Transactions")
+    sheet = phone._picker_sheet
+    sheet.update = lambda: None
+    phone._pick_period("Transactions", custom_period("month", "2026-09"))
+    assert sheet.open is False and phone.custom["Transactions"]["start"] == "2026-09-01"
+    phone._period_picker("Transactions")  # opens again, on the month chosen
+    assert phone._picker_open

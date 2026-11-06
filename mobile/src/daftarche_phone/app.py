@@ -23,8 +23,8 @@ from . import link
 from .charts import LineChart, bar_chart, donut, legend, share_bar
 from .nav import ASK_EXIT, DASHBOARD, EXIT, RESTORE, BackSteps
 from .seal import SealError
-from .snapshot import (MONTHS, NO_MERCHANT, PALETTE, PERIODS, Snapshot, SnapshotError, money, month_label,
-                       period_range)
+from .snapshot import (MONTHS, NO_MERCHANT, PALETTE, PERIODS, Snapshot, SnapshotError, custom_label,
+                       custom_period, money, month_label, period_range, step_period)
 from .theme import FONT_FILES, THEME_CHOICES, material_theme, palette_for
 from .update import check as check_for_update
 
@@ -39,14 +39,30 @@ BOTTOM_ROOM = 96
 """Space under the last item of every tab: it clears Android's bar."""
 PAGE_SIZE = 150
 """Transactions shown at first; "Show more" adds as many again."""
+FILTER_ROWS = (("account", "Account", ft.Icons.ACCOUNT_BALANCE_OUTLINED),
+               ("category", "Category", ft.Icons.CATEGORY_OUTLINED),
+               ("subcategory", "Subcategory", ft.Icons.ACCOUNT_TREE_OUTLINED),
+               ("merchant", "Merchant", ft.Icons.STOREFRONT_OUTLINED),
+               ("tag", "Tag", ft.Icons.SELL_OUTLINED))
+"""The "Show only" page's lists, in order: (filter, title, icon)."""
+SEARCHED = {"category", "subcategory", "merchant"}
+"""The lists long enough for a search field above them."""
 TOP_CATEGORIES = 7
 """Categories of their own in the stacked bars and the donut; the rest are "Other"."""
 
 
-def no_filters(**chosen):
-    """Transactions' "Show only" choices, all off but ``chosen``."""
-    return {"kind": None, "account": None, "category": None, "tag": None, "merchant": None, "text": "",
-            **chosen}
+FILTERS = ("kind", "account", "category", "subcategory", "merchant", "tag")
+"""Transactions' "Show only" choices: each a set of values (empty: all)."""
+
+
+def no_filters(text="", **chosen):
+    """Transactions' "Show only" choices, all off but ``chosen`` (a value, or several)."""
+    filters = {key: set() for key in FILTERS}
+    for key, value in chosen.items():
+        if value is not None:
+            filters[key] = set(value) if isinstance(value, (set, frozenset, list, tuple)) else {value}
+    filters["text"] = text
+    return filters
 
 
 def month_range(key):
@@ -85,9 +101,11 @@ class PhoneApp:
         self.chart_kind = "Expense"
         self.dash_kind = "Expense"  # the Dashboard's donut and list: Expense or Income
         self.accounts_open = False  # the Dashboard's accounts under the total (remembered)
-        self.chart_account = None
+        self.chart_account = set()  # the Charts' accounts (none: all)
         self.chart_month = None  # a month tapped in the Charts bars ("2026-09"): its categories below
-        self.tx_range = None  # Transactions shows one month from Charts: (first day, last day, label)
+        self.custom = {}  # a tab's period chosen in Custom… (or a month from Charts): {mode, start, end}
+        self.filter_view = None  # Transactions' "Show only" page: "main", or the list of one filter
+        self.filter_search = ""  # what is typed above that list
         self.open_category = None
         self.p = palette_for("system", page.platform_brightness)
         self.update_info = None
@@ -295,13 +313,17 @@ class PhoneApp:
         return copy.deepcopy({"tab": self.tab, "period": self.period, "tx_filters": self.tx_filters,
                               "tx_limit": self.tx_limit, "chart_kind": self.chart_kind,
                               "chart_account": self.chart_account, "open_category": self.open_category,
-                              "chart_month": self.chart_month, "tx_range": self.tx_range})
+                              "chart_month": self.chart_month, "custom": self.custom})
 
     def _jump(self):
         """Call before going somewhere else from a tab (Show transactions, an account)."""
         self.nav.jumped(self._state())
 
     async def _back(self, e):
+        if self.tab == 1 and self.filter_view:  # the filter page: one step up, choices kept
+            await e.control.confirm_pop(False)
+            self._filter_up()
+            return
         action, state = self.nav.back(self.tab, time.monotonic())
         if action == EXIT:
             await e.control.confirm_pop(True)
@@ -335,7 +357,9 @@ class PhoneApp:
         return self._pager
 
     def _tabs(self):
-        return [self._dashboard(), self._transactions(), self._charts(), self._accounts(), self._settings()]
+        transactions = self._filter_page() if self.filter_view == "main" else \
+            self._filter_list(self.filter_view) if self.filter_view else self._transactions()
+        return [self._dashboard(), transactions, self._charts(), self._accounts(), self._settings()]
 
     def _redraw(self):
         """Draw the tabs again in place, after a choice inside a tab (a period, a filter, a tapped
@@ -344,8 +368,14 @@ class PhoneApp:
         if self.snap is None or getattr(self, "_pager", None) is None:
             self.render()
             return
-        for old, new in zip(self._pager.controls, self._tabs()):
-            old.controls = new.controls
+        for i, (old, new) in enumerate(zip(self._pager.controls, self._tabs())):
+            if old.data == new.data == "frame":  # the head's and the list's rows only: both keep their place
+                old.controls[0].content.controls = new.controls[0].content.controls
+                old.controls[1].controls = new.controls[1].controls
+            elif type(old) is type(new) and old.data == new.data and isinstance(old, ft.ListView):
+                old.controls = new.controls
+            else:  # another kind of page (Transactions ↔ its filter page)
+                self._pager.controls[i] = new
         self.page.update()
 
     def _sheet(self, content, **kwargs):
@@ -383,6 +413,12 @@ class PhoneApp:
         return ft.ListView(controls, padding=ft.Padding.only(left=16, right=16, top=4, bottom=BOTTOM_ROOM),
                            spacing=12, expand=True)
 
+    def _frame(self, head, body):
+        """A tab whose ``head`` (its period, search, totals) stays at the top while ``body`` scrolls."""
+        top = ft.Container(ft.Column(head, spacing=12, tight=True),
+                           padding=ft.Padding.only(left=16, right=16, top=4, bottom=8))
+        return ft.Column([top, self._page(body)], spacing=0, expand=True, data="frame")
+
     def _card(self, content, padding=14, accent=None, on_click=None):
         p = self.p
         return ft.Container(content, bgcolor=p.surface, border_radius=14, padding=padding, on_click=on_click,
@@ -397,19 +433,20 @@ class PhoneApp:
     def _periods(self, tab):
         p = self.p
         chips = []
-        if tab == "Transactions" and self.tx_range:  # one month, from Charts: ✕ goes back to the chips
-            chips.append(ft.Container(
-                ft.Text(f"{self.tx_range[2]}  ✕", size=13, color="#ffffff", weight=ft.FontWeight.BOLD),
-                bgcolor=p.accent, border_radius=16, padding=ft.Padding.symmetric(horizontal=12, vertical=7),
-                on_click=lambda e: self._set_period(tab, self.period[tab])))
+        custom = self.custom.get(tab)
+        if custom:  # ‹ Sep 2026 › ✕ (a range: its days ✕); the name opens Custom… again
+            chips.append(self._custom_chip(tab, custom))
         for name in PERIODS:
-            chosen = self.period[tab] == name and not (tab == "Transactions" and self.tx_range)
+            chosen = self.period[tab] == name and not custom
             chips.append(ft.Container(
                 ft.Text(name, size=13, color="#ffffff" if chosen else p.dim,
                         weight=ft.FontWeight.BOLD if chosen else None),
                 bgcolor=p.accent if chosen else p.surface, border_radius=16,
                 padding=ft.Padding.symmetric(horizontal=12, vertical=7),
                 on_click=lambda e, n=name: self._set_period(tab, n)))
+        chips.append(ft.Container(ft.Text("Custom…", size=13, color=p.dim), bgcolor=p.surface, border_radius=16,
+                                  padding=ft.Padding.symmetric(horizontal=12, vertical=7),
+                                  on_click=lambda e: self._period_picker(tab)))
         # the same row each time, with new chips: it stays scrolled where it was (a new row
         # started at the left, hiding the chip just tapped at the end)
         row = self._period_rows.get(tab)
@@ -418,19 +455,177 @@ class PhoneApp:
         row.controls = chips
         return row
 
+    def _custom_chip(self, tab, custom):
+        p = self.p
+        white = "#ffffff"
+
+        def part(content, on_click, padding):
+            return ft.Container(content, on_click=on_click, padding=padding)
+
+        def arrow(icon, n):
+            stepped = step_period(custom, n)
+            ok = self._period_has_room(stepped)
+            return part(ft.Icon(icon, size=18, color=white if ok else ft.Colors.with_opacity(0.35, white)),
+                        (lambda e: self._set_custom(tab, stepped)) if ok else None,
+                        ft.Padding.symmetric(horizontal=6, vertical=6))
+
+        label = part(ft.Text(custom_label(custom), size=13, color=white, weight=ft.FontWeight.BOLD),
+                     lambda e: self._period_picker(tab), ft.Padding.symmetric(horizontal=4, vertical=7))
+        steps = custom["mode"] in ("month", "year")
+        parts = [arrow(ft.Icons.CHEVRON_LEFT, -1), label, arrow(ft.Icons.CHEVRON_RIGHT, 1)] if steps else \
+            [ft.Container(width=8), label]
+        parts += [ft.Container(width=1, height=18, bgcolor=ft.Colors.with_opacity(0.35, white)),
+                  part(ft.Icon(ft.Icons.CLOSE, size=18, color=white), lambda e: self._set_custom(tab, None),
+                       ft.Padding.only(left=6, right=8, top=6, bottom=6))]
+        return ft.Container(ft.Row(parts, spacing=0, tight=True), bgcolor=p.accent, border_radius=16)
+
+    def _period_has_room(self, period):
+        """A month or year to step to: not after this one, not before the first transaction."""
+        first = self.snap.first_date() if self.snap else None
+        return period["start"] <= date.today().isoformat() and (first is None or period["end"] >= first)
+
     def _set_period(self, tab, name):
         self.period[tab] = name
+        self.custom.pop(tab, None)
+        self._period_changed(tab)
+
+    def _set_custom(self, tab, period):
+        """A period chosen in Custom… (or stepped to with ‹ ›); None: back to the chips."""
+        if period:
+            self.custom[tab] = period
+        else:
+            self.custom.pop(tab, None)
+        self._period_changed(tab)
+
+    def _period_changed(self, tab):
         if tab == "Transactions":
             self.tx_limit = PAGE_SIZE
-            self.tx_range = None
         if tab == "Charts":
             self.chart_month = None
+            self.open_category = None
         self._redraw()
 
     def _range(self, tab):
-        if tab == "Transactions" and self.tx_range:
-            return self.tx_range[0], self.tx_range[1]
+        custom = self.custom.get(tab)
+        if custom:
+            return custom["start"], custom["end"]
         return period_range(self.period[tab], date.today())
+
+    # ── Custom…: a month, a year, or from one day to another ─────────────────
+    def _period_picker(self, tab, mode=None, year=None):
+        s, p = self.snap, self.p
+        custom = self.custom.get(tab)
+        mode = mode or (custom["mode"] if custom else "month")
+        today = date.today()
+        first = date.fromisoformat(s.first_date()) if s.first_date() else today
+        year = year or (int(custom["start"][:4]) if custom else today.year)
+        year = min(max(year, first.year), today.year)
+        has = s.months_with_data()
+
+        def segment(name, key):
+            on = key == mode
+            return ft.Container(ft.Text(name, size=14, color="#ffffff" if on else p.text,
+                                        weight=ft.FontWeight.BOLD if on else None),
+                                bgcolor=p.accent if on else None, border_radius=16, expand=True,
+                                alignment=ft.Alignment.CENTER, padding=ft.Padding.symmetric(vertical=8),
+                                on_click=None if on else lambda e: self._switch_picker(tab, key, year))
+
+        def cell(text, period, there, on):
+            return ft.Container(
+                ft.Text(text, size=15, color="#ffffff" if on else p.text if there else p.border,
+                        weight=ft.FontWeight.BOLD if on else None),
+                bgcolor=p.accent if on else p.raised if there else None, border_radius=12,
+                alignment=ft.Alignment.CENTER, height=48, col=3,
+                on_click=(lambda e: self._pick_period(tab, period)) if there else None)
+
+        if mode == "month":
+            cells = []
+            for m in range(1, 13):
+                key = f"{year}-{m:02d}"
+                period = custom_period("month", key)
+                on = bool(custom) and custom["mode"] == "month" and custom["start"] == period["start"]
+                cells.append(cell(MONTHS[m - 1][:3], period, key in has, on))
+
+            def year_arrow(icon, n):
+                ok = first.year <= year + n <= today.year
+                return ft.IconButton(icon, icon_color=p.text if ok else p.border, disabled=not ok,
+                                     on_click=lambda e: self._switch_picker(tab, "month", year + n))
+            choose = [ft.Row([year_arrow(ft.Icons.CHEVRON_LEFT, -1),
+                              ft.Text(str(year), size=18, weight=ft.FontWeight.BOLD, color=p.text, expand=True,
+                                      text_align=ft.TextAlign.CENTER),
+                              year_arrow(ft.Icons.CHEVRON_RIGHT, 1)]),
+                      ft.ResponsiveRow(cells, spacing=8, run_spacing=8)]
+        elif mode == "range":
+            now = custom_label(custom) if custom and custom["mode"] == "range" else "Any days you choose"
+            choose = [ft.Text(now, size=15, color=p.text),
+                      ft.Row([ft.FilledButton("Choose the days…", icon=ft.Icons.DATE_RANGE,
+                                              on_click=lambda e: self._open_range(tab, custom, first, today))],
+                             alignment=ft.MainAxisAlignment.END)]
+        else:
+            years = {int(m[:4]) for m in has}
+            cells = []
+            for y in range(today.year, first.year - 1, -1):
+                period = custom_period("year", y)
+                on = bool(custom) and custom["mode"] == "year" and custom["start"] == period["start"]
+                cells.append(cell(str(y), period, y in years, on))
+            choose = [ft.ResponsiveRow(cells, spacing=8, run_spacing=8)]
+
+        tabs = ft.Container(ft.Row([segment("Month", "month"), segment("Year", "year"),
+                                    segment("From – to", "range")], spacing=0),
+                            bgcolor=p.raised, border_radius=18, padding=3)
+        content = ft.Container(ft.Column([ft.Text("Choose a period", size=17, weight=ft.FontWeight.BOLD,
+                                                  color=p.text), tabs, *choose], spacing=14, tight=True),
+                               padding=ft.Padding.only(left=20, right=20, top=8, bottom=24))
+        sheet = getattr(self, "_picker_sheet", None)
+        if sheet is not None and getattr(self, "_picker_open", False):
+            sheet.content.content = content  # another year or kind: the same sheet, new inside
+            sheet.update()
+            return
+        self._picker_sheet = self._sheet(content, bgcolor=p.surface, show_drag_handle=True,
+                                         on_dismiss=self._picker_closed)
+        self._picker_open = True
+        self.page.show_dialog(self._picker_sheet)
+
+    def _picker_closed(self, e=None):
+        self._picker_open = False
+
+    def _switch_picker(self, tab, mode, year):
+        self._period_picker(tab, mode, year)
+
+    def _close_picker(self):
+        """Closes this sheet only (pop_dialog would close whatever is on top, a message too)."""
+        if getattr(self, "_picker_open", False):
+            self._picker_open = False
+            self._picker_sheet.open = False
+            self._picker_sheet.update()
+
+    def _open_range(self, tab, custom, first, today):
+        self._close_picker()
+        self._range_picker(tab, custom, first, today)
+
+    def _pick_period(self, tab, period):
+        self._close_picker()
+        self._set_custom(tab, period)
+
+    def _range_picker(self, tab, custom, first, today):
+        """From – to: Android's own calendar for two days."""
+        start = date.fromisoformat(custom["start"]) if custom else today.replace(day=1)
+        end = date.fromisoformat(custom["end"]) if custom else today
+        first = min(first, today)
+        start, end = min(max(start, first), today), min(max(end, first), today)
+
+        def day(value):  # Flet sends the day as a time in UTC: back to the phone's own day
+            if getattr(value, "tzinfo", None) is not None:
+                value = value.astimezone()
+            return value.date() if hasattr(value, "date") else value
+
+        def chosen(e):
+            a, b = e.control.start_value, e.control.end_value
+            if a and b:
+                self._set_custom(tab, custom_period("range", (day(a), day(b))))
+        self.page.show_dialog(ft.DateRangePicker(
+            start_value=start, end_value=min(end, today), first_date=first, last_date=today,
+            help_text="Choose the first and the last day", on_change=chosen))
 
     def _stat(self, label, value, colour):
         p = self.p
@@ -452,18 +647,30 @@ class PhoneApp:
             text, colour = money(amount), p.transfer
         return ft.Text(text, size=size, weight=ft.FontWeight.BOLD, color=colour, no_wrap=True)
 
-    def _badge(self, emoji, colour, image=None):
+    def _badge(self, emoji, colour, image=None, size=38):
         """The round mark at the start of a row: a logo or picture (on white, as on the desktop),
         else the emoji, else a dot in the row's colour."""
         p = self.p
         if image:
-            return ft.Container(ft.Image(src=image, fit=ft.BoxFit.CONTAIN, width=28, height=28),
-                                width=38, height=38, border_radius=19, bgcolor="#ffffff",
+            inner = round(size * 0.74)
+            return ft.Container(ft.Image(src=image, fit=ft.BoxFit.CONTAIN, width=inner, height=inner),
+                                width=size, height=size, border_radius=size / 2, bgcolor="#ffffff",
                                 alignment=ft.Alignment.CENTER, clip_behavior=ft.ClipBehavior.ANTI_ALIAS)
-        return ft.Container(ft.Text(emoji, size=17) if emoji else ft.Container(width=10, height=10, bgcolor=colour,
-                                                                               border_radius=5),
-                            width=38, height=38, border_radius=19, bgcolor=p.raised,
+        dot = round(size * 0.26)
+        return ft.Container(ft.Text(emoji, size=round(size * 0.45)) if emoji else
+                            ft.Container(width=dot, height=dot, bgcolor=colour, border_radius=dot / 2),
+                            width=size, height=size, border_radius=size / 2, bgcolor=p.raised,
                             alignment=ft.Alignment.CENTER)
+
+    def _tx_badge(self, tx, size=38):
+        """A transaction's mark: the merchant's logo; else its category's logo, picture or emoji
+        (a split: ✂️); else a dot in its kind's colour."""
+        s = self.snap
+        split = bool(tx.get("parts"))
+        image = s.merchant_image(tx.get("merchant")) or (
+            None if split else s.category_image(tx["category"], tx["subcategory"]))
+        emoji = "✂️" if split else s.icon(tx["category"], tx["subcategory"])
+        return self._badge(emoji, self.p.kind(tx["type"]), image, size)
 
     # ── Dashboard ────────────────────────────────────────────────────────────
     def _dashboard(self):
@@ -517,8 +724,9 @@ class PhoneApp:
         banner = self._update_banner()
         title = "Expenses by Category" if kind == "Expense" else "Income by Category"
         heading = None if len(monthly) <= 1 else self._heading(title, self._kind_switch())  # the switch, once
-        return self._page([*([banner] if banner else []), top, self._periods("Dashboard"), stats, chart,
-                           self._category_card(kind, start, end, title, colours=colours, heading=heading)])
+        return self._frame([self._periods("Dashboard")],
+                           [*([banner] if banner else []), top, stats, chart,
+                            self._category_card(kind, start, end, title, colours=colours, heading=heading)])
 
     def _kind_switch(self):
         """Expense | Income, small: what the Dashboard's donut and list show."""
@@ -598,11 +806,17 @@ class PhoneApp:
         self._jump()
         source = TABS[self.tab][0]
         self.period["Transactions"] = self.period.get(source, "This Month")
-        self.tx_range = None
+        self.custom.pop("Transactions", None)
+        if self.custom.get(source):
+            self.custom["Transactions"] = dict(self.custom[source])
         if source == "Charts" and self.chart_month:  # a month tapped in the bars: that month only
-            self.tx_range = (*month_range(self.chart_month), month_label(self.chart_month))
+            days = self._chart_month_range()
+            whole = days == month_range(self.chart_month)
+            self.custom["Transactions"] = custom_period("month", self.chart_month) if whole else \
+                custom_period("range", days)
         self.tx_filters = no_filters(kind=kind, account=self.chart_account if source == "Charts" else None,
                                      category=category)
+        self.filter_view = None
         self.tx_limit = PAGE_SIZE
         self._jump_to_transactions()
 
@@ -611,24 +825,37 @@ class PhoneApp:
         self.render()
 
     # ── Transactions ─────────────────────────────────────────────────────────
+    def _chosen(self):
+        """The filters as Snapshot.filter takes them."""
+        return {k: self.tx_filters[k] for k in FILTERS}
+
     def _transactions(self):
         s, p, f = self.snap, self.p, self.tx_filters
         start, end = self._range("Transactions")
-        txs = s.filter(start, end, f["kind"], f["account"], f["category"], f["tag"], f["text"], f["merchant"])
+        txs = s.filter(start, end, text=f["text"], **self._chosen())
 
         search = ft.TextField(value=f["text"], hint_text="Search", prefix_icon=ft.Icons.SEARCH, dense=True,
                               border_radius=24, filled=True, fill_color=p.surface, border_color=p.surface,
                               expand=True, on_submit=self._search, on_blur=self._search,
                               content_padding=ft.Padding.symmetric(horizontal=12, vertical=8))
-        n_filters = sum(1 for k in ("kind", "account", "category", "merchant", "tag") if f[k] is not None)
+        n_filters = sum(len(f[k]) for k in FILTERS)
         filter_btn = ft.IconButton(ft.Icons.TUNE, icon_color=p.accent if n_filters else p.dim,
-                                   badge=str(n_filters) if n_filters else None, on_click=self._filter_sheet)
+                                   badge=str(n_filters) if n_filters else None, on_click=self._open_filters)
         chips = self._filter_chips()
 
-        income = sum(t["amount"] for t in txs if t["type"] == "Income")
-        expense = sum(t["amount"] for t in txs if t["type"] == "Expense")
-        summary = ft.Text(f"{len(txs):,} transaction{'s' if len(txs) != 1 else ''}  ·  "
-                          f"in {money(income)}  ·  out {money(expense)}", size=12, color=p.dim)
+        # with a category chosen, only its parts of a split count (as Charts adds them up)
+        line_ok = s.line_test(f["category"], f["subcategory"])
+        lines = [(t["type"], t["amount"]) for t in txs] if line_ok is None else \
+            [(line.tx["type"], line.amount) for line in s.lines(txs) if line_ok(line)]
+        income = sum(a for k, a in lines if k == "Income")
+        expense = sum(a for k, a in lines if k == "Expense")
+        refunds = round(-sum(a for k, a in lines if k == "Expense" and a < 0), 2)
+        summary = ft.Column([
+            ft.Text(f"{len(txs):,} transaction{'s' if len(txs) != 1 else ''}", size=12, color=p.dim),
+            ft.Row([self._total("Income", income, bool(refunds)),
+                    self._total("Expense", -expense, bool(refunds),
+                                f"incl. {money(refunds)} refunds" if refunds else None),
+                    self._total("Net", income - expense, bool(refunds))], spacing=8)], spacing=6, tight=True)
 
         rows, last_date = [], None
         for tx in txs[:self.tx_limit]:
@@ -642,24 +869,49 @@ class PhoneApp:
                                       on_click=self._more))
         if not txs:
             rows.append(ft.Text("No transactions", size=14, color=p.dim))
-        return self._page([ft.Row([search, filter_btn], spacing=4), self._periods("Transactions"),
-                           *([chips] if chips else []), summary, *rows])
+        return self._frame([ft.Row([search, filter_btn], spacing=4), self._periods("Transactions"),
+                            *([chips] if chips else []), summary], rows)
+
+    def _total(self, label, value, tall=False, note=None):
+        """One of Transactions' totals: green above 0, red below; ``note`` under it, small."""
+        p = self.p
+        value = round(value, 2) + 0.0
+        return ft.Container(ft.Column([
+            ft.Text(label, size=11, color=p.dim),
+            ft.Text(money(value, sign=True), size=14, weight=ft.FontWeight.BOLD, color=p.signed(value), no_wrap=True),
+            *([ft.Text(note, size=10, color=p.dim, no_wrap=True)] if note else [])],
+            spacing=0, tight=True, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
+            expand=True, bgcolor=p.surface, border_radius=10, height=64 if tall else None,
+            alignment=ft.Alignment.CENTER, padding=ft.Padding.symmetric(horizontal=6, vertical=6))
+
+    def _value_name(self, key, value):
+        s = self.snap
+        if key == "account":
+            return s.account_name(value) or "—"
+        if key == "category":
+            return s.category_name(value)
+        if key == "subcategory":
+            return s.subcategory_name(value) or "—"
+        if key == "tag":
+            return s.tag.get(value, {}).get("name", "—")
+        return str(value)
 
     def _filter_chips(self):
-        s, p, f = self.snap, self.p, self.tx_filters
-        names = {"kind": f["kind"], "account": s.account_name(f["account"]) if f["account"] is not None else None,
-                 "category": s.category_name(f["category"]) if f["category"] is not None else None,
-                 "merchant": f["merchant"],
-                 "tag": s.tag.get(f["tag"], {}).get("name") if f["tag"] is not None else None}
-        chips = [ft.Container(ft.Row([ft.Text(v, size=12, color=p.text),
+        p, f = self.p, self.tx_filters
+        chips = [ft.Container(ft.Row([ft.Text(self._value_name(k, v), size=12, color=p.text),
                                       ft.Icon(ft.Icons.CLOSE, size=14, color=p.dim)], spacing=4, tight=True),
                               bgcolor=p.raised, border_radius=14, padding=ft.Padding.symmetric(horizontal=10, vertical=5),
-                              on_click=lambda e, k=k: self._clear_filter(k))
-                 for k, v in names.items() if v]
+                              on_click=lambda e, k=k, v=v: self._clear_filter(k, v))
+                 for k in FILTERS for v in sorted(f[k], key=lambda v, k=k: self._value_name(k, v).casefold())]
         return ft.Row(chips, spacing=6, wrap=True) if chips else None
 
-    def _clear_filter(self, key):
-        self.tx_filters[key] = None
+    def _clear_filter(self, key, value=None):
+        """✕ on a chip: that one choice; no value: every choice of ``key``."""
+        gone = set(self.tx_filters[key]) if value is None else {value}
+        self.tx_filters[key] -= gone
+        if key == "category":  # its sub-categories go with it
+            self._drop_subcategories_of(gone)
+        self.tx_limit = PAGE_SIZE
         self._redraw()
 
     def _search(self, e):
@@ -682,14 +934,10 @@ class PhoneApp:
             cat = "Split" if tx.get("parts") else s.category_name(tx["category"])
             sub_name = "" if tx.get("parts") else s.subcategory_name(tx["subcategory"])
             sub = f"{cat} › {sub_name}" if sub_name else cat
-        emoji = "✂️" if tx.get("parts") else s.icon(tx["category"], tx["subcategory"])
-        # the merchant's logo first; else the category's logo or picture; else the emoji
-        image = s.merchant_image(tx.get("merchant")) or (
-            None if tx.get("parts") else s.category_image(tx["category"], tx["subcategory"]))
         # the account on a line of its own: sharing the category's line, it was cut off
         account = "" if tx["type"] == "Transfer" else s.account_name(tx["account"]) or ""
         return ft.Container(ft.Row([
-            self._badge(emoji, p.kind(tx["type"]), image),
+            self._tx_badge(tx),
             ft.Column([ft.Text(s.title(tx), size=14, color=p.text, no_wrap=True,
                                overflow=ft.TextOverflow.ELLIPSIS),
                        ft.Text(sub, size=12, color=p.dim, no_wrap=True, overflow=ft.TextOverflow.ELLIPSIS),
@@ -709,8 +957,10 @@ class PhoneApp:
                           vertical_alignment=ft.CrossAxisAlignment.START)
 
         d = date.fromisoformat(tx["date"])
-        items = [ft.Text(s.title(tx), size=19, weight=ft.FontWeight.BOLD, color=p.text),
-                 self._amount_text(tx, size=24),
+        items = [ft.Row([self._tx_badge(tx, size=56),
+                         ft.Column([ft.Text(s.title(tx), size=19, weight=ft.FontWeight.BOLD, color=p.text),
+                                    self._amount_text(tx, size=24)], spacing=2, tight=True, expand=True)],
+                        spacing=14),
                  ft.Divider(color=p.border),
                  line("Date", d.strftime("%A, %d %B %Y")),
                  line("Type", {"loan": "Transfer › Loan", "unmatched": "Transfer (not matched)"}.get(
@@ -726,10 +976,13 @@ class PhoneApp:
                 cat = s.category_name(part["category"])
                 sub = s.subcategory_name(part["subcategory"])
                 items.append(ft.Row([
+                    self._badge(s.icon(part["category"], part["subcategory"]), p.kind(tx["type"]),
+                                s.category_image(part["category"], part["subcategory"]), size=26),
                     ft.Text(f"{cat} › {sub}" if sub else cat, size=14, color=p.text, expand=True),
-                    self._amount_text(tx, part["amount"], size=14)]))
-                if part.get("note"):
-                    items.append(ft.Text(part["note"], size=12, color=p.dim, italic=True))
+                    self._amount_text(tx, part["amount"], size=14)], spacing=10))
+                if part.get("note"):  # under the part's name, past its mark
+                    items.append(ft.Container(ft.Text(part["note"], size=12, color=p.dim, italic=True),
+                                              padding=ft.Padding.only(left=36)))
         else:
             cat, sub = s.category_name(tx["category"]), s.subcategory_name(tx["subcategory"])
             items.append(line("Category", f"{cat} › {sub}" if sub else cat))
@@ -746,46 +999,230 @@ class PhoneApp:
                          padding=ft.Padding.only(left=20, right=20, top=8, bottom=28)),
             bgcolor=p.surface, show_drag_handle=True))
 
-    def _filter_sheet(self, e):
-        s, p, f = self.snap, self.p, self.tx_filters
+    # ── Transactions' "Show only" page ───────────────────────────────────────
+    # A page of its own (not a sheet), so Back goes one step at a time: a list → the page →
+    # Transactions. Choices apply at once and stay when leaving.
+    def _open_filters(self, e=None):
+        self.filter_view, self.filter_search = "main", ""
+        self._redraw()
 
-        def dropdown(label, key, options, search=False):
-            current = f[key]
-            return ft.Dropdown(label=label, value="" if current is None else str(current), expand=True,
-                               editable=search, enable_filter=search, menu_height=360 if search else None,
-                               options=[ft.DropdownOption(key="", text="All")] +
-                               [ft.DropdownOption(key=str(k), text=t) for k, t in options],
-                               on_select=lambda ev, k=key: self._set_filter(k, ev.control.value))
-
-        kinds = [(k, k) for k in ("Income", "Expense", "Transfer")]
-        accounts = [(a["id"], a["name"]) for a in s.accounts]
-        categories = [(c["id"], f"{c['name']}  ({c['type'] or 'any'})") for c in
-                      sorted(s.categories, key=lambda c: (c["type"], c["name"]))]
-        tags = [(t["id"], t["name"]) for t in s.tags]
-        sheet = self._sheet(ft.Container(ft.Column([
-            ft.Text("Show only", size=17, weight=ft.FontWeight.BOLD, color=p.text),
-            dropdown("Type", "kind", kinds), dropdown("Account", "account", accounts),
-            dropdown("Category", "category", categories),
-            dropdown("Merchant", "merchant", [(NO_MERCHANT, NO_MERCHANT)] + [(m, m) for m in s.merchants()],
-                     search=True),  # many: typing narrows the list
-            *([dropdown("Tag", "tag", tags)] if tags else []),
-            ft.Row([ft.TextButton("Clear all", on_click=lambda ev: self._clear_filters(sheet)),
-                    ft.FilledButton("Done", on_click=lambda ev: self.page.pop_dialog())],
-                   alignment=ft.MainAxisAlignment.END)],
-            spacing=12, tight=True), padding=ft.Padding.only(left=20, right=20, top=8, bottom=24)),
-            bgcolor=p.surface, show_drag_handle=True, on_dismiss=lambda ev: self._redraw())
-        self.page.show_dialog(sheet)
-
-    def _set_filter(self, key, value):
-        if key in ("kind", "merchant"):
-            self.tx_filters[key] = value or None
-        else:
-            self.tx_filters[key] = int(value) if value else None
+    def _filter_up(self):
+        self.filter_view = "main" if self.filter_view not in (None, "main") else None
+        self.filter_search = ""
         self.tx_limit = PAGE_SIZE
+        self._redraw()
 
-    def _clear_filters(self, sheet):
+    def _open_list(self, key):
+        self.filter_view, self.filter_search = key, ""
+        self._list_order = None  # set when the list is first drawn: a tick does not move a row
+        self._redraw()
+
+    def _filter_head(self, title, right=None):
+        p = self.p
+        return ft.Container(ft.Row([ft.IconButton(ft.Icons.ARROW_BACK, icon_color=p.text, tooltip="Back",
+                                                  on_click=lambda e: self._filter_up()),
+                                    ft.Text(title, size=18, weight=ft.FontWeight.BOLD, color=p.text, expand=True),
+                                    *([right] if right else [])], spacing=4),
+                            padding=ft.Padding.only(left=4, right=8))
+
+    def _bottom_button(self, text, on_click):
+        return ft.Container(ft.FilledButton(text, width=10000, height=48, on_click=on_click),
+                            padding=ft.Padding.only(left=16, right=16, top=4, bottom=16))
+
+    def _filter_page(self):
+        s, p, f = self.snap, self.p, self.tx_filters
+        start, end = self._range("Transactions")
+        chosen = self._chosen()
+        kinds = s.counts("kind", start, end, text=f["text"], **chosen)
+
+        def toggle(kind):
+            on = kind in f["kind"]
+            there = on or kinds.get(kind)
+            return ft.Container(ft.Row([*([ft.Icon(ft.Icons.CHECK, size=16, color="#ffffff")] if on else []),
+                                        ft.Text(kind, size=14, color="#ffffff" if on else p.text if there else p.border)],
+                                       spacing=4, tight=True),
+                                bgcolor=p.accent if on else p.surface, border_radius=18,
+                                padding=ft.Padding.symmetric(horizontal=14, vertical=8),
+                                on_click=(lambda e: self._toggle_kind(kind)) if there else None)
+
+        def row(key, title, icon):
+            values = f[key]
+            value = "All" if not values else self._value_name(key, next(iter(values))) if len(values) == 1 \
+                else f"{len(values)} chosen"
+            return ft.Container(ft.Row([
+                ft.Icon(icon, color=p.dim, size=22),
+                ft.Text(title, size=15, color=p.text, expand=True),
+                ft.Text(value, size=14, color=p.accent if values else p.dim, no_wrap=True, max_lines=1,
+                        overflow=ft.TextOverflow.ELLIPSIS, width=150, text_align=ft.TextAlign.RIGHT),
+                ft.Icon(ft.Icons.CHEVRON_RIGHT, color=p.dim, size=20)], spacing=12),
+                padding=ft.Padding.symmetric(horizontal=14, vertical=14), on_click=lambda e: self._open_list(key))
+
+        rows = []
+        for key, title, icon in FILTER_ROWS:
+            if key == "tag" and not s.tags:
+                continue
+            if rows:
+                rows.append(ft.Divider(height=1, color=p.border))
+            rows.append(row(key, title, icon))
+        n = len(s.filter(start, end, text=f["text"], **chosen))
+        any_chosen = any(f[k] for k in FILTERS)
+        return ft.Column([
+            self._filter_head("Show only", ft.TextButton("Clear all", on_click=self._clear_all,
+                                                         visible=any_chosen)),
+            ft.Container(ft.ListView([
+                ft.Text("Type", size=13, color=p.dim),
+                ft.Row([toggle(k) for k in ("Income", "Expense", "Transfer")], spacing=8, wrap=True),
+                ft.Container(height=4),
+                ft.Container(ft.Column(rows, spacing=0), bgcolor=p.surface, border_radius=14)],
+                spacing=10, padding=ft.Padding.symmetric(horizontal=16)), expand=True),
+            self._bottom_button(f"Show {n:,} transaction{'' if n == 1 else 's'}", lambda e: self._close_filters())],
+            spacing=8, expand=True, data="filters")
+
+    def _close_filters(self):
+        self.filter_view, self.filter_search = None, ""
+        self.tx_limit = PAGE_SIZE
+        self._redraw()
+
+    def _toggle_kind(self, kind):
+        self.tx_filters["kind"] ^= {kind}
+        self._redraw()
+
+    def _clear_all(self, e=None):
         self.tx_filters = no_filters(text=self.tx_filters["text"])
-        self.page.pop_dialog()
+        self._redraw()
+
+    def _filter_list(self, key):
+        p = self.p
+        title = dict((k, t) for k, t, _ in FILTER_ROWS)[key]
+        self._flist = ft.ListView(self._filter_items(key), spacing=8,
+                                  padding=ft.Padding.only(left=16, right=16, bottom=12))
+        self._fcount = ft.Text(self._chosen_text(key), size=12, color=p.dim)
+        top = [ft.Row([ft.TextField(value=self.filter_search,
+                                    hint_text={"category": "Search categories", "subcategory": "Search subcategories",
+                                               "merchant": "Search merchants"}.get(key, "Search"),
+                                    prefix_icon=ft.Icons.SEARCH, dense=True, expand=True, border_radius=24,
+                                    filled=True, fill_color=p.surface, border_color=p.surface,
+                                    content_padding=ft.Padding.symmetric(horizontal=12, vertical=8),
+                                    on_change=lambda e: self._filter_typed(key, e.control.value))])] \
+            if key in SEARCHED else []
+        return ft.Column([
+            self._filter_head(title, ft.TextButton("Clear", on_click=lambda e: self._clear_list(key))),
+            ft.Container(ft.Column([*top, self._fcount], spacing=8), padding=ft.Padding.symmetric(horizontal=16)),
+            ft.Container(self._flist, expand=True),
+            self._bottom_button("Done", lambda e: self._filter_up())], spacing=8, expand=True, data="filters")
+
+    def _chosen_text(self, key):
+        n = len(self.tx_filters[key])
+        if key == "subcategory" and self.tx_filters["category"]:
+            return f"{n} chosen  ·  of the chosen categories"
+        return f"{n} chosen" if n else "None chosen: all are shown"
+
+    def _filter_items(self, key):
+        """The list's rows: those with transactions under the other choices (and the chosen ones,
+        even at 0, so they can be taken off), chosen first; how many transactions each would show."""
+        s, p, f = self.snap, self.p, self.tx_filters
+        start, end = self._range("Transactions")
+        counts = s.counts(key, start, end, text=f["text"], **self._chosen())
+        typed = self.filter_search.strip().casefold()
+
+        def shown(v):
+            return (counts.get(v) or v in f[key]) and (not typed or typed in self._value_name(key, v).casefold())
+
+        def line(v, mark, extra=""):
+            on = v in f[key]
+            count = counts.get(v, 0)
+            return ft.Container(ft.Row([
+                mark,
+                ft.Text(self._value_name(key, v), size=15, color=p.text, expand=True, no_wrap=True,
+                        overflow=ft.TextOverflow.ELLIPSIS),
+                ft.Text(f"{extra}{count:,}", size=12, color=p.dim),
+                ft.Icon(ft.Icons.CHECK_BOX if on else ft.Icons.CHECK_BOX_OUTLINE_BLANK,
+                        color=p.accent if on else p.dim)], spacing=12),
+                padding=ft.Padding.symmetric(horizontal=14, vertical=7),
+                on_click=lambda e: self._toggle_choice(key, v))
+
+        def card(lines):
+            return ft.Container(ft.Column(lines, spacing=0), bgcolor=p.surface, border_radius=14)
+
+        first = getattr(self, "_list_order", None)
+        if first is None or first[0] != key:  # chosen first, then A to Z, as the list opened
+            names = {v: self._value_name(key, v).casefold() for v in set(counts) | f[key]}
+            first = self._list_order = (key, {v: i for i, v in enumerate(
+                sorted(names, key=lambda v: (v not in f[key], names[v])))})
+
+        def order(values):
+            return sorted(values, key=lambda v: (first[1].get(v, len(first[1])), self._value_name(key, v).casefold()))
+
+        if key == "subcategory":  # in groups, by category
+            groups = []
+            parents = {s.sub_category.get(v) for v in f[key]}  # a ticked one stays in view
+            cats = (f["category"] | parents) if f["category"] else {s.sub_category.get(v) for v in counts} | parents
+            for c in sorted((c for c in cats if c in s.category), key=lambda c: s.category_name(c).casefold()):
+                subs = [sub["id"] for sub in s.category[c].get("subcategories", []) if shown(sub["id"])]
+                if subs:
+                    groups += [ft.Text(s.category_name(c), size=13, weight=ft.FontWeight.BOLD, color=p.dim),
+                               card([line(v, self._badge(s.icon(c, v), p.dim, s.category_image(c, v), size=30))
+                                     for v in order(subs)])]
+            return groups or [ft.Text("Nothing here", size=14, color=p.dim)]
+
+        values = order(v for v in set(counts) | f[key] if shown(v))
+        lines = []
+        for v in values:
+            if key == "account":
+                mark = ft.Container(ft.Container(width=12, height=12, bgcolor=s.account_color(v), border_radius=6),
+                                    width=30, height=30, border_radius=15, bgcolor=p.raised,
+                                    alignment=ft.Alignment.CENTER)
+            elif key == "category":
+                mark = self._badge(s.icon(v), p.dim, s.category_image(v), size=30)
+            elif key == "merchant":
+                logo = s.merchant_image(v) if v != NO_MERCHANT else None
+                mark = self._badge(None, p.dim, logo, size=30) if logo else ft.Container(
+                    ft.Text("—" if v == NO_MERCHANT else v[:1].upper(), size=13, weight=ft.FontWeight.BOLD,
+                            color=p.dim), width=30, height=30, border_radius=15, bgcolor=p.raised,
+                    alignment=ft.Alignment.CENTER)
+            else:
+                mark = ft.Container(ft.Icon(ft.Icons.SELL_OUTLINED, size=16, color=p.dim), width=30, height=30,
+                                    border_radius=15, bgcolor=p.raised, alignment=ft.Alignment.CENTER)
+            extra = ""
+            if key == "category" and not f["kind"]:
+                kind = (s.category.get(v) or {}).get("type")
+                extra = f"{kind}  ·  " if kind else ""
+            lines.append(line(v, mark, extra))
+        return [card(lines)] if lines else [ft.Text("Nothing here", size=14, color=p.dim)]
+
+    def _refresh_list(self, key):
+        if getattr(self, "_flist", None) is None:
+            self._redraw()
+            return
+        self._flist.controls = self._filter_items(key)
+        self._fcount.value = self._chosen_text(key)
+        self.page.update()
+
+    def _toggle_choice(self, key, value):
+        chosen = self.tx_filters[key]
+        if value in chosen:
+            chosen.discard(value)
+            if key == "category":
+                self._drop_subcategories_of({value})
+        else:
+            chosen.add(value)
+        self.tx_limit = PAGE_SIZE
+        self._refresh_list(key)
+
+    def _drop_subcategories_of(self, categories):
+        s = self.snap
+        self.tx_filters["subcategory"] = {sub for sub in self.tx_filters["subcategory"]
+                                          if s.sub_category.get(sub) not in categories}
+
+    def _filter_typed(self, key, text):
+        self.filter_search = text or ""
+        self._refresh_list(key)
+
+    def _clear_list(self, key):
+        if key == "category":
+            self._drop_subcategories_of(self.tx_filters["category"])
+        self.tx_filters[key] = set()
+        self._refresh_list(key)
 
     # ── Charts ───────────────────────────────────────────────────────────────
     def _charts(self):
@@ -795,11 +1232,15 @@ class PhoneApp:
 
         kinds = ft.SegmentedButton(
             segments=[ft.Segment(value=k, label=ft.Text(k)) for k in ("Expense", "Income")],
-            selected=[kind], show_selected_icon=False, on_change=self._set_chart_kind)
-        accounts = ft.Dropdown(value="" if account is None else str(account), dense=True, width=170,
-                               options=[ft.DropdownOption(key="", text="All accounts")] +
-                               [ft.DropdownOption(key=str(a["id"]), text=a["name"]) for a in s.accounts],
-                               on_select=self._set_chart_account)
+            selected=[kind], show_selected_icon=False, on_change=self._set_chart_kind, width=196)
+        label = "All accounts" if not account else s.account_name(next(iter(account))) if len(account) == 1 \
+            else f"{len(account)} accounts"
+        accounts = ft.Container(ft.Row([ft.Text(label, size=13, color=p.accent if account else p.text,
+                                                no_wrap=True, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS,
+                                                expand=True),
+                                        ft.Icon(ft.Icons.ARROW_DROP_DOWN, color=p.dim)], spacing=2),
+                                border=ft.Border.all(1, p.border), border_radius=10, expand=True, height=40,
+                                padding=ft.Padding.only(left=12, right=4), on_click=self._chart_accounts)
 
         months, per_cat = s.monthly_by_category(kind, start, end, account)
         order = [c for c, _ in s.by_category(kind, start, end, account)]
@@ -828,7 +1269,7 @@ class PhoneApp:
 
         title, heading = "By Category  (tap for details)", None
         if self.chart_month:  # the tapped month's categories, in the period's colours
-            start, end = month_range(self.chart_month)
+            start, end = self._chart_month_range()
             heading = ft.Row([
                 ft.Text("By Category", size=15, weight=ft.FontWeight.BOLD, color=p.text, expand=True),
                 ft.Container(ft.Text(f"{long_month(self.chart_month)}  ✕", size=12, color="#ffffff",
@@ -836,10 +1277,15 @@ class PhoneApp:
                              bgcolor=p.accent, border_radius=12,
                              padding=ft.Padding.symmetric(horizontal=10, vertical=4),
                              on_click=lambda e: self._pick_month(self.chart_month))])
-        return self._page([ft.Row([kinds, accounts], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-                           self._periods("Charts"), chart,
-                           self._category_card(kind, start, end, title, account, expandable=True,
-                                               colours=colours, heading=heading)])
+        return self._frame([ft.Row([kinds, accounts], spacing=10), self._periods("Charts")],
+                           [chart, self._category_card(kind, start, end, title, account, expandable=True,
+                                                       colours=colours, heading=heading)])
+
+    def _chart_month_range(self):
+        """The month tapped in the bars, within the period (a From – to may cut it)."""
+        first, last = month_range(self.chart_month)
+        start, end = self._range("Charts")
+        return max(first, start or first), min(last, end or last)
 
     def _pick_month(self, month):
         """A month tapped in the bars: its categories below; tapped again (or ✕): the whole period."""
@@ -853,8 +1299,37 @@ class PhoneApp:
         self.chart_month = None
         self._redraw()
 
-    def _set_chart_account(self, e):
-        self.chart_account = int(e.control.value) if e.control.value else None
+    def _chart_accounts(self, e=None):
+        """The Charts' accounts: one or several, ticked in a list (none ticked: all)."""
+        p = self.p
+        self._account_rows = ft.Column(self._chart_account_rows(), spacing=0, tight=True, scroll=ft.ScrollMode.AUTO)
+        self.page.show_dialog(self._sheet(ft.Container(ft.Column([
+            ft.Text("Accounts", size=17, weight=ft.FontWeight.BOLD, color=p.text),
+            ft.Container(self._account_rows, bgcolor=p.raised, border_radius=14),
+            ft.Row([ft.TextButton("All accounts", on_click=lambda ev: self._set_chart_accounts(set())),
+                    ft.FilledButton("Done", on_click=lambda ev: self.page.pop_dialog())],
+                   alignment=ft.MainAxisAlignment.END)], spacing=12, tight=True),
+            padding=ft.Padding.only(left=20, right=20, top=8, bottom=24)), bgcolor=p.surface, show_drag_handle=True))
+
+    def _chart_account_rows(self):
+        s, p = self.snap, self.p
+        rows = []
+        for a in s.accounts:
+            on = a["id"] in self.chart_account
+            rows.append(ft.Container(ft.Row([
+                ft.Container(width=12, height=12, bgcolor=a["color"], border_radius=6),
+                ft.Text(a["name"], size=15, color=p.text, expand=True, no_wrap=True, overflow=ft.TextOverflow.ELLIPSIS),
+                ft.Icon(ft.Icons.CHECK_BOX if on else ft.Icons.CHECK_BOX_OUTLINE_BLANK,
+                        color=p.accent if on else p.dim)], spacing=12),
+                padding=ft.Padding.symmetric(horizontal=14, vertical=10),
+                on_click=lambda e, i=a["id"]: self._set_chart_accounts(self.chart_account ^ {i})))
+        return rows
+
+    def _set_chart_accounts(self, accounts):
+        self.chart_account = set(accounts)
+        self.open_category = None
+        if getattr(self, "_account_rows", None) is not None:
+            self._account_rows.controls = self._chart_account_rows()
         self._redraw()
 
     # ── Accounts ─────────────────────────────────────────────────────────────
@@ -884,11 +1359,12 @@ class PhoneApp:
             ft.Divider(height=8, color=p.border),
             *rows], spacing=6))
 
-        return self._page([self._periods("Accounts"), chart, self._loans()])
+        return self._frame([self._periods("Accounts")], [chart, self._loans()])
 
     def _show_account(self, account_id):
         self._jump()
-        self.tx_range = None
+        self.custom.pop("Transactions", None)
+        self.filter_view = None
         self.tx_filters = no_filters(account=account_id)
         self.tx_limit = PAGE_SIZE
         self._jump_to_transactions()

@@ -62,10 +62,10 @@ def test_back_from_show_transactions_returns_to_the_open_category(app):
     category = phone.snap.by_category(kind, *phone._range("Charts"))[0][0]
     phone._toggle_category(category)
     phone._show_category(category, kind)
-    assert phone.tab == 1 and phone.tx_filters["category"] == category
+    assert phone.tab == 1 and phone.tx_filters["category"] == {category}
     asyncio.run(phone._back(SimpleNamespace(control=view)))
     assert view.answers == [False]  # stays in the app
-    assert phone.tab == 2 and phone.open_category == category and phone.tx_filters["category"] is None
+    assert phone.tab == 2 and phone.open_category == category and not phone.tx_filters["category"]
     asyncio.run(phone._back(SimpleNamespace(control=view)))
     assert phone.tab == 0  # then the Dashboard
     asyncio.run(phone._back(SimpleNamespace(control=view)))
@@ -86,7 +86,7 @@ def test_swiping_changes_the_tab_and_the_bar_follows(app):
 def test_sheets_keep_clear_of_androids_buttons(app):
     import flet as ft  # there: the fixture needs it
     phone, page, view = app
-    phone._filter_sheet(None)
+    phone._chart_accounts()
     phone._tx_sheet(phone.snap.transactions[0])
     for sheet in page.dialogs:
         area = sheet.content

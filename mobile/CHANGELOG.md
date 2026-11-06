@@ -2,6 +2,37 @@
 
 Released with tags `phone-vX.Y.Z`; each release carries the signed APK.
 
+## 0.6.0 — 2026-11-06
+
+- **Heads that stay**: on Dashboard, Transactions, Charts and Accounts the period (and on
+  Transactions the search, filters and totals; on Charts Expense | Income and the accounts) stays
+  at the top while the rest scrolls.
+- **Transactions' totals** are three boxes, Income, Expense and Net, green above 0 and red below.
+  Money back (an expense below 0) makes Expense smaller, and the box says how much
+  ("incl. $38.94 refunds").
+- **Custom…** at the end of the periods: a **month** (a year's months, ‹ › for the year; months
+  without transactions are grey), a **year**, or **from one day to another** (Android's
+  calendar). A month or year shows as ‹ Sep 2026 › ✕: ‹ › step to the one before or after, ✕
+  goes back to the periods, the name opens Custom… again. On Charts one month is a donut, as on
+  the Dashboard. A month tapped in Charts' bars, then Show transactions, is such a month in
+  Transactions.
+- **"Show only" is a page of its own** (the filter button), no longer a sheet of drop-down lists:
+  - Type: Income, Expense, Transfer, any of them.
+  - Account, Category, **Subcategory** (new), Merchant and Tag: each opens a list with ticks,
+    several at a time. Category, Subcategory and Merchant have a search field; the keyboard
+    opens only when you tap it.
+  - A list shows only what has transactions with the other choices (the period, the type, the
+    account…), each with how many, the ticked ones first; a tick does not move the row.
+  - A sub-category narrows its own category only: Groceries and Health with Bakery ticked shows
+    Groceries' Bakery and all of Health. Taking a category off takes its sub-categories too.
+  - Back goes one step: a list → the page → Transactions, and keeps what you chose. The button
+    at the bottom says how many transactions it shows.
+  - Each choice is a chip under the search, with ✕.
+- **Charts' accounts**: one or several, ticked in a list; the button no longer runs off the
+  screen.
+- **A transaction opened** shows its mark (logo, picture or emoji) big beside its name, and each
+  part of a split its own category's mark.
+
 ## 0.5.0 — 2026-11-06
 
 - **Logos and pictures**: a transaction's round mark shows its merchant's logo (on white), else

@@ -120,3 +120,59 @@ def test_logos_and_pictures():
     assert s.category_image(5) is None and s.icon(5) == "🛒"
     old = Snapshot({"format": "daftarche-phone", "version": 1, "categories": data["categories"][1:]})
     assert old.merchant_image("Maple Grocer") is None and old.icon(5) == "🛒"
+
+
+# ── 0.6.0: several choices per filter, sub-categories, counts, Custom… ───────
+def test_several_choices_of_a_filter(desktop):
+    _, snap, _, _ = desktop
+    a, b = snap.accounts[0]["id"], snap.accounts[1]["id"]
+    both = snap.filter(account={a, b})
+    assert both and {t["id"] for t in both} == {t["id"] for t in snap.filter(account=a)} | \
+        {t["id"] for t in snap.filter(account=b)}
+    assert snap.filter(account=set()) == snap.filter()  # nothing chosen: all
+    assert {t["type"] for t in snap.filter(kind={"Income", "Transfer"})} == {"Income", "Transfer"}
+
+
+def test_a_subcategory_narrows_only_its_own_category(desktop):
+    _, snap, tx_id, shop = desktop
+    groceries = next(c for c in snap.categories if c["name"] == "Groceries")
+    health = next(c for c in snap.categories if c["name"] == "Health")
+    sub = groceries["subcategories"][0]["id"]
+    got = snap.filter(category={groceries["id"], health["id"]}, subcategory={sub})
+    lines = list(snap.lines(got))
+    assert any(line.subcategory == sub for line in lines)
+    assert any(line.category == health["id"] for line in lines)  # Health: all of it
+    for tx in got:  # each has a line in Health, or in the chosen sub-category of Groceries
+        assert any(line.category == health["id"] or line.subcategory == sub for line in snap.lines([tx]))
+    only = snap.filter(subcategory={sub})  # no category chosen: that sub-category alone
+    assert only and all(any(line.subcategory == sub for line in snap.lines([t])) for t in only)
+    split = next(t for t in snap.transactions if t["id"] == tx_id)
+    household = split["parts"][1]["subcategory"]
+    assert split in snap.filter(subcategory={household})  # by a part
+
+
+def test_counts_leave_out_their_own_filter(desktop):
+    _, snap, _, _ = desktop
+    m = snap.merchants()[:2]
+    counts = snap.counts("merchant", merchant={m[0]})
+    assert counts[m[1]] == len(snap.filter(merchant=m[1]))  # the others still counted
+    kind_counts = snap.counts("category", kind={"Income"})
+    assert all(snap.category[c]["type"] == "Income" for c in kind_counts)
+    groceries = next(c for c in snap.categories if c["name"] == "Groceries")
+    sub = groceries["subcategories"][0]["id"]
+    assert snap.counts("category", subcategory={sub}) == snap.counts("category")  # its subs left out too
+    subs = snap.counts("subcategory", category={groceries["id"]})
+    assert subs and all(snap.sub_category[s] == groceries["id"] for s in subs)
+
+
+def test_custom_periods():
+    from daftarche_phone.snapshot import custom_label, custom_period, step_period
+    sep = custom_period("month", "2026-09")
+    assert (sep["start"], sep["end"], custom_label(sep)) == ("2026-09-01", "2026-09-30", "Sep 2026")
+    assert custom_label(step_period(sep, -9)) == "Dec 2025" and custom_label(step_period(sep, 4)) == "Jan 2027"
+    year = custom_period("year", 2025)
+    assert (year["start"], year["end"], custom_label(step_period(year, 1))) == ("2025-01-01", "2025-12-31", "2026")
+    days = custom_period("range", (date(2026, 11, 3), date(2026, 10, 12)))  # either order
+    assert (days["start"], days["end"], custom_label(days)) == ("2026-10-12", "2026-11-03", "12 Oct – 3 Nov 2026")
+    assert custom_label(custom_period("range", ("2025-12-30", "2026-01-02"))) == "30 Dec 2025 – 2 Jan 2026"
+    assert step_period(days, 1) == days  # a range does not step

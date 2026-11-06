@@ -56,7 +56,8 @@ def test_the_theme_choice_phone_light_dark_with_icons(app):
 
 def test_room_at_the_bottom_of_every_tab(app):
     phone, page, view = app
-    assert all(tab.padding.bottom == 96 for tab in phone._pager.controls)
+    lists = [tab.controls[1] if tab.data == "frame" else tab for tab in phone._pager.controls]
+    assert all(lst.padding.bottom == 96 for lst in lists)
 
 
 def test_toasts_float_for_three_seconds(app):
