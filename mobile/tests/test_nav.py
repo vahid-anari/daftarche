@@ -86,7 +86,6 @@ def test_a_tapped_tab_forgets_the_jumps_and_is_not_drawn_anew(app):
 def test_sheets_keep_clear_of_androids_buttons(app):
     import flet as ft  # there: the fixture needs it
     phone, page, view = app
-    phone._chart_accounts()
     phone._tx_sheet(phone.snap.transactions[0])
     for sheet in page.dialogs:
         area = sheet.content

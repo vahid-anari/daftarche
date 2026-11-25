@@ -401,30 +401,53 @@ class Snapshot:
                 row[0 if t["type"] == "Income" else 1] += t["amount"]
         return [(m, round(i, 2), round(e, 2)) for m, (i, e) in sorted(sums.items())]
 
-    def by_category(self, kind="Expense", start=None, end=None, account=None):
-        """``[(category id, total)]`` of a kind, largest first (money back can make a total < 0)."""
+    def kind_lines(self, kind="Expense", start=None, end=None, account=None, **chosen):
+        """The lines (a transaction, or each part of a split) of a kind in a period that pass the
+        Charts' filters: ``account``, and in ``chosen`` category, subcategory, merchant and tag (a
+        value or a set each, as ``filter`` takes them). A split counts only its parts that match."""
+        chosen = {k: v for k, v in chosen.items() if k in ("category", "subcategory", "merchant", "tag")}
+        line_ok = self.line_test(chosen.get("category"), chosen.get("subcategory"), chosen.get("tag"))
+        for line in self.lines(self.filter(start, end, kind=kind, account=account, **chosen)):
+            if line_ok is None or line_ok(line):
+                yield line
+
+    def only_category(self, category=None, subcategory=None):
+        """The one category the choices leave (chosen itself, or the home of every chosen
+        sub-category), else None: then the Charts show its sub-categories."""
+        homes = (_as_set(category) or set()) | {self.sub_category.get(v) for v in _as_set(subcategory) or ()}
+        return next(iter(homes)) if len(homes) == 1 else None
+
+    @staticmethod
+    def _group(line, by):
+        return line.subcategory if by == "subcategory" else line.category
+
+    def by_category(self, kind="Expense", start=None, end=None, account=None, by="category", **chosen):
+        """``[(category id, total)]`` of a kind, largest first (money back can make a total < 0);
+        ``by="subcategory"``: sub-category ids instead."""
         sums = {}
-        for line in self.lines(self.filter(start, end, kind=kind, account=account)):
-            sums[line.category] = sums.get(line.category, 0.0) + line.amount
+        for line in self.kind_lines(kind, start, end, account, **chosen):
+            key = self._group(line, by)
+            sums[key] = sums.get(key, 0.0) + line.amount
         rows = [(c, round(v, 2)) for c, v in sums.items() if round(v, 2) != 0]
         return sorted(rows, key=lambda r: -r[1])
 
-    def by_subcategory(self, category, kind="Expense", start=None, end=None, account=None):
+    def by_subcategory(self, in_category, kind="Expense", start=None, end=None, account=None, **chosen):
         """``[(sub-category id, total)]`` inside one category, largest first."""
         sums = {}
-        for line in self.lines(self.filter(start, end, kind=kind, account=account)):
-            if line.category == category:
+        for line in self.kind_lines(kind, start, end, account, **chosen):
+            if line.category == in_category:
                 sums[line.subcategory] = sums.get(line.subcategory, 0.0) + line.amount
         rows = [(s, round(v, 2)) for s, v in sums.items() if round(v, 2) != 0]
         return sorted(rows, key=lambda r: -r[1])
 
-    def monthly_by_category(self, kind="Expense", start=None, end=None, account=None):
-        """``(months, {category id: [total in each month]})`` for the stacked bars."""
+    def monthly_by_category(self, kind="Expense", start=None, end=None, account=None, by="category", **chosen):
+        """``(months, {category id: [total in each month]})`` for the stacked bars (``by``: as in
+        by_category)."""
         sums = {}
-        for line in self.lines(self.filter(start, end, kind=kind, account=account)):
+        for line in self.kind_lines(kind, start, end, account, **chosen):
             m = line.tx["date"][:7]
-            sums.setdefault(line.category, {})
-            sums[line.category][m] = sums[line.category].get(m, 0.0) + line.amount
+            per = sums.setdefault(self._group(line, by), {})
+            per[m] = per.get(m, 0.0) + line.amount
         months = sorted({m for per in sums.values() for m in per})
         return months, {c: [round(per.get(m, 0.0), 2) for m in months] for c, per in sums.items()}
 

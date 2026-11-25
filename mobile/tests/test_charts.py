@@ -307,7 +307,7 @@ def test_a_tick_does_not_move_a_row(app):
     phone._open_list("merchant")
 
     def names():
-        return [t for t in _texts(phone._flist) if t in phone.snap.merchants()]
+        return [t for t in _texts(phone._fstate["Transactions"]["list"]) if t in phone.snap.merchants()]
     before = names()
     phone._toggle_choice("merchant", before[-1])
     assert names() == before and phone.tx_filters["merchant"] == {before[-1]}
@@ -345,9 +345,14 @@ def test_a_month_from_charts_is_a_custom_month_in_transactions(app):
 def test_the_charts_take_several_accounts(app):
     phone, page, view = app
     a, b = (x["id"] for x in phone.snap.accounts[:2])
-    phone._chart_accounts()
-    phone._set_chart_accounts({a, b})
-    assert "2 accounts" in _texts(phone._charts().controls[0])
+    phone._open_filters(owner="Charts")
+    phone._open_list("account", "Charts")
+    phone._toggle_choice("account", a, "Charts")
+    phone._toggle_choice("account", b, "Charts")
+    phone._filter_up("Charts")
+    phone._filter_up("Charts")
+    assert phone.chart_filters["account"] == {a, b} and phone.tx_filters["account"] == set()
+    assert "Filters  ·  2" in _texts(phone._charts().controls[0])
     start, end = phone._range("Charts")
     both = dict(phone.snap.by_category("Expense", start, end, {a, b}))
     one = dict(phone.snap.by_category("Expense", start, end, a))
@@ -373,7 +378,7 @@ def test_a_ticked_subcategory_stays_in_its_list(app):
     phone.tx_filters["category"] = {health["id"]}
     phone._open_filters()
     phone._open_list("subcategory")
-    texts = _texts(phone._flist)
+    texts = _texts(phone._fstate["Transactions"]["list"])
     assert "Groceries" in texts and sub["name"] in texts
 
 

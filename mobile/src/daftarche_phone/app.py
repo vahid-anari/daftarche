@@ -101,11 +101,13 @@ class PhoneApp:
         self.chart_kind = "Expense"
         self.dash_kind = "Expense"  # the Dashboard's donut and list: Expense or Income
         self.accounts_open = False  # the Dashboard's accounts under the total (remembered)
-        self.chart_account = set()  # the Charts' accounts (none: all)
+        self.chart_filters = no_filters()  # the Charts' "Show only" (its type is chart_kind)
         self.chart_month = None  # a month tapped in the Charts bars ("2026-09"): its categories below
         self.custom = {}  # a tab's period chosen in Custom… (or a month from Charts): {mode, start, end}
-        self.filter_view = None  # Transactions' "Show only" page: "main", or the list of one filter
-        self.filter_search = ""  # what is typed above that list
+        # each tab's "Show only" page: view (None, "main", or the list of one filter), what is typed
+        # above that list, the list's order as it opened, and the list and its count as drawn
+        self._fstate = {o: {"view": None, "search": "", "order": None, "list": None, "count": None}
+                        for o in ("Transactions", "Charts")}
         self.open_category = None
         self.p = palette_for("system", page.platform_brightness)
         self._chart_bars = {}  # Charts' scrolling bars, kept while a month is tapped
@@ -338,7 +340,7 @@ class PhoneApp:
         """Where the person is now: restored when Back undoes a jump."""
         return copy.deepcopy({"tab": self.tab, "period": self.period, "tx_filters": self.tx_filters,
                               "tx_limit": self.tx_limit, "chart_kind": self.chart_kind,
-                              "chart_account": self.chart_account, "open_category": self.open_category,
+                              "chart_filters": self.chart_filters, "open_category": self.open_category,
                               "chart_month": self.chart_month, "custom": self.custom})
 
     def _jump(self):
@@ -346,9 +348,10 @@ class PhoneApp:
         self.nav.jumped(self._state())
 
     async def _back(self, e):
-        if self.tab == 1 and self.filter_view:  # the filter page: one step up, choices kept
+        owner = TABS[self.tab][0]
+        if owner in self._fstate and self._fstate[owner]["view"]:  # the filter page: one step up, choices kept
             await e.control.confirm_pop(False)
-            self._filter_up()
+            self._filter_up(owner)
             return
         action, state = self.nav.back(self.tab, time.monotonic())
         if action == EXIT:
@@ -390,7 +393,10 @@ class PhoneApp:
     def _tabs(self):
         transactions = self._filter_page() if self.filter_view == "main" else \
             self._filter_list(self.filter_view) if self.filter_view else self._transactions()
-        return [self._dashboard(), transactions, self._charts(), self._accounts(), self._settings()]
+        view = self._fstate["Charts"]["view"]
+        charts = self._filter_page("Charts") if view == "main" else \
+            self._filter_list(view, "Charts") if view else self._charts()
+        return [self._dashboard(), transactions, charts, self._accounts(), self._settings()]
 
     def _redraw(self, fresh=()):
         """Draw the tabs again in place, after a choice inside a tab (a period, a filter, a tapped
@@ -789,19 +795,24 @@ class PhoneApp:
         self.page.run_task(self.prefs.set, "accounts_open", "1" if self.accounts_open else "")
         self._redraw()
 
-    def _category_card(self, kind, start, end, title, account=None, expandable=False, colours=None,
-                       heading=None):
-        """``colours``: the chart's colours (a month of it keeps the period's); ``heading``: a
-        control in place of the plain title."""
+    def _category_card(self, kind, start, end, title, chosen=None, expandable=False, colours=None,
+                       heading=None, home=None):
+        """``chosen``: the Charts' filters; ``home``: the one category they leave, whose
+        sub-categories are then the rows (a tap shows their transactions); ``colours``: the chart's
+        colours (a month of it keeps the period's); ``heading``: a control in place of the plain title."""
         s, p = self.snap, self.p
-        rows = s.by_category(kind, start, end, account)
+        chosen = chosen or {}
+        by = "category" if home is None else "subcategory"
+        rows = s.by_category(kind, start, end, by=by, **chosen)
         own = {c: PALETTE[i % len(PALETTE)] for i, (c, _) in enumerate(rows)}
         colours = {c: (colours or {}).get(c, own[c]) for c, _ in rows}
         total = sum(v for _, v in rows if v > 0) or 1
         items = []
         for c, v in rows:
-            name = s.category_name(c)
-            icon, image = s.icon(c), s.category_image(c)
+            if home is None:
+                name, icon, image = s.category_name(c), s.icon(c), s.category_image(c)
+            else:
+                name, icon, image = s.subcategory_name(c) or "No subcategory", s.icon(home, c), s.category_image(home, c)
             label = ft.Text(f"{'' if image else icon} {name}".strip(), size=14, color=p.text, expand=True,
                             no_wrap=True)
             if image:  # a logo or picture as the category's icon: small, before its name
@@ -813,17 +824,22 @@ class PhoneApp:
                                    text_align=ft.TextAlign.RIGHT)], spacing=8)
             block = [head, share_bar(p, v / total, colours[c])]
             if expandable and self.open_category == c:
-                block.append(self._subcategories(c, kind, start, end, account, v))
+                block.append(self._subcategories(c, kind, start, end, chosen, v))
+            if home is not None:  # "No subcategory": Transactions cannot show those alone
+                tap = (lambda e, c=c: self._show_category(home, kind, subcategory=c)) if c is not None else None
+            elif expandable:
+                tap = lambda e, c=c: self._toggle_category(c)
+            else:
+                tap = lambda e, c=c: self._show_category(c, kind)
             items.append(ft.Container(ft.Column(block, spacing=6), padding=ft.Padding.symmetric(vertical=4),
-                                      on_click=lambda e, c=c: self._toggle_category(c) if expandable
-                                      else self._show_category(c, kind)))
+                                      on_click=tap))
         if not items:
             items = [ft.Text("Nothing in this period", size=13, color=p.dim)]
         return self._card(ft.Column([heading or self._heading(title), *items], spacing=8))
 
-    def _subcategories(self, category, kind, start, end, account, total):
+    def _subcategories(self, category, kind, start, end, chosen, total):
         s, p = self.snap, self.p
-        rows = s.by_subcategory(category, kind, start, end, account)
+        rows = s.by_subcategory(category, kind, start, end, **chosen)
         lines = [ft.Row([ft.Text(s.subcategory_name(sub) or "—", size=13, color=p.dim, expand=True),
                          ft.Text(money(v), size=13, color=p.dim),
                          ft.Text(f"{v / (total or 1):.0%}", size=12, color=p.dim, width=36,
@@ -837,8 +853,9 @@ class PhoneApp:
         self.open_category = None if self.open_category == category else category
         self._redraw()
 
-    def _show_category(self, category, kind):
-        """The transactions of a category, in Transactions, over the same period."""
+    def _show_category(self, category, kind, subcategory=None):
+        """The transactions of a category (or one of its sub-categories), in Transactions, over the
+        same period; from Charts, with the Charts' filters too."""
         self._jump()
         source = TABS[self.tab][0]
         self.period["Transactions"] = self.period.get(source, "This Month")
@@ -850,8 +867,14 @@ class PhoneApp:
             whole = days == month_range(self.chart_month)
             self.custom["Transactions"] = custom_period("month", self.chart_month) if whole else \
                 custom_period("range", days)
-        self.tx_filters = no_filters(kind=kind, account=self.chart_account if source == "Charts" else None,
-                                     category=category)
+        if source == "Charts":
+            f = self.chart_filters
+            subs = {subcategory} if subcategory is not None else \
+                {v for v in f["subcategory"] if self.snap.sub_category.get(v) == category}
+            self.tx_filters = no_filters(kind=kind, account=f["account"], merchant=f["merchant"], tag=f["tag"],
+                                         category=category, subcategory=subs)
+        else:
+            self.tx_filters = no_filters(kind=kind, category=category)
         self.filter_view = None
         self.tx_limit = PAGE_SIZE
         self._jump_to_transactions()
@@ -862,9 +885,13 @@ class PhoneApp:
         self._show_tab()
 
     # ── Transactions ─────────────────────────────────────────────────────────
-    def _chosen(self):
-        """The filters as Snapshot.filter takes them."""
-        return {k: self.tx_filters[k] for k in FILTERS}
+    def _chosen(self, owner="Transactions"):
+        """The filters as Snapshot.filter takes them (Charts': of its one type)."""
+        f = self._filters_of(owner)
+        chosen = {k: f[k] for k in FILTERS}
+        if owner == "Charts":
+            chosen["kind"] = {self.chart_kind}
+        return chosen
 
     def _transactions(self):
         s, p, f = self.snap, self.p, self.tx_filters
@@ -933,22 +960,26 @@ class PhoneApp:
             return s.tag.get(value, {}).get("name", "—")
         return str(value)
 
-    def _filter_chips(self):
-        p, f = self.p, self.tx_filters
+    def _filter_chips(self, owner="Transactions"):
+        p, f = self.p, self._filters_of(owner)
         chips = [ft.Container(ft.Row([ft.Text(self._value_name(k, v), size=12, color=p.text),
                                       ft.Icon(ft.Icons.CLOSE, size=14, color=p.dim)], spacing=4, tight=True),
                               bgcolor=p.raised, border_radius=14, padding=ft.Padding.symmetric(horizontal=10, vertical=5),
-                              on_click=lambda e, k=k, v=v: self._clear_filter(k, v))
+                              on_click=lambda e, k=k, v=v: self._clear_filter(k, v, owner))
                  for k in FILTERS for v in sorted(f[k], key=lambda v, k=k: self._value_name(k, v).casefold())]
         return ft.Row(chips, spacing=6, wrap=True) if chips else None
 
-    def _clear_filter(self, key, value=None):
+    def _clear_filter(self, key, value=None, owner="Transactions"):
         """✕ on a chip: that one choice; no value: every choice of ``key``."""
-        gone = set(self.tx_filters[key]) if value is None else {value}
-        self.tx_filters[key] -= gone
+        f = self._filters_of(owner)
+        gone = set(f[key]) if value is None else {value}
+        f[key] -= gone
         if key == "category":  # its sub-categories go with it
-            self._drop_subcategories_of(gone)
-        self.tx_limit = PAGE_SIZE
+            self._drop_subcategories_of(gone, owner)
+        if owner == "Charts":
+            self._chart_changed()
+        else:
+            self.tx_limit = PAGE_SIZE
         self._redraw()
 
     def _search(self, e):
@@ -1040,28 +1071,42 @@ class PhoneApp:
                          padding=ft.Padding.only(left=20, right=20, top=8, bottom=28)),
             bgcolor=p.surface, show_drag_handle=True))
 
-    # ── Transactions' "Show only" page ───────────────────────────────────────
-    # A page of its own (not a sheet), so Back goes one step at a time: a list → the page →
-    # Transactions. Choices apply at once and stay when leaving.
-    def _open_filters(self, e=None):
-        self.filter_view, self.filter_search = "main", ""
+    # ── the "Show only" page (Transactions' and Charts') ──────────────────────
+    # A page of its own (not a sheet), so Back goes one step at a time: a list → the page → the
+    # tab. Choices apply at once and stay when leaving. Transactions and Charts each have their
+    # own choices (``owner``: the tab's name); Charts' type is its Expense | Income switch.
+    @property
+    def filter_view(self):
+        """Transactions' filter page: None, "main", or the list of one filter."""
+        return self._fstate["Transactions"]["view"]
+
+    @filter_view.setter
+    def filter_view(self, view):
+        self._fstate["Transactions"]["view"] = view
+
+    def _filters_of(self, owner="Transactions"):
+        return self.chart_filters if owner == "Charts" else self.tx_filters
+
+    def _open_filters(self, e=None, owner="Transactions"):
+        self._fstate[owner].update(view="main", search="")
         self._redraw()
 
-    def _filter_up(self):
-        self.filter_view = "main" if self.filter_view not in (None, "main") else None
-        self.filter_search = ""
-        self.tx_limit = PAGE_SIZE
+    def _filter_up(self, owner="Transactions"):
+        st = self._fstate[owner]
+        st.update(view="main" if st["view"] not in (None, "main") else None, search="")
+        if owner == "Transactions":
+            self.tx_limit = PAGE_SIZE
         self._redraw()
 
-    def _open_list(self, key):
-        self.filter_view, self.filter_search = key, ""
-        self._list_order = None  # set when the list is first drawn: a tick does not move a row
+    def _open_list(self, key, owner="Transactions"):
+        # the order is set when the list is first drawn: a tick does not move a row
+        self._fstate[owner].update(view=key, search="", order=None)
         self._redraw()
 
-    def _filter_head(self, title, right=None):
+    def _filter_head(self, title, right=None, owner="Transactions"):
         p = self.p
         return ft.Container(ft.Row([ft.IconButton(ft.Icons.ARROW_BACK, icon_color=p.text, tooltip="Back",
-                                                  on_click=lambda e: self._filter_up()),
+                                                  on_click=lambda e: self._filter_up(owner)),
                                     ft.Text(title, size=18, weight=ft.FontWeight.BOLD, color=p.text, expand=True),
                                     *([right] if right else [])], spacing=4),
                             padding=ft.Padding.only(left=4, right=8))
@@ -1070,10 +1115,10 @@ class PhoneApp:
         return ft.Container(ft.FilledButton(text, width=10000, height=48, on_click=on_click),
                             padding=ft.Padding.only(left=16, right=16, top=4, bottom=16))
 
-    def _filter_page(self):
-        s, p, f = self.snap, self.p, self.tx_filters
-        start, end = self._range("Transactions")
-        chosen = self._chosen()
+    def _filter_page(self, owner="Transactions"):
+        s, p, f = self.snap, self.p, self._filters_of(owner)
+        start, end = self._range(owner)
+        chosen = self._chosen(owner)
         kinds = s.counts("kind", start, end, text=f["text"], **chosen)
 
         def toggle(kind):
@@ -1096,7 +1141,8 @@ class PhoneApp:
                 ft.Text(value, size=14, color=p.accent if values else p.dim, no_wrap=True, max_lines=1,
                         overflow=ft.TextOverflow.ELLIPSIS, width=150, text_align=ft.TextAlign.RIGHT),
                 ft.Icon(ft.Icons.CHEVRON_RIGHT, color=p.dim, size=20)], spacing=12),
-                padding=ft.Padding.symmetric(horizontal=14, vertical=14), on_click=lambda e: self._open_list(key))
+                padding=ft.Padding.symmetric(horizontal=14, vertical=14),
+                on_click=lambda e: self._open_list(key, owner))
 
         rows = []
         for key, title, icon in FILTER_ROWS:
@@ -1107,64 +1153,78 @@ class PhoneApp:
             rows.append(row(key, title, icon))
         n = len(s.filter(start, end, text=f["text"], **chosen))
         any_chosen = any(f[k] for k in FILTERS)
+        if owner == "Charts":  # its type is the switch on the tab
+            top = [ft.Text(f"{self.chart_kind} only  ·  Expense or Income is chosen on Charts", size=13,
+                           color=p.dim)]
+            button = self._bottom_button("Show chart", lambda e: self._close_filters(owner))
+        else:
+            top = [ft.Text("Type", size=13, color=p.dim),
+                   ft.Row([toggle(k) for k in ("Income", "Expense", "Transfer")], spacing=8, wrap=True)]
+            button = self._bottom_button(f"Show {n:,} transaction{'' if n == 1 else 's'}",
+                                         lambda e: self._close_filters(owner))
         return ft.Column([
-            self._filter_head("Show only", ft.TextButton("Clear all", on_click=self._clear_all,
-                                                         visible=any_chosen)),
+            self._filter_head("Show only", ft.TextButton("Clear all", on_click=lambda e: self._clear_all(owner=owner),
+                                                         visible=any_chosen), owner),
             ft.Container(ft.ListView([
-                ft.Text("Type", size=13, color=p.dim),
-                ft.Row([toggle(k) for k in ("Income", "Expense", "Transfer")], spacing=8, wrap=True),
+                *top,
                 ft.Container(height=4),
                 ft.Container(ft.Column(rows, spacing=0), bgcolor=p.surface, border_radius=14)],
                 spacing=10, padding=ft.Padding.symmetric(horizontal=16)), expand=True),
-            self._bottom_button(f"Show {n:,} transaction{'' if n == 1 else 's'}", lambda e: self._close_filters())],
-            spacing=8, expand=True, data="filters")
+            button], spacing=8, expand=True, data="filters")
 
-    def _close_filters(self):
-        self.filter_view, self.filter_search = None, ""
-        self.tx_limit = PAGE_SIZE
+    def _close_filters(self, owner="Transactions"):
+        self._fstate[owner].update(view=None, search="")
+        if owner == "Transactions":
+            self.tx_limit = PAGE_SIZE
         self._redraw()
 
     def _toggle_kind(self, kind):
         self.tx_filters["kind"] ^= {kind}
         self._redraw()
 
-    def _clear_all(self, e=None):
-        self.tx_filters = no_filters(text=self.tx_filters["text"])
+    def _clear_all(self, e=None, owner="Transactions"):
+        if owner == "Charts":
+            self.chart_filters = no_filters()
+            self._chart_changed()
+        else:
+            self.tx_filters = no_filters(text=self.tx_filters["text"])
         self._redraw()
 
-    def _filter_list(self, key):
-        p = self.p
+    def _filter_list(self, key, owner="Transactions"):
+        p, st = self.p, self._fstate[owner]
         title = dict((k, t) for k, t, _ in FILTER_ROWS)[key]
-        self._flist = ft.ListView(self._filter_items(key), spacing=8,
-                                  padding=ft.Padding.only(left=16, right=16, bottom=12))
-        self._fcount = ft.Text(self._chosen_text(key), size=12, color=p.dim)
-        top = [ft.Row([ft.TextField(value=self.filter_search,
+        st["list"] = ft.ListView(self._filter_items(key, owner), spacing=8,
+                                 padding=ft.Padding.only(left=16, right=16, bottom=12))
+        st["count"] = ft.Text(self._chosen_text(key, owner), size=12, color=p.dim)
+        top = [ft.Row([ft.TextField(value=st["search"],
                                     hint_text={"category": "Search categories", "subcategory": "Search subcategories",
                                                "merchant": "Search merchants"}.get(key, "Search"),
                                     prefix_icon=ft.Icons.SEARCH, dense=True, expand=True, border_radius=24,
                                     filled=True, fill_color=p.surface, border_color=p.surface,
                                     content_padding=ft.Padding.symmetric(horizontal=12, vertical=8),
-                                    on_change=lambda e: self._filter_typed(key, e.control.value))])] \
+                                    on_change=lambda e: self._filter_typed(key, e.control.value, owner))])] \
             if key in SEARCHED else []
         return ft.Column([
-            self._filter_head(title, ft.TextButton("Clear", on_click=lambda e: self._clear_list(key))),
-            ft.Container(ft.Column([*top, self._fcount], spacing=8), padding=ft.Padding.symmetric(horizontal=16)),
-            ft.Container(self._flist, expand=True),
-            self._bottom_button("Done", lambda e: self._filter_up())], spacing=8, expand=True, data="filters")
+            self._filter_head(title, ft.TextButton("Clear", on_click=lambda e: self._clear_list(key, owner)), owner),
+            ft.Container(ft.Column([*top, st["count"]], spacing=8), padding=ft.Padding.symmetric(horizontal=16)),
+            ft.Container(st["list"], expand=True),
+            self._bottom_button("Done", lambda e: self._filter_up(owner))], spacing=8, expand=True, data="filters")
 
-    def _chosen_text(self, key):
-        n = len(self.tx_filters[key])
-        if key == "subcategory" and self.tx_filters["category"]:
+    def _chosen_text(self, key, owner="Transactions"):
+        f = self._filters_of(owner)
+        n = len(f[key])
+        if key == "subcategory" and f["category"]:
             return f"{n} chosen  ·  of the chosen categories"
         return f"{n} chosen" if n else "None chosen: all are shown"
 
-    def _filter_items(self, key):
+    def _filter_items(self, key, owner="Transactions"):
         """The list's rows: those with transactions under the other choices (and the chosen ones,
         even at 0, so they can be taken off), chosen first; how many transactions each would show."""
-        s, p, f = self.snap, self.p, self.tx_filters
-        start, end = self._range("Transactions")
-        counts = s.counts(key, start, end, text=f["text"], **self._chosen())
-        typed = self.filter_search.strip().casefold()
+        s, p, f, st = self.snap, self.p, self._filters_of(owner), self._fstate[owner]
+        start, end = self._range(owner)
+        chosen = self._chosen(owner)
+        counts = s.counts(key, start, end, text=f["text"], **chosen)
+        typed = st["search"].strip().casefold()
 
         def shown(v):
             return (counts.get(v) or v in f[key]) and (not typed or typed in self._value_name(key, v).casefold())
@@ -1180,15 +1240,15 @@ class PhoneApp:
                 ft.Icon(ft.Icons.CHECK_BOX if on else ft.Icons.CHECK_BOX_OUTLINE_BLANK,
                         color=p.accent if on else p.dim)], spacing=12),
                 padding=ft.Padding.symmetric(horizontal=14, vertical=7),
-                on_click=lambda e: self._toggle_choice(key, v))
+                on_click=lambda e: self._toggle_choice(key, v, owner))
 
         def card(lines):
             return ft.Container(ft.Column(lines, spacing=0), bgcolor=p.surface, border_radius=14)
 
-        first = getattr(self, "_list_order", None)
+        first = st["order"]
         if first is None or first[0] != key:  # chosen first, then A to Z, as the list opened
             names = {v: self._value_name(key, v).casefold() for v in set(counts) | f[key]}
-            first = self._list_order = (key, {v: i for i, v in enumerate(
+            first = st["order"] = (key, {v: i for i, v in enumerate(
                 sorted(names, key=lambda v: (v not in f[key], names[v])))})
 
         def order(values):
@@ -1225,66 +1285,81 @@ class PhoneApp:
                 mark = ft.Container(ft.Icon(ft.Icons.SELL_OUTLINED, size=16, color=p.dim), width=30, height=30,
                                     border_radius=15, bgcolor=p.raised, alignment=ft.Alignment.CENTER)
             extra = ""
-            if key == "category" and not f["kind"]:
+            if key == "category" and not chosen["kind"]:
                 kind = (s.category.get(v) or {}).get("type")
                 extra = f"{kind}  ·  " if kind else ""
             lines.append(line(v, mark, extra))
         return [card(lines)] if lines else [ft.Text("Nothing here", size=14, color=p.dim)]
 
-    def _refresh_list(self, key):
-        if getattr(self, "_flist", None) is None:
+    def _refresh_list(self, key, owner="Transactions"):
+        st = self._fstate[owner]
+        if st["list"] is None or st["view"] != key:
             self._redraw()
             return
-        self._flist.controls = self._filter_items(key)
-        self._fcount.value = self._chosen_text(key)
+        st["list"].controls = self._filter_items(key, owner)
+        st["count"].value = self._chosen_text(key, owner)
+        if owner == "Charts":  # the chart under the page changes too, when the page is left
+            self._chart_changed()
         self.page.update()
 
-    def _toggle_choice(self, key, value):
-        chosen = self.tx_filters[key]
+    def _toggle_choice(self, key, value, owner="Transactions"):
+        chosen = self._filters_of(owner)[key]
         if value in chosen:
             chosen.discard(value)
             if key == "category":
-                self._drop_subcategories_of({value})
+                self._drop_subcategories_of({value}, owner)
         else:
             chosen.add(value)
-        self.tx_limit = PAGE_SIZE
-        self._refresh_list(key)
+        if owner == "Transactions":
+            self.tx_limit = PAGE_SIZE
+        self._refresh_list(key, owner)
 
-    def _drop_subcategories_of(self, categories):
-        s = self.snap
-        self.tx_filters["subcategory"] = {sub for sub in self.tx_filters["subcategory"]
-                                          if s.sub_category.get(sub) not in categories}
+    def _drop_subcategories_of(self, categories, owner="Transactions"):
+        s, f = self.snap, self._filters_of(owner)
+        f["subcategory"] = {sub for sub in f["subcategory"] if s.sub_category.get(sub) not in categories}
 
-    def _filter_typed(self, key, text):
-        self.filter_search = text or ""
-        self._refresh_list(key)
+    def _filter_typed(self, key, text, owner="Transactions"):
+        self._fstate[owner]["search"] = text or ""
+        self._refresh_list(key, owner)
 
-    def _clear_list(self, key):
+    def _clear_list(self, key, owner="Transactions"):
+        f = self._filters_of(owner)
         if key == "category":
-            self._drop_subcategories_of(self.tx_filters["category"])
-        self.tx_filters[key] = set()
-        self._refresh_list(key)
+            self._drop_subcategories_of(f["category"], owner)
+        f[key] = set()
+        self._refresh_list(key, owner)
 
     # ── Charts ───────────────────────────────────────────────────────────────
+    def _chart_chosen(self):
+        """The Charts' filters as Snapshot's totals take them (its type apart)."""
+        f = self.chart_filters
+        return {k: f[k] for k in ("account", "category", "subcategory", "merchant", "tag")}
+
     def _charts(self):
-        s, p = self.snap, self.p
+        s, p, f = self.snap, self.p, self.chart_filters
         start, end = self._range("Charts")
-        kind, account = self.chart_kind, self.chart_account
+        kind, chosen = self.chart_kind, self._chart_chosen()
+        # one category left by the filters: its sub-categories, in the bars and the list
+        home = s.only_category(f["category"], f["subcategory"])
+        if home is not None and not (s.category.get(home) or {}).get("subcategories"):
+            home = None  # a category without sub-categories: shown as itself
+        by = "subcategory" if home is not None else "category"
 
         kinds = ft.SegmentedButton(
             segments=[ft.Segment(value=k, label=ft.Text(k)) for k in ("Expense", "Income")],
             selected=[kind], show_selected_icon=False, on_change=self._set_chart_kind, width=196)
-        label = "All accounts" if not account else s.account_name(next(iter(account))) if len(account) == 1 \
-            else f"{len(account)} accounts"
-        accounts = ft.Container(ft.Row([ft.Text(label, size=13, color=p.accent if account else p.text,
-                                                no_wrap=True, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS,
-                                                expand=True),
-                                        ft.Icon(ft.Icons.ARROW_DROP_DOWN, color=p.dim)], spacing=2),
-                                border=ft.Border.all(1, p.border), border_radius=10, expand=True, height=40,
-                                padding=ft.Padding.only(left=12, right=4), on_click=self._chart_accounts)
+        n = sum(len(f[k]) for k in FILTERS)
+        filters = ft.Container(ft.Row([ft.Icon(ft.Icons.TUNE, size=18, color=p.accent if n else p.dim),
+                                       ft.Text(f"Filters  ·  {n}" if n else "Filters", size=13,
+                                               color=p.accent if n else p.text, no_wrap=True, expand=True),
+                                       ft.Icon(ft.Icons.CHEVRON_RIGHT, size=18, color=p.dim)], spacing=6),
+                               border=ft.Border.all(1, p.accent if n else p.border), border_radius=10, expand=True,
+                               height=40, padding=ft.Padding.only(left=10, right=4),
+                               on_click=lambda e: self._open_filters(owner="Charts"))
+        chips = self._filter_chips("Charts")
 
-        months, per_cat = s.monthly_by_category(kind, start, end, account)
-        order = [c for c, _ in s.by_category(kind, start, end, account)]
+        months, per_cat = s.monthly_by_category(kind, start, end, by=by, **chosen)
+        order = [c for c, _ in s.by_category(kind, start, end, by=by, **chosen)]
         colours = {c: PALETTE[i % len(PALETTE)] for i, c in enumerate(order)}
         groups = [(colours[c], per_cat[c]) for c in order[:TOP_CATEGORIES] if c in per_cat]
         rest = [c for c in per_cat if c not in order[:TOP_CATEGORIES]]
@@ -1293,35 +1368,47 @@ class PhoneApp:
         monthly_total = [round(sum(v[i] for _, v in groups), 2) for i in range(len(months))]
         if self.chart_month not in months:
             self.chart_month = None
+        what = kind if home is None else f"{kind}  ·  {s.category_name(home)}"
+        parts = ("subcategory", "subcategories") if home is not None else ("category", "categories")
 
-        if len(months) == 1:  # one month: how it divides between categories
+        if not months:
+            chart = self._card(ft.Column([self._heading(f"Monthly {what}"),
+                                          ft.Text("Nothing in this period", size=13, color=p.dim)], spacing=12))
+        elif len(months) == 1:  # one month: how it divides between categories
             chart = self._card(ft.Column([
-                self._heading(f"{kind} in {long_month(months[0])}"),
-                donut(p, [(c, v[0]) for c, v in groups], money(monthly_total[0]), f"{len(order)} categories")],
+                self._heading(f"{what} in {long_month(months[0])}"),
+                donut(p, [(c, v[0]) for c, v in groups], money(monthly_total[0]),
+                      f"{len(order)} {parts[0] if len(order) == 1 else parts[1]}")],
                 spacing=12))
         else:
             average = sum(monthly_total) / len(monthly_total) if monthly_total else 0
             picked = months.index(self.chart_month) if self.chart_month else None
             chart = self._card(ft.Column([
-                self._heading(f"Monthly {kind}", ft.Text(f"average {money(average)}", size=12, color=p.dim)),
+                self._heading(f"Monthly {what}", ft.Text(f"average {money(average)}", size=12, color=p.dim)),
                 bar_chart(p, [month_label(m) for m in months], groups, height=190, bar_width=11, stacked=True,
                           selected=picked, on_tap=lambda i: self._pick_month(months[i]),
                           holder=self._chart_bars)],
                 spacing=12))
 
-        title, heading = "By Category  (tap for details)", None
+        by_title = "By Subcategory" if home is not None else "By Category"
+        title, heading = f"{by_title}  (tap for {'transactions' if home is not None else 'details'})", None
         if self.chart_month:  # the tapped month's categories, in the period's colours
             start, end = self._chart_month_range()
             heading = ft.Row([
-                ft.Text("By Category", size=15, weight=ft.FontWeight.BOLD, color=p.text, expand=True),
+                ft.Text(by_title, size=15, weight=ft.FontWeight.BOLD, color=p.text, expand=True),
                 ft.Container(ft.Text(f"{long_month(self.chart_month)}  ✕", size=12, color="#ffffff",
                                      weight=ft.FontWeight.BOLD),
                              bgcolor=p.accent, border_radius=12,
                              padding=ft.Padding.symmetric(horizontal=10, vertical=4),
                              on_click=lambda e: self._pick_month(self.chart_month))])
-        return self._frame([ft.Row([kinds, accounts], spacing=10), self._periods("Charts")],
-                           [chart, self._category_card(kind, start, end, title, account, expandable=True,
-                                                       colours=colours, heading=heading)])
+        return self._frame([ft.Row([kinds, filters], spacing=10), self._periods("Charts"), *([chips] if chips else [])],
+                           [chart, self._category_card(kind, start, end, title, chosen, expandable=home is None,
+                                                       colours=colours, heading=heading, home=home)])
+
+    def _chart_changed(self):
+        """The Charts' filters changed: the bars are drawn anew, no category is open."""
+        self.open_category = None
+        self._chart_bars = {}
 
     def _chart_month_range(self):
         """The month tapped in the bars, within the period (a From – to may cut it)."""
@@ -1348,43 +1435,14 @@ class PhoneApp:
 
     def _set_chart_kind(self, e):
         self.chart_kind = list(e.control.selected)[0]
-        self.open_category = None
+        s, f = self.snap, self.chart_filters
+        # categories of the other type would leave nothing: they go, with their sub-categories
+        other = {c for c in f["category"] | {s.sub_category.get(v) for v in f["subcategory"]}
+                 if (s.category.get(c) or {}).get("type") not in (None, self.chart_kind)}
+        f["category"] -= other
+        self._drop_subcategories_of(other, "Charts")
+        self._chart_changed()
         self.chart_month = None
-        self._chart_bars = {}
-        self._redraw()
-
-    def _chart_accounts(self, e=None):
-        """The Charts' accounts: one or several, ticked in a list (none ticked: all)."""
-        p = self.p
-        self._account_rows = ft.Column(self._chart_account_rows(), spacing=0, tight=True, scroll=ft.ScrollMode.AUTO)
-        self.page.show_dialog(self._sheet(ft.Container(ft.Column([
-            ft.Text("Accounts", size=17, weight=ft.FontWeight.BOLD, color=p.text),
-            ft.Container(self._account_rows, bgcolor=p.raised, border_radius=14),
-            ft.Row([ft.TextButton("All accounts", on_click=lambda ev: self._set_chart_accounts(set())),
-                    ft.FilledButton("Done", on_click=lambda ev: self.page.pop_dialog())],
-                   alignment=ft.MainAxisAlignment.END)], spacing=12, tight=True),
-            padding=ft.Padding.only(left=20, right=20, top=8, bottom=24)), bgcolor=p.surface, show_drag_handle=True))
-
-    def _chart_account_rows(self):
-        s, p = self.snap, self.p
-        rows = []
-        for a in s.accounts:
-            on = a["id"] in self.chart_account
-            rows.append(ft.Container(ft.Row([
-                ft.Container(width=12, height=12, bgcolor=a["color"], border_radius=6),
-                ft.Text(a["name"], size=15, color=p.text, expand=True, no_wrap=True, overflow=ft.TextOverflow.ELLIPSIS),
-                ft.Icon(ft.Icons.CHECK_BOX if on else ft.Icons.CHECK_BOX_OUTLINE_BLANK,
-                        color=p.accent if on else p.dim)], spacing=12),
-                padding=ft.Padding.symmetric(horizontal=14, vertical=10),
-                on_click=lambda e, i=a["id"]: self._set_chart_accounts(self.chart_account ^ {i})))
-        return rows
-
-    def _set_chart_accounts(self, accounts):
-        self.chart_account = set(accounts)
-        self.open_category = None
-        self._chart_bars = {}
-        if getattr(self, "_account_rows", None) is not None:
-            self._account_rows.controls = self._chart_account_rows()
         self._redraw()
 
     # ── Accounts ─────────────────────────────────────────────────────────────
