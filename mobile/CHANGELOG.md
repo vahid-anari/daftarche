@@ -2,6 +2,19 @@
 
 Released with tags `phone-vX.Y.Z`; each release carries the signed APK.
 
+## 0.8.0 — 2026-11-25
+
+- **Charts has filters too.** The accounts list next to Expense | Income is now a Filters button
+  that opens the same "Show only" page as Transactions: account, category, sub-category,
+  merchant and tag. Charts keeps its own choices, apart from Transactions'. Each choice shows
+  as a chip with ✕ under the periods.
+- The bars, the donut and By Category count only what the filters leave; a split counts only
+  its parts that match.
+- **One category chosen:** the bars and the list show its sub-categories, and tapping one shows
+  its transactions.
+- Show transactions from Charts takes the account, merchant and tag filters along.
+- Switching Expense | Income drops the chosen categories of the other type.
+
 ## 0.7.0 — 2026-11-06
 
 - **Each tab stays as you left it.** Going to another tab and back no longer draws it anew:
